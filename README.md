@@ -48,7 +48,7 @@ Turn your smartphone into a portable audio receiver or transmitter.
 2.  In **Server Configuration**, choose the **main audio source** to transmit (e.g., *Stereo Mix* or system output).  
 3.  Set **VB-CABLE** as the output device.  
 4.  Select either **Multicast** (for multiple clients) or **Unicast** (for a single client).  
-5.  (Optional) If necessary, configure a custom **connection port**.  
+5.  If necessary, configure a custom **connection port** in the settings.  
 6.  Click on **Start Server**.  
 
 ### How to Receive Audio (Client Mode)  
@@ -56,7 +56,7 @@ Turn your smartphone into a portable audio receiver or transmitter.
 2.  In **Client Configuration**, choose your output device (headphones, speakers, etc.).  
 3.  The app will automatically search for and display active servers on the network.  
 4.  Select a server from the list to connect.  
-5.  (Optional) If the server uses a non-standard port, enter it here.  
+5. If the server uses a non-standard port, enter it in the settings.  
 
 ---
 
