@@ -2,7 +2,7 @@
 [![Available on GitHub](https://img.shields.io/badge/Available%20on-GitHub-181717?style=for-the-badge&logo=github)](https://github.com/marcomorosi06/WiFiAudioStreaming-Desktop)  
 
 Turn your computer into a **wireless audio transmitter or receiver**.  
-This application allows you to send your PC's audio to any device on the same local network, or listen to audio from another device, all with **low latency and guaranteed high quality**.  
+This application allows you to send your PC's audio to any device on the same local network, or listen to audio from another device.
 
 ---
 
