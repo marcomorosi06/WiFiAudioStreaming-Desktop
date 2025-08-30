@@ -39,10 +39,6 @@ Turn your smartphone into a portable audio receiver or transmitter.
 <img src="https://raw.githubusercontent.com/Kunzisoft/Github-badge/main/get-it-on-github.png" alt="Get it on GitHub" height="80">  
 </a>  
 
-<a href="INSERT_ANDROID_PROJECT_LINK_HERE">  
-<img src="https://play.google.com/intl/en_us/badges/static/images/badges/en_badge_web_generic.png" alt="Get it on Google Play" height="80">  
-</a>  
-
 ---
 
 ## 🚀 Getting Started  
