@@ -27,7 +27,7 @@ To use the program, you must install the free driver **VB-CABLE Virtual Audio De
 [**Click here to download VB-CABLE**](https://vb-audio.com/Cable/index.htm)  
 
 * **Server Mode**: Select `CABLE Input` as your audio output device.  
-* **Client Mode**: You can select your physical headphones/speakers or, alternatively, `CABLE Output`.  
+* **Client Mode**: You can select your physical headphones/speakers.
 
 ---
 
