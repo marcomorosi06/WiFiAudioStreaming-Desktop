@@ -1,8 +1,8 @@
 # WiFi Audio Streamer (Desktop)  
 [![Available on GitHub](https://img.shields.io/badge/Available%20on-GitHub-181717?style=for-the-badge&logo=github)](https://github.com/marcomorosi06/WiFiAudioStreaming-Desktop)  
 
-Trasforma il tuo computer in un **trasmettitore o ricevitore audio wireless**.  
-Questa applicazione ti permette di inviare l'audio del tuo PC a qualsiasi dispositivo sulla stessa rete locale, oppure di ascoltare da un altro dispositivo, il tutto con **bassa latenza e alta qualità garantite**.  
+Turn your computer into a **wireless audio transmitter or receiver**.  
+This application allows you to send your PC's audio to any device on the same local network, or listen to audio from another device, all with **low latency and guaranteed high quality**.  
 
 ---
 
@@ -12,28 +12,28 @@ Questa applicazione ti permette di inviare l'audio del tuo PC a qualsiasi dispos
 
 ---
 
-## ✨ Funzionalità Principali  
-* **Modalità Server e Client**: Invia (Server) o ricevi (Client) audio in base alle tue esigenze.  
-* **Rilevamento Automatico**: I client sulla rete locale rilevano automaticamente i server disponibili, senza bisogno di inserire manualmente gli indirizzi IP.  
-* **Supporto Unicast & Multicast**: Scegli tra lo streaming diretto a un singolo dispositivo (Unicast) o la trasmissione simultanea a più client (Multicast), ideale per l'audio multi-stanza.  
-* **Configurazione Audio Dettagliata**: Personalizza la tua esperienza audio con opzioni per sample rate, bit depth, canali (mono/stereo) e buffer size.  
-* **Interfaccia Intuitiva**: L'interfaccia, sviluppata con **Jetpack Compose for Desktop**, è moderna e semplice da usare.  
-* **Supporto Multi-Server**: È possibile utilizzare più server sulla stessa rete modificando la **porta di connessione** nelle impostazioni. Assicurati che la porta sia configurata in modo identico sia sul client che sul server.  
+## ✨ Key Features  
+* **Server & Client Modes**: Use the app to **send** (Server) or **receive** (Client) audio.  
+* **Automatic Discovery**: Clients on the local network automatically find available servers, with no need for manual IP address entry.  
+* **Unicast & Multicast Support**: Choose between direct streaming to a single device (Unicast) or simultaneous transmission to multiple clients (Multicast), ideal for multi-room audio.  
+* **Detailed Audio Configuration**: Customize your audio experience with options for sample rate, bit depth, channels (mono/stereo), and buffer size.  
+* **Modern Interface**: The interface, developed with **Jetpack Compose for Desktop**, is clean and easy to use.  
+* **Multi-Server Support**: You can use multiple servers on the same network by changing the **connection port** in the settings. Make sure the port is configured identically on both the client and the server.  
 
 ---
 
-## 📥 Driver Necessario  
-Per utilizzare il programma, devi installare il driver gratuito **VB-CABLE Virtual Audio Device**.  
-[**Clicca qui per scaricare VB-CABLE**](https://vb-audio.com/Cable/index.htm)  
+## 📥 Required Driver  
+To use the program, you must install the free driver **VB-CABLE Virtual Audio Device**.  
+[**Click here to download VB-CABLE**](https://vb-audio.com/Cable/index.htm)  
 
-* **Modalità Server**: Seleziona `CABLE Input` come dispositivo di output audio.  
-* **Modalità Client**: Puoi selezionare le tue cuffie/altoparlanti fisici o, in alternativa, `CABLE Output`.  
+* **Server Mode**: Select `CABLE Input` as your audio output device.  
+* **Client Mode**: You can select your physical headphones/speakers or, alternatively, `CABLE Output`.  
 
 ---
 
-## 📱 Versione Android  
-Il progetto è disponibile anche per **Android**!  
-Trasforma il tuo smartphone in un ricevitore o trasmettitore audio portatile.  
+## 📱 Android Version  
+The project is also available for **Android**!  
+Turn your smartphone into a portable audio receiver or transmitter.  
 
 <a href="INSERT_ANDROID_PROJECT_LINK_HERE">  
 <img src="https://play.google.com/intl/en_us/badges/static/images/badges/en_badge_web_generic.png" alt="Get it on Google Play" height="80">  
@@ -41,43 +41,43 @@ Trasforma il tuo smartphone in un ricevitore o trasmettitore audio portatile.
 
 ---
 
-## 🚀 Guida all'Uso  
+## 🚀 Getting Started  
 
-### Come Inviare Audio (Modalità Server)  
-1.  Avvia l'app e seleziona **Send (Server)**.  
-2.  In **Server Configuration**, scegli la **sorgente audio principale** da trasmettere (es. *Stereo Mix* o l'uscita di sistema).  
-3.  Imposta il **VB-CABLE** come dispositivo di output.  
-4.  Seleziona la modalità **Multicast** (per più client) o **Unicast** (per un singolo client).  
-5.  (Opzionale) Se necessario, configura una **porta di connessione** personalizzata.  
-6.  Clicca su **Start Server**.  
+### How to Send Audio (Server Mode)  
+1.  Start the app and select **Send (Server)**.  
+2.  In **Server Configuration**, choose the **main audio source** to transmit (e.g., *Stereo Mix* or system output).  
+3.  Set **VB-CABLE** as the output device.  
+4.  Select either **Multicast** (for multiple clients) or **Unicast** (for a single client).  
+5.  (Optional) If necessary, configure a custom **connection port**.  
+6.  Click on **Start Server**.  
 
-### Come Ricevere Audio (Modalità Client)  
-1.  Avvia l'app e seleziona **Receive (Client)**.  
-2.  In **Client Configuration**, scegli il tuo dispositivo di output (cuffie, altoparlanti, ecc.).  
-3.  L'app cercherà e mostrerà automaticamente i server attivi sulla rete.  
-4.  Seleziona un server dalla lista per connetterti.  
-5.  (Opzionale) Se il server utilizza una porta non standard, inseriscila.  
+### How to Receive Audio (Client Mode)  
+1.  Start the app and select **Receive (Client)**.  
+2.  In **Client Configuration**, choose your output device (headphones, speakers, etc.).  
+3.  The app will automatically search for and display active servers on the network.  
+4.  Select a server from the list to connect.  
+5.  (Optional) If the server uses a non-standard port, enter it here.  
 
 ---
 
-## 🛠️ Compilazione da Sorgente  
+## 🛠️ Building from Source  
 
-Per compilare il progetto dal codice sorgente:  
-1.  Clona il repository:  
+To build the project from source code:  
+1.  Clone the repository:  
     `git clone https://github.com/marcomorosi06/WiFiAudioStreaming-Desktop.git`  
-2.  Accedi alla directory del progetto:  
+2.  Navigate to the project directory:  
     `cd WiFiAudioStreaming-Desktop`  
-3.  Avvia l'applicazione con Gradle:  
+3.  Run the application with Gradle:  
     `./gradlew run`  
-    *(Su Windows, usa `gradlew.bat run`)* ---
+    *(On Windows, use `gradlew.bat run`)* ---
 
-## 💻 Stack Tecnologico  
-* **Linguaggio**: Kotlin  
+## 💻 Tech Stack  
+* **Language**: Kotlin  
 * **UI Framework**: Jetpack Compose for Desktop  
 * **Networking**: Ktor Networking (UDP sockets)  
-* **Gestione Audio**: Java Sound API  
+* **Audio Handling**: Java Sound API  
 
 ---
 
-## 📄 Licenza  
-Questo progetto è rilasciato sotto licenza MIT. Per maggiori dettagli, consulta il file `LICENSE`.
+## 📄 License  
+This project is released under the MIT License. For more details, see the `LICENSE` file.
