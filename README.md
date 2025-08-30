@@ -8,7 +8,7 @@ This application allows you to send your PC's audio to any device on the same lo
 
 ## 📸 Overview  
 
-![Screenshot of the application](INSERT_SCREENSHOT_URL_HERE.png)  
+![Screenshot of the application](https://raw.githubusercontent.com/marcomorosi06/WiFiAudioStreaming-Desktop/refs/heads/master/images/server_stream.png)  
 
 ---
 
