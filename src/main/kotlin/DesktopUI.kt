@@ -257,7 +257,7 @@ fun SettingsScreen(
                             description = stringResource("source_code_github"),
                             icon = Icons.Outlined.PhoneAndroid, // Icona per rappresentare Android
                             onClick = {
-                                val url = "https://github.com/marcomorosi06/WiFiAudioStreaming-Android" //TODO LINK ANDROID
+                                val url = "https://gitlab.com/marcomorosi.dev/wifiaudiostreaming-android/-/releases" //TODO LINK ANDROID
                                 try {
                                     Desktop.getDesktop().browse(URI(url))
                                 } catch (e: Exception) {
