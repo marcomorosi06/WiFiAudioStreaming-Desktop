@@ -1,12 +1,13 @@
 import org.jetbrains.compose.desktop.application.dsl.TargetFormat
 
+
 plugins {
     kotlin("jvm") version "1.9.23"
     id("org.jetbrains.compose") version "1.7.0"
 }
 
 group = "com.wifiaudiostreaming"
-version = "1.0.0"
+version = "0.1-beta"
 
 repositories {
     google()
@@ -15,10 +16,9 @@ repositories {
 }
 
 dependencies {
-    // Compose Multiplatform per l'interfaccia utente
+    // Dipendenza per la UI di Compose Multiplatform
     implementation(compose.desktop.currentOs)
-    // FIX: Aggiungiamo esplicitamente la dipendenza per Material 3
-    // per risolvere i problemi di "Unresolved reference".
+    // Aggiungiamo esplicitamente la dipendenza per Material 3
     implementation(compose.material3)
     implementation(compose.materialIconsExtended)
 
@@ -39,26 +39,48 @@ compose.desktop {
         mainClass = "MainKt"
 
         nativeDistributions {
-            targetFormats(TargetFormat.Dmg, TargetFormat.Msi, TargetFormat.Deb)
-            packageName = "WiFiAudioStreaming"
+            // === PASSO 1: AGGIUNGI I NUOVI FORMATI ===
+            // Aggiungiamo .dmg per macOS e .deb/.rpm per Linux
+            targetFormats(TargetFormat.Msi, TargetFormat.Dmg, TargetFormat.Deb, TargetFormat.Rpm)
+
+            packageName = "WiFi Audio Streaming"
             packageVersion = "1.0.0"
 
-            // Specifica le icone per ogni sistema operativo
+            buildTypes.release.proguard {
+                isEnabled.set(true)
+                configurationFiles.from(project.file("proguard-rules.pro"))
+            }
+
+            // Configurazione specifica per Windows
             windows {
-                iconFile.set(project.file("src/main/resources/app_icon.ico")) // Windows preferisce file .ico
+                iconFile.set(project.file("src/main/resources/app_icon.ico"))
+                shortcut = true
+                menu = true
             }
+
+            // === PASSO 2: DECOMMENTA E ABILITA LE SEZIONI PER macOS e LINUX ===
             macOS {
-                iconFile.set(project.file("src/main/resources/app_icon.icns")) // macOS usa file .icns
+                // IMPORTANTE: Devi creare e inserire un'icona .icns in questo percorso
+                iconFile.set(project.file("src/main/resources/app_icon.icns"))
+                // Puoi personalizzare altre opzioni qui, come il bundle ID
+                bundleID = "com.wifiaudiostreaming"
             }
+
             linux {
-                iconFile.set(project.file("src/main/resources/app_icon.png")) // Linux va bene con .png
+                // IMPORTANTE: Devi creare e inserire un'icona .png in questo percorso
+                iconFile.set(project.file("src/main/resources/app_icon.png"))
+                // Nome del pacchetto per i gestori di pacchetti Linux
+                packageName = "wifi-audio-streaming"
+                // Aggiungiamo una categoria per il menu delle applicazioni (es. "AudioVideo", "Network")
+                appCategory = "AudioVideo"
             }
         }
     }
 }
 
-// Aggiungiamo questo blocco per allineare la versione della JVM
-// usata da Kotlin e Java, risolvendo l'errore di compatibilità.
+// Torniamo a Java 17, che è stabile e compatibile
 kotlin {
-    jvmToolchain(21)
+    jvmToolchain(17)
 }
+
+
