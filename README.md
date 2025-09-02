@@ -1,4 +1,4 @@
-# WiFi Audio Streamer (Desktop)  
+# WiFi Audio Streaming (Desktop)  
 [![Available on GitLab](https://img.shields.io/badge/Available%20on-GitLab-FC6D26?style=for-the-badge&logo=gitlab)](https://gitlab.com/marcomorosi.dev/WiFiAudioStreaming-Desktop/-/releases)  
 
 Turn your computer into a **wireless audio transmitter or receiver**.  
