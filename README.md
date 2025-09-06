@@ -1,4 +1,5 @@
 # WiFi Audio Streaming (Desktop)  
+[![Available on GitHub](https://img.shields.io/badge/Available%20on-GitHub-181717?style=for-the-badge&logo=github)](https://github.com/marcomorosi06/WiFiAudioStreaming-Desktop/releases)  
 [![Available on GitLab](https://img.shields.io/badge/Available%20on-GitLab-FC6D26?style=for-the-badge&logo=gitlab)](https://gitlab.com/marcomorosi.dev/WiFiAudioStreaming-Desktop/-/releases)  
 
 Turn your computer into a **wireless audio transmitter or receiver**.  
@@ -34,6 +35,10 @@ To use the program, you must install the free driver **VB-CABLE Virtual Audio De
 ## 📱 Android Version  
 The project is also available for **Android**!  
 Turn your smartphone into a portable audio receiver or transmitter.  
+
+<a href="https://github.com/marcomorosi06/WiFiAudioStreaming-Android">  
+<img src="https://raw.githubusercontent.com/Kunzisoft/Github-badge/main/get-it-on-github.png" alt="Get it on GitHub" height="80">  
+</a>  
 
 <a href="https://gitlab.com/marcomorosi.dev/wifiaudiostreaming-android">  
 <img src="https://gitlab.com/marcomorosi.dev/WiFiAudioStreaming-Desktop/-/raw/master/images/get-it-on-gitlab-badge.png" alt="Get it on GitLab" height="80">  
