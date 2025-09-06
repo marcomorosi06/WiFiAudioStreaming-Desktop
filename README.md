@@ -1,5 +1,6 @@
 # WiFi Audio Streaming (Desktop)  
 [![Available on GitHub](https://img.shields.io/badge/Available%20on-GitHub-181717?style=for-the-badge&logo=github)](https://github.com/marcomorosi06/WiFiAudioStreaming-Desktop/releases)  
+[![Available on GitLab](https://img.shields.io/badge/Available%20on-GitLab-FC6D26?style=for-the-badge&logo=gitlab)](https://gitlab.com/marcomorosi.dev/WiFiAudioStreaming-Desktop/-/releases)  
 
 Turn your computer into a **wireless audio transmitter or receiver**.  
 This application allows you to send your PC's audio to any device on the same local network, or listen to audio from another device.
@@ -8,7 +9,7 @@ This application allows you to send your PC's audio to any device on the same lo
 
 ## 📸 Overview  
 
-![Screenshot of the application](https://raw.githubusercontent.com/marcomorosi06/WiFiAudioStreaming-Desktop/refs/heads/master/images/server_stream.png)  
+![Screenshot of the application](https://gitlab.com/marcomorosi.dev/WiFiAudioStreaming-Desktop/-/raw/master/images/server_stream.png)  
 
 ---
 
@@ -39,6 +40,10 @@ Turn your smartphone into a portable audio receiver or transmitter.
 <img src="https://raw.githubusercontent.com/Kunzisoft/Github-badge/main/get-it-on-github.png" alt="Get it on GitHub" height="80">  
 </a>  
 
+<a href="https://gitlab.com/marcomorosi.dev/wifiaudiostreaming-android">  
+<img src="https://gitlab.com/marcomorosi.dev/WiFiAudioStreaming-Desktop/-/raw/master/images/get-it-on-gitlab-badge.png" alt="Get it on GitLab" height="80">  
+</a>  
+
 ---
 
 ## 🚀 Getting Started  
@@ -64,12 +69,20 @@ Turn your smartphone into a portable audio receiver or transmitter.
 
 To build the project from source code:  
 1.  Clone the repository:  
-    `git clone https://github.com/marcomorosi06/WiFiAudioStreaming-Desktop.git`  
+    ```bash
+    git clone https://gitlab.com/marcomorosi.dev/WiFiAudioStreaming-Desktop.git
+    ```
 2.  Navigate to the project directory:  
-    `cd WiFiAudioStreaming-Desktop`  
+    ```bash
+    cd WiFiAudioStreaming-Desktop
+    ```
 3.  Run the application with Gradle:  
-    `./gradlew run`  
-    *(On Windows, use `gradlew.bat run`)* ---
+    ```bash
+    ./gradlew run
+    ```
+    *(On Windows, use `gradlew.bat run`)*
+
+---
 
 ## 💻 Tech Stack  
 * **Language**: Kotlin  
