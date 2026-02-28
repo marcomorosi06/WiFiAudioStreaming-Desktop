@@ -69,6 +69,7 @@ data class AudioSettings_V1(
 sealed class VirtualDriverStatus {
     object Ok : VirtualDriverStatus()
     data class Missing(val driverName: String, val downloadUrl: String) : VirtualDriverStatus()
+    data class LinuxActionRequired(val message: String, val commands: String) : VirtualDriverStatus()
 }
 
 object NetworkHandler_v1 {
@@ -112,6 +113,57 @@ object NetworkHandler_v1 {
     private const val MULTICAST_GROUP_IP = "239.255.0.1"
     private const val DISCOVERY_MESSAGE = "WIFI_AUDIO_STREAMER_DISCOVERY"
 
+    // --- Memoria per il routing Linux ---
+    private var originalLinuxSink: String? = null
+    private var originalLinuxSource: String? = null
+
+    private fun getPactlDefault(type: String): String? {
+        try {
+            // Prova il comando moderno
+            val direct = ProcessBuilder("pactl", "get-default-$type").start()
+            val directOutput = direct.inputStream.bufferedReader().readText().trim()
+            if (direct.waitFor() == 0 && directOutput.isNotEmpty()) return directOutput
+
+            // Fallback per versioni di PulseAudio più vecchie
+            val info = ProcessBuilder("pactl", "info").start()
+            val infoOutput = info.inputStream.bufferedReader().readText()
+            if (info.waitFor() == 0) {
+                val prefix = if (type == "sink") "Default Sink: " else "Default Source: "
+                return infoOutput.lines().find { it.startsWith(prefix) }?.substringAfter(prefix)?.trim()
+            }
+        } catch (e: Exception) {}
+        return null
+    }
+
+    private fun routeLinuxAudioToVirtualCable() {
+        val os = System.getProperty("os.name").lowercase()
+        if (!os.contains("linux")) return
+
+        // Fotografa i dispositivi attuali solo se non siamo già sul VirtualCable
+        val currentSink = getPactlDefault("sink")
+        val currentSource = getPactlDefault("source")
+
+        if (currentSink != null && currentSink != "VirtualCable") originalLinuxSink = currentSink
+        if (currentSource != null && currentSource != "VirtualCable.monitor") originalLinuxSource = currentSource
+
+        try {
+            ProcessBuilder("pactl", "set-default-sink", "VirtualCable").start().waitFor()
+            ProcessBuilder("pactl", "set-default-source", "VirtualCable.monitor").start().waitFor()
+            println("--- Linux Audio instradato su VirtualCable ---")
+        } catch (e: Exception) {}
+    }
+
+    fun restoreLinuxAudioRouting() {
+        val os = System.getProperty("os.name").lowercase()
+        if (!os.contains("linux")) return
+
+        try {
+            originalLinuxSink?.let { ProcessBuilder("pactl", "set-default-sink", it).start().waitFor() }
+            originalLinuxSource?.let { ProcessBuilder("pactl", "set-default-source", it).start().waitFor() }
+            println("--- Linux Audio ripristinato alle casse originali ---")
+        } catch (e: Exception) {}
+    }
+
     fun findAvailableOutputMixers(): List<Mixer.Info> {
         return AudioSystem.getMixerInfo()
             .filter { mixerInfo ->
@@ -137,29 +189,76 @@ object NetworkHandler_v1 {
         return when {
             os.contains("win") -> {
                 val driverName = "CABLE Output (VB-Audio Virtual Cable)"
-                val isInstalled = AudioSystem.getMixerInfo().any {
-                    it.name.contains("CABLE Output", ignoreCase = true)
-                }
-                if (isInstalled) VirtualDriverStatus.Ok
-                else VirtualDriverStatus.Missing(
-                    driverName = "VB-Audio Virtual Cable",
-                    downloadUrl = "https://vb-audio.com/Cable/"
-                )
+                val isInstalled = AudioSystem.getMixerInfo().any { it.name.contains("CABLE Output", ignoreCase = true) }
+                if (isInstalled) VirtualDriverStatus.Ok else VirtualDriverStatus.Missing("VB-Audio Virtual Cable", "https://vb-audio.com/Cable/")
             }
             os.contains("mac") -> {
-                val isInstalled = AudioSystem.getMixerInfo().any {
-                    it.name.contains("BlackHole", ignoreCase = true)
-                }
-                if (isInstalled) VirtualDriverStatus.Ok
-                else VirtualDriverStatus.Missing(
-                    driverName = "BlackHole 2ch",
-                    downloadUrl = "https://existential.audio/blackhole/"
-                )
+                val isInstalled = AudioSystem.getMixerInfo().any { it.name.contains("BlackHole", ignoreCase = true) }
+                if (isInstalled) VirtualDriverStatus.Ok else VirtualDriverStatus.Missing("BlackHole 2ch", "https://existential.audio/blackhole/")
             }
             else -> {
-                // On Linux/PulseAudio, we assume it's available (no easy install check)
-                VirtualDriverStatus.Ok
+                // LINUX: Controllo Adattivo
+                try {
+                    val checkPactl = ProcessBuilder("which", "pactl").start()
+                    if (checkPactl.waitFor() != 0) {
+                        return VirtualDriverStatus.LinuxActionRequired(
+                            message = "PulseAudio utilities are missing. The app cannot route system audio automatically.",
+                            commands = "sudo apt update && sudo apt install pulseaudio-utils"
+                        )
+                    }
+
+                    // Crea solo il VirtualCable in background, MA NON lo imposta ancora come default
+                    val checkSink = ProcessBuilder("sh", "-c", "pactl list short sinks | grep VirtualCable").start()
+                    if (checkSink.waitFor() != 0) {
+                        ProcessBuilder("pactl", "load-module", "module-null-sink", "sink_name=VirtualCable", "sink_properties=device.description=VirtualCable").start().waitFor()
+                    }
+
+                    VirtualDriverStatus.Ok
+                } catch (e: Exception) {
+                    VirtualDriverStatus.Ok
+                }
             }
+        }
+    }
+
+    /**
+     * Rileva se siamo su Linux e, in modo trasparente e senza permessi di root,
+     * interroga PulseAudio/PipeWire per creare un Cavo Virtuale se non esiste già.
+     */
+    fun setupLinuxVirtualCable() {
+        val os = System.getProperty("os.name").lowercase()
+        if (!os.contains("linux")) return
+
+        try {
+            // 1. Verifichiamo se il sistema usa PulseAudio/PipeWire (pactl è installato?)
+            val checkPactl = ProcessBuilder("which", "pactl").start()
+            if (checkPactl.waitFor() != 0) {
+                println("Comando 'pactl' non trovato. Impossibile creare il cavo virtuale in automatico.")
+                return
+            }
+
+            // 2. Controlliamo se il nostro VirtualCable è già stato creato in questa sessione
+            val checkSink = ProcessBuilder("sh", "-c", "pactl list short sinks | grep VirtualCable").start()
+            if (checkSink.waitFor() == 0) {
+                println("--- Linux: VirtualCable rilevato e già operativo ---")
+                return
+            }
+
+            // 3. Se non esiste, lo creiamo silenziosamente in background!
+            println("--- Linux: Creazione VirtualCable in corso... ---")
+            val createSink = ProcessBuilder(
+                "pactl", "load-module", "module-null-sink",
+                "sink_name=VirtualCable",
+                "sink_properties=device.description=VirtualCable"
+            ).start()
+
+            if (createSink.waitFor() == 0) {
+                println("--- Linux: VirtualCable creato con successo! ---")
+            } else {
+                println("--- Linux: Impossibile creare il VirtualCable ---")
+            }
+        } catch (e: Exception) {
+            println("Errore durante il setup audio adattivo su Linux: ${e.message}")
         }
     }
 
@@ -350,7 +449,7 @@ object NetworkHandler_v1 {
                         deviceName = "audio=BlackHole 2ch"
                     }
                     else -> {
-                        grabberFormat = "pulse"
+                        grabberFormat = "alsa"
                         deviceName = "default"
                     }
                 }
@@ -365,6 +464,7 @@ object NetworkHandler_v1 {
                 // FIX BUG #1: The "driver missing" error is now surfaced via a specific
                 // status key so the UI can show a proper banner with a download button.
                 try {
+                    routeLinuxAudioToVirtualCable()
                     serverGrabber?.start()
                     println("--- FFMPEG started successfully ---")
                 } catch (e: Exception) {
@@ -561,6 +661,8 @@ object NetworkHandler_v1 {
         serverGrabber = null
         streamingJob = null
         micReceiverJob = null
+
+        restoreLinuxAudioRouting()
     }
 
     fun terminateAllServices() {
@@ -570,6 +672,7 @@ object NetworkHandler_v1 {
 
 fun main() = application {
     System.setProperty("java.net.preferIPv4Stack", "true")
+    NetworkHandler_v1.setupLinuxVirtualCable()
     org.bytedeco.javacv.FFmpegLogCallback.set()
     org.bytedeco.ffmpeg.global.avdevice.avdevice_register_all()
     val loadedSettings = SettingsRepository.loadSettings()
@@ -622,7 +725,11 @@ fun main() = application {
     val windowState = rememberWindowState(size = DpSize(600.dp, 800.dp))
 
     Window(
-        onCloseRequest = ::exitApplication,
+        onCloseRequest = {
+            // Forza il ripristino dell'audio fisico prima di chiudere il processo
+            NetworkHandler_v1.restoreLinuxAudioRouting()
+            exitApplication()
+        },
         state = windowState,
         undecorated = true
     ) {

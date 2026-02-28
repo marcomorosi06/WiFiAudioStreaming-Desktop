@@ -27,6 +27,8 @@ import java.awt.Desktop
 import java.net.URI
 import javax.sound.sampled.Mixer
 import kotlin.math.roundToInt
+import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.text.AnnotatedString
 
 // =================================================================
 // ==                  SCHERMATA PRINCIPALE                       ==
@@ -77,6 +79,39 @@ fun AppContent(
             )
         }
     ) { paddingValues ->
+        // --- INIZIO DIALOG LINUX ---
+        val clipboardManager = LocalClipboardManager.current
+        if (isServer && virtualDriverStatus is VirtualDriverStatus.LinuxActionRequired) {
+            var showLinuxDialog by remember { mutableStateOf(true) }
+            if (showLinuxDialog) {
+                AlertDialog(
+                    onDismissRequest = { showLinuxDialog = false },
+                    title = { Text("Missing Audio Dependencies") },
+                    text = {
+                        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                            Text(virtualDriverStatus.message)
+                            OutlinedTextField(
+                                value = virtualDriverStatus.commands,
+                                onValueChange = {},
+                                readOnly = true,
+                                modifier = Modifier.fillMaxWidth()
+                            )
+                        }
+                    },
+                    confirmButton = {
+                        Button(onClick = {
+                            clipboardManager.setText(AnnotatedString(virtualDriverStatus.commands))
+                            showLinuxDialog = false
+                        }) {
+                            Text("Copy & Close")
+                        }
+                    },
+                    dismissButton = {
+                        TextButton(onClick = { showLinuxDialog = false }) { Text("Ignore") }
+                    }
+                )
+            }
+        }
         LazyColumn(
             modifier = Modifier.fillMaxSize().padding(paddingValues),
             contentPadding = PaddingValues(16.dp),
@@ -526,6 +561,13 @@ fun ServerConfigCard(
                         title = "System Audio Capture",
                         description = "${virtualDriverStatus.driverName} — not installed. See the warning above.",
                         icon = Icons.Outlined.VolumeOff
+                    )
+                }
+                is VirtualDriverStatus.LinuxActionRequired -> {
+                    InfoSetting(
+                        title = "System Audio Capture",
+                        description = "Missing Linux dependencies. Check the popup.",
+                        icon = Icons.Outlined.Warning
                     )
                 }
             }
