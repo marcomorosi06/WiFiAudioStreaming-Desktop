@@ -83,6 +83,23 @@ object NetworkHandler_v1 {
         }
     }
 
+    fun getActiveNetworkInterface(): NetworkInterface? {
+        return try {
+            NetworkInterface.getNetworkInterfaces().toList().firstOrNull { iface ->
+                iface.isUp &&
+                        !iface.isLoopback &&
+                        // Escludiamo tutte le schede virtuali di Windows (VMware, VirtualBox, Hyper-V, WSL)
+                        !iface.displayName.contains("Virtual", ignoreCase = true) &&
+                        !iface.displayName.contains("VMware", ignoreCase = true) &&
+                        !iface.displayName.contains("Hyper-V", ignoreCase = true) &&
+                        !iface.displayName.contains("WSL", ignoreCase = true) &&
+                        iface.inetAddresses.toList().any { addr ->
+                            addr is java.net.Inet4Address && !addr.isLoopbackAddress
+                        }
+            }
+        } catch (e: Exception) { null }
+    }
+
     private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
     private var streamingJob: Job? = null
     private var listeningJob: Job? = null
@@ -158,6 +175,7 @@ object NetworkHandler_v1 {
 
                 val groupAddress = InetAddress.getByName(MULTICAST_GROUP_IP)
                 socket = MulticastSocket(DISCOVERY_PORT).apply {
+                    getActiveNetworkInterface()?.let { networkInterface = it }
                     joinGroup(groupAddress)
                     soTimeout = 5000
                 }
@@ -211,7 +229,8 @@ object NetworkHandler_v1 {
 
             // Use MulticastSocket so the OS routes multicast packets correctly
             MulticastSocket().use { socket ->
-                socket.timeToLive = 4 // Enough for local network segments
+                socket.timeToLive = 4
+                getActiveNetworkInterface()?.let { socket.networkInterface = it }
                 while (isActive) {
                     try {
                         val bytes = message.toByteArray()
@@ -349,7 +368,8 @@ object NetworkHandler_v1 {
                     serverGrabber?.start()
                     println("--- FFMPEG started successfully ---")
                 } catch (e: Exception) {
-                    // Signal to the UI that the driver is missing, not just a generic error
+                    println("=== FFMPEG START FAILED ===")
+                    e.printStackTrace()
                     onStatusUpdate("error_virtual_driver_missing", emptyArray())
                     return@launch
                 }
