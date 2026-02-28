@@ -48,6 +48,10 @@ fun AppContent(
     selectedInputDevice: Mixer.Info?,
     selectedClientMic: Mixer.Info?,
     selectedServerMicOutput: Mixer.Info?,
+    streamingPort: String,
+    localIp: String,
+    virtualDriverStatus: VirtualDriverStatus, // NEW PARAMETER
+    onConnectManual: (String) -> Unit,
     onModeChange: (Boolean) -> Unit,
     onStartStreaming: () -> Unit,
     onStopStreaming: () -> Unit,
@@ -64,10 +68,10 @@ fun AppContent(
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text("WiFi Audio Streamer") }, // Sostituito stringResource
+                title = { Text("WiFi Audio Streamer") },
                 actions = {
                     IconButton(onClick = onOpenSettings) {
-                        Icon(Icons.Default.Settings, contentDescription = "Apri impostazioni")
+                        Icon(Icons.Default.Settings, contentDescription = "Settings")
                     }
                 }
             )
@@ -79,8 +83,27 @@ fun AppContent(
             verticalArrangement = Arrangement.spacedBy(16.dp),
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
+            // --- Virtual Driver Warning Banner ---
+            // Only shown in server mode when the required virtual audio driver is missing.
+            if (isServer) {
+                val driverStatus = virtualDriverStatus
+                if (driverStatus is VirtualDriverStatus.Missing) {
+                    item {
+                        VirtualDriverBanner(status = driverStatus)
+                    }
+                }
+            }
+
             item {
                 Text(connectionStatus, style = MaterialTheme.typography.bodyLarge, textAlign = TextAlign.Center)
+                if (isServer) {
+                    Text(
+                        "Server IP: $localIp | Port: $streamingPort",
+                        style = MaterialTheme.typography.bodyMedium,
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.primary
+                    )
+                }
                 Spacer(Modifier.height(8.dp))
             }
 
@@ -88,7 +111,9 @@ fun AppContent(
                 StreamingControlCenter(
                     isStreaming = isStreaming,
                     isServer = isServer,
-                    isServerReady = selectedInputDevice != null && (!appSettings.experimentalFeaturesEnabled || selectedServerMicOutput != null),
+                    // Disable the Start button if the driver is missing in server mode
+                    isServerReady = if (isServer && virtualDriverStatus is VirtualDriverStatus.Missing) false
+                    else (!appSettings.experimentalFeaturesEnabled || selectedServerMicOutput != null),
                     onStart = onStartStreaming,
                     onStop = onStopStreaming
                 )
@@ -116,7 +141,8 @@ fun AppContent(
                             selectedServerMicOutput = selectedServerMicOutput,
                             onServerMicOutputSelected = onSelectedServerMicOutputChange,
                             isMulticast = isMulticastMode,
-                            onMulticastChanged = onMulticastModeChange
+                            onMulticastChanged = onMulticastModeChange,
+                            virtualDriverStatus = virtualDriverStatus // Pass down for the inline hint
                         )
                     }
                 }
@@ -138,6 +164,28 @@ fun AppContent(
                                 selectedClientMic = selectedClientMic,
                                 onClientMicSelected = onSelectedClientMicChange
                             )
+
+                            var manualIp by remember { mutableStateOf("") }
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                OutlinedTextField(
+                                    value = manualIp,
+                                    onValueChange = { manualIp = it },
+                                    label = { Text("Manual Server IP") },
+                                    modifier = Modifier.weight(1f),
+                                    singleLine = true
+                                )
+                                Button(
+                                    onClick = { onConnectManual(manualIp) },
+                                    enabled = manualIp.isNotBlank() && selectedOutputDevice != null
+                                ) {
+                                    Text("Connect")
+                                }
+                            }
+
                             DeviceDiscoveryList(
                                 devices = discoveredDevices,
                                 onConnect = onConnectToServer,
@@ -147,6 +195,70 @@ fun AppContent(
                         }
                     }
                 }
+            }
+        }
+    }
+}
+
+// =================================================================
+// ==          VIRTUAL DRIVER WARNING BANNER                      ==
+// =================================================================
+
+/**
+ * A prominent warning card shown when the required virtual audio driver
+ * (VB-Cable on Windows, BlackHole on macOS) is not installed.
+ * Provides a direct download button so the user never has to guess why
+ * streaming doesn't work.
+ */
+@Composable
+fun VirtualDriverBanner(status: VirtualDriverStatus.Missing) {
+    val errorColor = MaterialTheme.colorScheme.errorContainer
+    val onErrorColor = MaterialTheme.colorScheme.onErrorContainer
+
+    ElevatedCard(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(16.dp),
+        colors = CardDefaults.elevatedCardColors(containerColor = errorColor)
+    ) {
+        Row(
+            modifier = Modifier.padding(16.dp),
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Icon(
+                imageVector = Icons.Filled.Warning,
+                contentDescription = "Warning",
+                tint = onErrorColor,
+                modifier = Modifier.size(32.dp)
+            )
+            Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                Text(
+                    text = "${status.driverName} not installed",
+                    style = MaterialTheme.typography.titleSmall,
+                    fontWeight = FontWeight.Bold,
+                    color = onErrorColor
+                )
+                Text(
+                    text = "This app needs a virtual audio cable to capture system audio. " +
+                            "Without it, the server cannot stream anything.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = onErrorColor
+                )
+            }
+            Button(
+                onClick = {
+                    try {
+                        Desktop.getDesktop().browse(URI(status.downloadUrl))
+                    } catch (e: Exception) {
+                        println("Could not open browser: ${e.message}")
+                    }
+                },
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = MaterialTheme.colorScheme.error,
+                    contentColor = MaterialTheme.colorScheme.onError
+                )
+            ) {
+                Text("Download")
             }
         }
     }
@@ -199,7 +311,11 @@ fun SettingsScreen(
             topBar = {
                 TopAppBar(
                     title = { Text(stringResource("settings")) },
-                    navigationIcon = { IconButton(onClick = onClose) { Icon(Icons.AutoMirrored.Filled.ArrowBack, stringResource("close")) } }
+                    navigationIcon = {
+                        IconButton(onClick = onClose) {
+                            Icon(Icons.AutoMirrored.Filled.ArrowBack, stringResource("close"))
+                        }
+                    }
                 )
             },
             modifier = Modifier.fillMaxSize().background(MaterialTheme.colorScheme.surface)
@@ -255,9 +371,9 @@ fun SettingsScreen(
                         ClickableSetting(
                             title = stringResource("android_version"),
                             description = stringResource("source_code_github"),
-                            icon = Icons.Outlined.PhoneAndroid, // Icona per rappresentare Android
+                            icon = Icons.Outlined.PhoneAndroid,
                             onClick = {
-                                val url = "https://gitlab.com/marcomorosi.dev/wifiaudiostreaming-android/-/releases" //TODO LINK ANDROID
+                                val url = "https://gitlab.com/marcomorosi.dev/wifiaudiostreaming-android/-/releases"
                                 try {
                                     Desktop.getDesktop().browse(URI(url))
                                 } catch (e: Exception) {
@@ -265,8 +381,7 @@ fun SettingsScreen(
                                 }
                             }
                         )
-                        Divider(modifier = Modifier.padding(vertical = 8.dp))
-
+                        HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
                         InfoSetting(
                             title = stringResource("developed_by"),
                             description = "Marco Morosi",
@@ -296,11 +411,23 @@ fun StreamingControlCenter(
             },
             modifier = Modifier.padding(24.dp).fillMaxWidth()
         ) { streaming ->
-            Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            Column(
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
                 if (streaming) {
-                    Icon(Icons.Filled.Podcasts, stringResource("streaming_active"), modifier = Modifier.size(48.dp), tint = MaterialTheme.colorScheme.primary)
-                    Text(stringResource("streaming_active"), style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
-                    Button(onClick = onStop, colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error)) {
+                    Icon(
+                        Icons.Filled.Podcasts, stringResource("streaming_active"),
+                        modifier = Modifier.size(48.dp), tint = MaterialTheme.colorScheme.primary
+                    )
+                    Text(
+                        stringResource("streaming_active"),
+                        style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold
+                    )
+                    Button(
+                        onClick = onStop,
+                        colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error)
+                    ) {
                         Icon(Icons.Filled.Stop, contentDescription = null)
                         Spacer(Modifier.width(8.dp)); Text(stringResource("stop"))
                     }
@@ -314,9 +441,22 @@ fun StreamingControlCenter(
                     Text(subtitle, style = MaterialTheme.typography.bodyMedium, textAlign = TextAlign.Center)
 
                     if (isServer) {
-                        Button(onClick = onStart, enabled = isServerReady, modifier = Modifier.padding(top = 8.dp)) {
+                        Button(
+                            onClick = onStart,
+                            enabled = isServerReady,
+                            modifier = Modifier.padding(top = 8.dp)
+                        ) {
                             Icon(Icons.Default.PlayArrow, contentDescription = null)
                             Spacer(Modifier.width(8.dp)); Text(stringResource("start_server"))
+                        }
+                        // Show a small hint below the button when it's disabled due to missing driver
+                        if (!isServerReady) {
+                            Text(
+                                text = "Install the required audio driver to enable streaming",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.error,
+                                textAlign = TextAlign.Center
+                            )
                         }
                     }
                 }
@@ -330,7 +470,11 @@ fun StreamingControlCenter(
 fun ModeSelectorCard(isServer: Boolean, onModeChange: (Boolean) -> Unit) {
     ElevatedCard(modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(24.dp)) {
         Column(Modifier.padding(16.dp)) {
-            Text(stringResource("mode"), style = MaterialTheme.typography.titleLarge, modifier = Modifier.padding(bottom = 8.dp))
+            Text(
+                stringResource("mode"),
+                style = MaterialTheme.typography.titleLarge,
+                modifier = Modifier.padding(bottom = 8.dp)
+            )
             SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {
                 SegmentedButton(
                     shape = RoundedCornerShape(topStartPercent = 50, bottomStartPercent = 50),
@@ -361,21 +505,43 @@ fun ServerConfigCard(
     experimentalFeaturesEnabled: Boolean,
     inputDevices: List<Mixer.Info>, selectedInputDevice: Mixer.Info?, onInputDeviceSelected: (Mixer.Info) -> Unit,
     outputDevices: List<Mixer.Info>, selectedServerMicOutput: Mixer.Info?, onServerMicOutputSelected: (Mixer.Info) -> Unit,
-    isMulticast: Boolean, onMulticastChanged: (Boolean) -> Unit
+    isMulticast: Boolean, onMulticastChanged: (Boolean) -> Unit,
+    virtualDriverStatus: VirtualDriverStatus // NEW PARAMETER
 ) {
     ElevatedCard(modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(24.dp)) {
         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
-            Text(stringResource("server_configuration"), style = MaterialTheme.typography.titleLarge)
-            DeviceDropdown(stringResource("main_audio_source_input"), inputDevices, selectedInputDevice, onInputDeviceSelected)
+            Text("Server Configuration", style = MaterialTheme.typography.titleLarge)
 
-            AnimatedVisibility(experimentalFeaturesEnabled) {
-                DeviceDropdown(stringResource("mic_output_received"), outputDevices, selectedServerMicOutput, onServerMicOutputSelected)
+            // Show driver status inline: OK badge or a compact "not installed" note
+            when (virtualDriverStatus) {
+                is VirtualDriverStatus.Ok -> {
+                    InfoSetting(
+                        title = "System Audio Capture",
+                        description = "Virtual audio driver detected ✓",
+                        icon = Icons.Outlined.VolumeUp
+                    )
+                }
+                is VirtualDriverStatus.Missing -> {
+                    InfoSetting(
+                        title = "System Audio Capture",
+                        description = "${virtualDriverStatus.driverName} — not installed. See the warning above.",
+                        icon = Icons.Outlined.VolumeOff
+                    )
+                }
             }
 
-            Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceBetween) {
+            AnimatedVisibility(experimentalFeaturesEnabled) {
+                DeviceDropdown("Mic Output (Received)", outputDevices, selectedServerMicOutput, onServerMicOutputSelected)
+            }
+
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
                 Column(Modifier.weight(1f)) {
-                    Text(stringResource("multicast_mode"), style = MaterialTheme.typography.bodyLarge)
-                    Text(stringResource("multicast_description"), style = MaterialTheme.typography.bodySmall)
+                    Text("Multicast Mode", style = MaterialTheme.typography.bodyLarge)
+                    Text("Broadcast to multiple clients", style = MaterialTheme.typography.bodySmall)
                 }
                 Switch(checked = isMulticast, onCheckedChange = onMulticastChanged)
             }
@@ -397,7 +563,11 @@ fun ClientConfigCard(
 
             AnimatedVisibility(experimentalFeaturesEnabled) {
                 Column(verticalArrangement = Arrangement.spacedBy(16.dp)) {
-                    Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceBetween) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
                         Text(stringResource("send_mic_to_server"), style = MaterialTheme.typography.bodyLarge)
                         Switch(checked = sendMicrophone, onCheckedChange = onSendMicrophoneChanged)
                     }
@@ -416,7 +586,11 @@ fun DeviceDiscoveryList(
 ) {
     ElevatedCard(modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(24.dp)) {
         Column(Modifier.padding(16.dp)) {
-            Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceBetween) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
                 Text(stringResource("servers_found"), style = MaterialTheme.typography.titleLarge)
                 IconButton(onClick = onRefresh) { Icon(Icons.Default.Refresh, stringResource("refresh")) }
             }
@@ -425,8 +599,7 @@ fun DeviceDiscoveryList(
             if (devices.isEmpty()) {
                 val infiniteTransition = rememberInfiniteTransition(label = "searching-indicator")
                 val alpha by infiniteTransition.animateFloat(
-                    initialValue = 0.6f,
-                    targetValue = 1f,
+                    initialValue = 0.6f, targetValue = 1f,
                     animationSpec = infiniteRepeatable(animation = tween(800), repeatMode = RepeatMode.Reverse),
                     label = "alpha-animation"
                 )
@@ -444,7 +617,10 @@ fun DeviceDiscoveryList(
                     )
                 }
             } else {
-                Column(modifier = Modifier.fillMaxWidth().heightIn(max = 250.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Column(
+                    modifier = Modifier.fillMaxWidth().heightIn(max = 250.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
                     devices.forEach { (hostname, serverInfo) ->
                         DeviceItem(
                             hostname = hostname,
@@ -464,8 +640,15 @@ fun DeviceDiscoveryList(
 fun DeviceItem(hostname: String, serverInfo: ServerInfo, onClick: () -> Unit, enabled: Boolean) {
     val modeText = if (serverInfo.isMulticast) stringResource("multicast") else stringResource("unicast")
     Card(onClick = onClick, enabled = enabled, modifier = Modifier.fillMaxWidth()) {
-        Row(modifier = Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-            Box(modifier = Modifier.size(40.dp).clip(CircleShape).background(MaterialTheme.colorScheme.secondaryContainer), contentAlignment = Alignment.Center) {
+        Row(
+            modifier = Modifier.padding(12.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            Box(
+                modifier = Modifier.size(40.dp).clip(CircleShape).background(MaterialTheme.colorScheme.secondaryContainer),
+                contentAlignment = Alignment.Center
+            ) {
                 Icon(if (serverInfo.isMulticast) Icons.Filled.Groups else Icons.Default.Person, contentDescription = modeText)
             }
             Column(modifier = Modifier.weight(1f)) {
@@ -485,7 +668,7 @@ fun SettingsGroup(title: String, icon: ImageVector, content: @Composable ColumnS
                 Icon(icon, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
                 Spacer(Modifier.width(12.dp)); Text(title, style = MaterialTheme.typography.titleLarge)
             }
-            Divider()
+            HorizontalDivider()
             Column(Modifier.padding(top = 12.dp), verticalArrangement = Arrangement.spacedBy(16.dp), content = content)
         }
     }
@@ -497,8 +680,16 @@ fun AudioSettingsContent(settings: AudioSettings_V1, onSettingsChange: (AudioSet
     val sampleRates = listOf(44100f, 48000f, 96000f)
     val bitDepths = listOf(8, 16)
     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-        ExposedDropdown(stringResource("sample_rate"), "${settings.sampleRate.toInt()} Hz", sampleRates.map { "${it.toInt()} Hz" to it }, { onSettingsChange(settings.copy(sampleRate = it)) }, Modifier.weight(1f))
-        ExposedDropdown(stringResource("bit_depth"), "${settings.bitDepth}-bit", bitDepths.map { "$it-bit" to it }, { onSettingsChange(settings.copy(bitDepth = it)) }, Modifier.weight(1f))
+        ExposedDropdown(
+            stringResource("sample_rate"), "${settings.sampleRate.toInt()} Hz",
+            sampleRates.map { "${it.toInt()} Hz" to it },
+            { onSettingsChange(settings.copy(sampleRate = it)) }, Modifier.weight(1f)
+        )
+        ExposedDropdown(
+            stringResource("bit_depth"), "${settings.bitDepth}-bit",
+            bitDepths.map { "$it-bit" to it },
+            { onSettingsChange(settings.copy(bitDepth = it)) }, Modifier.weight(1f)
+        )
     }
     Text(stringResource("channels"), style = MaterialTheme.typography.labelLarge)
     SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {
@@ -506,19 +697,20 @@ fun AudioSettingsContent(settings: AudioSettings_V1, onSettingsChange: (AudioSet
             selected = settings.channels == 1,
             onClick = { onSettingsChange(settings.copy(channels = 1)) },
             shape = RoundedCornerShape(topStartPercent = 50, bottomStartPercent = 50)
-        ) {
-            Text(stringResource("mono"))
-        }
+        ) { Text(stringResource("mono")) }
         SegmentedButton(
             selected = settings.channels == 2,
             onClick = { onSettingsChange(settings.copy(channels = 2)) },
             shape = RoundedCornerShape(topEndPercent = 50, bottomEndPercent = 50)
-        ) {
-            Text(stringResource("stereo"))
-        }
+        ) { Text(stringResource("stereo")) }
     }
     Text(stringResource("buffer_size_label", settings.bufferSize), style = MaterialTheme.typography.labelLarge)
-    Slider(settings.bufferSize.toFloat(), { onSettingsChange(settings.copy(bufferSize = it.roundToInt())) }, valueRange = 512f..8192f, steps = ((8192f - 512f) / 256f).toInt() - 1)
+    Slider(
+        settings.bufferSize.toFloat(),
+        { onSettingsChange(settings.copy(bufferSize = it.roundToInt())) },
+        valueRange = 512f..8192f,
+        steps = ((8192f - 512f) / 256f).toInt() - 1
+    )
 }
 
 @Composable
@@ -527,10 +719,21 @@ fun NetworkSettingsContent(
     micPort: String, onMicPortChange: (String) -> Unit,
     experimentalFeaturesEnabled: Boolean
 ) {
-    OutlinedTextField(port, { if (it.all(Char::isDigit) && it.length <= 5) onPortChange(it) }, label = { Text(stringResource("main_audio_port")) }, singleLine = true, modifier = Modifier.fillMaxWidth())
-
+    OutlinedTextField(
+        port,
+        { if (it.all(Char::isDigit) && it.length <= 5) onPortChange(it) },
+        label = { Text(stringResource("main_audio_port")) },
+        singleLine = true,
+        modifier = Modifier.fillMaxWidth()
+    )
     AnimatedVisibility(experimentalFeaturesEnabled) {
-        OutlinedTextField(micPort, { if (it.all(Char::isDigit) && it.length <= 5) onMicPortChange(it) }, label = { Text(stringResource("mic_port")) }, singleLine = true, modifier = Modifier.fillMaxWidth())
+        OutlinedTextField(
+            micPort,
+            { if (it.all(Char::isDigit) && it.length <= 5) onMicPortChange(it) },
+            label = { Text(stringResource("mic_port")) },
+            singleLine = true,
+            modifier = Modifier.fillMaxWidth()
+        )
     }
 }
 
@@ -544,22 +747,17 @@ fun ThemeSelector(currentTheme: Theme, onThemeChange: (Theme) -> Unit) {
     )
     SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {
         SegmentedButton(
-            selected = currentTheme == Theme.Light,
-            onClick = { onThemeChange(Theme.Light) },
+            selected = currentTheme == Theme.Light, onClick = { onThemeChange(Theme.Light) },
             shape = SegmentedButtonDefaults.itemShape(0, 3),
             icon = { Icon(Icons.Outlined.LightMode, contentDescription = null, Modifier.size(ButtonDefaults.IconSize)) }
         ) { Text(stringResource("light")) }
-
         SegmentedButton(
-            selected = currentTheme == Theme.Dark,
-            onClick = { onThemeChange(Theme.Dark) },
+            selected = currentTheme == Theme.Dark, onClick = { onThemeChange(Theme.Dark) },
             shape = SegmentedButtonDefaults.itemShape(1, 3),
             icon = { Icon(Icons.Outlined.DarkMode, contentDescription = null, Modifier.size(ButtonDefaults.IconSize)) }
         ) { Text(stringResource("dark")) }
-
         SegmentedButton(
-            selected = currentTheme == Theme.System,
-            onClick = { onThemeChange(Theme.System) },
+            selected = currentTheme == Theme.System, onClick = { onThemeChange(Theme.System) },
             shape = SegmentedButtonDefaults.itemShape(2, 3),
             icon = { Icon(Icons.Outlined.Tonality, contentDescription = null, Modifier.size(ButtonDefaults.IconSize)) }
         ) { Text(stringResource("system")) }
@@ -568,11 +766,8 @@ fun ThemeSelector(currentTheme: Theme, onThemeChange: (Theme) -> Unit) {
 
 @Composable
 fun SwitchSetting(
-    title: String,
-    description: String,
-    icon: ImageVector,
-    checked: Boolean,
-    onCheckedChange: (Boolean) -> Unit
+    title: String, description: String, icon: ImageVector,
+    checked: Boolean, onCheckedChange: (Boolean) -> Unit
 ) {
     Row(
         modifier = Modifier.fillMaxWidth(),
@@ -591,39 +786,21 @@ fun SwitchSetting(
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun <T> ExposedDropdown(
-    label: String,
-    value: String,
-    options: List<Pair<String, T>>,
-    onOptionSelected: (T) -> Unit,
-    modifier: Modifier = Modifier
+    label: String, value: String, options: List<Pair<String, T>>,
+    onOptionSelected: (T) -> Unit, modifier: Modifier = Modifier
 ) {
     var expanded by remember { mutableStateOf(false) }
-
-    ExposedDropdownMenuBox(
-        expanded = expanded,
-        // Assegna il nuovo stato fornito dal callback direttamente alla tua variabile.
-        onExpandedChange = { expanded = it },
-        modifier = modifier
-    ) {
+    ExposedDropdownMenuBox(expanded = expanded, onExpandedChange = { expanded = it }, modifier = modifier) {
         OutlinedTextField(
-            value = value,
-            onValueChange = {}, // Corretto, non serve onValueChange essendo readOnly
-            readOnly = true,
-            label = { Text(label) },
+            value = value, onValueChange = {}, readOnly = true, label = { Text(label) },
             trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded) },
-            modifier = Modifier.menuAnchor().fillMaxWidth()
+            modifier = Modifier.menuAnchor(MenuAnchorType.PrimaryNotEditable).fillMaxWidth()
         )
-        ExposedDropdownMenu(
-            expanded = expanded,
-            onDismissRequest = { expanded = false } // onDismissRequest chiude il menu
-        ) {
+        ExposedDropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
             options.forEach { (text, optionValue) ->
                 DropdownMenuItem(
                     text = { Text(text) },
-                    onClick = {
-                        onOptionSelected(optionValue)
-                        expanded = false // Chiudi il menu dopo la selezione
-                    }
+                    onClick = { onOptionSelected(optionValue); expanded = false }
                 )
             }
         }
@@ -635,16 +812,8 @@ fun DeviceDropdown(label: String, devices: List<Mixer.Info>, selectedDevice: Mix
     ExposedDropdown(label, selectedDevice?.name ?: stringResource("no_device"), devices.map { it.name to it }, onDeviceSelected)
 }
 
-/**
- * Mostra un'impostazione statica con titolo, descrizione e icona.
- * Non è cliccabile.
- */
 @Composable
-fun InfoSetting(
-    title: String,
-    description: String,
-    icon: ImageVector
-) {
+fun InfoSetting(title: String, description: String, icon: ImageVector) {
     Row(
         modifier = Modifier.fillMaxWidth(),
         verticalAlignment = Alignment.CenterVertically,
@@ -658,18 +827,9 @@ fun InfoSetting(
     }
 }
 
-/**
- * Mostra un'impostazione cliccabile che esegue un'azione.
- * Mostra una freccia per indicare l'interattività.
- */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun ClickableSetting(
-    title: String,
-    description: String,
-    icon: ImageVector,
-    onClick: () -> Unit
-) {
+fun ClickableSetting(title: String, description: String, icon: ImageVector, onClick: () -> Unit) {
     Card(onClick = onClick, modifier = Modifier.fillMaxWidth()) {
         Row(
             modifier = Modifier.padding(vertical = 8.dp, horizontal = 4.dp),

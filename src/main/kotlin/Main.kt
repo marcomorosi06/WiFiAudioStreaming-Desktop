@@ -65,12 +65,29 @@ data class AudioSettings_V1(
     }
 }
 
+// --- Sealed class for the virtual audio driver status ---
+sealed class VirtualDriverStatus {
+    object Ok : VirtualDriverStatus()
+    data class Missing(val driverName: String, val downloadUrl: String) : VirtualDriverStatus()
+}
+
 object NetworkHandler_v1 {
+    fun getLocalIpAddress(): String {
+        return try {
+            java.net.DatagramSocket().use { socket ->
+                socket.connect(java.net.InetAddress.getByName("8.8.8.8"), 10002)
+                socket.localAddress.hostAddress
+            }
+        } catch (e: Exception) {
+            "127.0.0.1"
+        }
+    }
+
     private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
     private var streamingJob: Job? = null
     private var listeningJob: Job? = null
     private var broadcastingJob: Job? = null
-    private var serverAudioLine: TargetDataLine? = null
+    private var serverGrabber: org.bytedeco.javacv.FFmpegFrameGrabber? = null
     private var micReceiverJob: Job? = null
 
     private const val DISCOVERY_PORT = 9091
@@ -94,7 +111,41 @@ object NetworkHandler_v1 {
             }
     }
 
-    // ... Le funzioni beginDeviceDiscovery, endDeviceDiscovery, etc. rimangono invariate ...
+    /**
+     * Checks whether the required virtual audio driver is installed for the current OS.
+     * Returns VirtualDriverStatus.Ok if found, VirtualDriverStatus.Missing with name and download URL otherwise.
+     */
+    fun checkVirtualDriverStatus(): VirtualDriverStatus {
+        val os = System.getProperty("os.name").lowercase()
+        return when {
+            os.contains("win") -> {
+                val driverName = "CABLE Output (VB-Audio Virtual Cable)"
+                val isInstalled = AudioSystem.getMixerInfo().any {
+                    it.name.contains("CABLE Output", ignoreCase = true)
+                }
+                if (isInstalled) VirtualDriverStatus.Ok
+                else VirtualDriverStatus.Missing(
+                    driverName = "VB-Audio Virtual Cable",
+                    downloadUrl = "https://vb-audio.com/Cable/"
+                )
+            }
+            os.contains("mac") -> {
+                val isInstalled = AudioSystem.getMixerInfo().any {
+                    it.name.contains("BlackHole", ignoreCase = true)
+                }
+                if (isInstalled) VirtualDriverStatus.Ok
+                else VirtualDriverStatus.Missing(
+                    driverName = "BlackHole 2ch",
+                    downloadUrl = "https://existential.audio/blackhole/"
+                )
+            }
+            else -> {
+                // On Linux/PulseAudio, we assume it's available (no easy install check)
+                VirtualDriverStatus.Ok
+            }
+        }
+    }
+
     fun beginDeviceDiscovery(onDeviceFound: (hostname: String, serverInfo: ServerInfo) -> Unit) {
         if (listeningJob?.isActive == true) return
         listeningJob = scope.launch {
@@ -136,7 +187,9 @@ object NetworkHandler_v1 {
             } catch (e: Exception) {
                 if (e !is CancellationException) println("Listening Error: ${e.message}")
             } finally {
-                socket?.leaveGroup(InetAddress.getByName(MULTICAST_GROUP_IP))
+                try {
+                    socket?.leaveGroup(InetAddress.getByName(MULTICAST_GROUP_IP))
+                } catch (_: Exception) {}
                 socket?.close()
             }
         }
@@ -146,18 +199,27 @@ object NetworkHandler_v1 {
         listeningJob?.cancel()
     }
 
+    // FIX BUG #2: Use MulticastSocket (not DatagramSocket) with TTL set,
+    // so the announcement packets are correctly routed on the local network.
     fun startAnnouncingPresence(isMulticast: Boolean, port: Int) {
         broadcastingJob?.cancel()
         broadcastingJob = scope.launch {
             val hostname = try { InetAddress.getLocalHost().hostName } catch (e: Exception) { "Desktop-PC" }
             val mode = if (isMulticast) "MULTICAST" else "UNICAST"
             val message = "$DISCOVERY_MESSAGE;$hostname;$mode;$port"
+            val groupAddress = InetAddress.getByName(MULTICAST_GROUP_IP)
 
-            DatagramSocket().use { socket ->
-                val groupAddress = InetAddress.getByName(MULTICAST_GROUP_IP)
+            // Use MulticastSocket so the OS routes multicast packets correctly
+            MulticastSocket().use { socket ->
+                socket.timeToLive = 4 // Enough for local network segments
                 while (isActive) {
-                    val packet = DatagramPacket(message.toByteArray(), message.length, groupAddress, DISCOVERY_PORT)
-                    socket.send(packet)
+                    try {
+                        val bytes = message.toByteArray()
+                        val packet = DatagramPacket(bytes, bytes.size, groupAddress, DISCOVERY_PORT)
+                        socket.send(packet)
+                    } catch (e: Exception) {
+                        if (e !is CancellationException) println("Announcing error: ${e.message}")
+                    }
                     delay(3000)
                 }
             }
@@ -239,94 +301,143 @@ object NetworkHandler_v1 {
         }
     }
 
-
     fun launchServerInstance(
         audioSettings: AudioSettings_V1,
         port: Int,
         isMulticast: Boolean,
-        selectedMixerInfo: Mixer.Info?,
         micOutputMixerInfo: Mixer.Info?,
         micPort: Int,
-        onStatusUpdate: (key: String, args: Array<out Any>) -> Unit // <- CORREZIONE 1: Firma modificata
+        onStatusUpdate: (key: String, args: Array<out Any>) -> Unit
     ) {
         if (micOutputMixerInfo != null) {
             micReceiverJob = scope.launchMicReceiver(audioSettings, isMulticast, micOutputMixerInfo, micPort)
         }
         startAnnouncingPresence(isMulticast, port)
+
         streamingJob = scope.launch {
-            var audioLine: TargetDataLine? = null
             try {
-                val systemAudioDeviceInfo = selectedMixerInfo ?: run {
-                    onStatusUpdate("status_error_no_device", emptyArray()) // <- CORREZIONE 2: Usa emptyArray()
-                    return@launch
+                val os = System.getProperty("os.name").lowercase()
+
+                val grabberFormat: String
+                val deviceName: String
+
+                when {
+                    os.contains("win") -> {
+                        grabberFormat = "dshow"
+                        deviceName = "audio=CABLE Output (VB-Audio Virtual Cable)"
+                    }
+                    os.contains("mac") -> {
+                        grabberFormat = "avfoundation"
+                        deviceName = "audio=BlackHole 2ch"
+                    }
+                    else -> {
+                        grabberFormat = "pulse"
+                        deviceName = "default"
+                    }
                 }
-                val audioMixer = AudioSystem.getMixer(systemAudioDeviceInfo)
-                val format = audioSettings.toAudioFormat()
-                val lineInfo = DataLine.Info(TargetDataLine::class.java, format)
-                if (!AudioSystem.isLineSupported(lineInfo)) {
-                    onStatusUpdate("status_error_unsupported_format", emptyArray())
-                    return@launch
+
+                serverGrabber = org.bytedeco.javacv.FFmpegFrameGrabber(deviceName).apply {
+                    setFormat(grabberFormat)
+                    sampleRate = audioSettings.sampleRate.toInt()
+                    audioChannels = audioSettings.channels
+                    sampleFormat = org.bytedeco.ffmpeg.global.avutil.AV_SAMPLE_FMT_S16
                 }
-                val frameSize = format.frameSize
-                val adjustedBufferSize = (audioSettings.bufferSize / frameSize) * frameSize
-                if (adjustedBufferSize <= 0) {
-                    onStatusUpdate("status_error_invalid_buffer", emptyArray())
-                    return@launch
-                }
-                audioLine = audioMixer.getLine(lineInfo) as? TargetDataLine
-                serverAudioLine = audioLine
-                audioLine?.open(format, adjustedBufferSize)
-                audioLine?.start()
-                if (audioLine == null || !audioLine.isOpen) {
-                    onStatusUpdate("status_error_critical_line", emptyArray())
-                    serverAudioLine = null
+
+                // FIX BUG #1: The "driver missing" error is now surfaced via a specific
+                // status key so the UI can show a proper banner with a download button.
+                try {
+                    serverGrabber?.start()
+                    println("--- FFMPEG started successfully ---")
+                } catch (e: Exception) {
+                    // Signal to the UI that the driver is missing, not just a generic error
+                    onStatusUpdate("error_virtual_driver_missing", emptyArray())
                     return@launch
                 }
 
                 if (isMulticast) {
-                    onStatusUpdate("status_multicast_streaming", arrayOf(port)) // <- CORREZIONE 3: Usa arrayOf()
+                    onStatusUpdate("Streaming Multicast on Port %d...", arrayOf(port))
+
                     MulticastSocket().use { socket ->
+                        socket.timeToLive = 4
                         val group = InetAddress.getByName(MULTICAST_GROUP_IP)
-                        val buffer = ByteArray(adjustedBufferSize)
+
+                        val maxBytesPerPacket = audioSettings.bufferSize
+                        val maxShortsPerPacket = maxBytesPerPacket / 2
+                        val chunkArray = ShortArray(maxShortsPerPacket)
+                        val byteBuffer = java.nio.ByteBuffer.allocate(maxBytesPerPacket).apply {
+                            order(java.nio.ByteOrder.LITTLE_ENDIAN)
+                        }
+
                         while (isActive) {
-                            val bytesRead = audioLine.read(buffer, 0, buffer.size)
-                            if (bytesRead > 0) {
-                                val packet = DatagramPacket(buffer, bytesRead, group, port)
-                                socket.send(packet)
-                            } else if (bytesRead < 0) break
+                            val frame = serverGrabber?.grabSamples()
+                            if (frame != null && frame.samples != null) {
+                                val shortBuffer = frame.samples[0] as java.nio.ShortBuffer
+                                shortBuffer.position(0)
+
+                                while (shortBuffer.hasRemaining()) {
+                                    val shortsToRead = minOf(shortBuffer.remaining(), maxShortsPerPacket)
+                                    shortBuffer.get(chunkArray, 0, shortsToRead)
+
+                                    byteBuffer.clear()
+                                    byteBuffer.asShortBuffer().put(chunkArray, 0, shortsToRead)
+                                    val bytesToSend = shortsToRead * 2
+
+                                    socket.send(DatagramPacket(byteBuffer.array(), bytesToSend, group, port))
+                                }
+                            }
                         }
                     }
                 } else { // Unicast
-                    onStatusUpdate("status_server_waiting", arrayOf(port))
+                    onStatusUpdate("Waiting for Unicast Client on Port %d...", arrayOf(port))
+
                     val localAddress = InetSocketAddress("0.0.0.0", port)
                     aSocket(SelectorManager(Dispatchers.IO)).udp().bind(localAddress) { reuseAddress = true }.use { socket ->
                         val clientDatagram = socket.receive()
                         if (clientDatagram.packet.readText().trim() == CLIENT_HELLO_MESSAGE) {
                             val clientAddress = clientDatagram.address
-                            onStatusUpdate("status_client_connected", arrayOf(clientAddress))
+                            onStatusUpdate("Client Connected: %s", arrayOf(clientAddress.toString()))
                             stopAnnouncingPresence()
+                            socket.send(Datagram(buildPacket { writeText("HELLO_ACK") }, clientAddress))
 
-                            val ackPacket = buildPacket { writeText("HELLO_ACK") }
-                            socket.send(Datagram(ackPacket, clientAddress))
+                            val maxBytesPerPacket = audioSettings.bufferSize
+                            val maxShortsPerPacket = maxBytesPerPacket / 2
+                            val chunkArray = ShortArray(maxShortsPerPacket)
+                            val byteBuffer = java.nio.ByteBuffer.allocate(maxBytesPerPacket).apply {
+                                order(java.nio.ByteOrder.LITTLE_ENDIAN)
+                            }
 
-                            val buffer = ByteArray(adjustedBufferSize)
                             while (isActive) {
-                                val bytesRead = audioLine.read(buffer, 0, buffer.size)
-                                if (bytesRead > 0) {
-                                    val packet = buildPacket { writeFully(buffer, 0, bytesRead) }
-                                    socket.send(Datagram(packet, clientAddress))
-                                } else if (bytesRead < 0) break
+                                val frame = serverGrabber?.grabSamples()
+                                if (frame != null && frame.samples != null) {
+                                    val shortBuffer = frame.samples[0] as java.nio.ShortBuffer
+                                    shortBuffer.position(0)
+
+                                    while (shortBuffer.hasRemaining()) {
+                                        val shortsToRead = minOf(shortBuffer.remaining(), maxShortsPerPacket)
+                                        shortBuffer.get(chunkArray, 0, shortsToRead)
+
+                                        byteBuffer.clear()
+                                        byteBuffer.asShortBuffer().put(chunkArray, 0, shortsToRead)
+                                        val bytesToSend = shortsToRead * 2
+
+                                        val packet = buildPacket { writeFully(byteBuffer.array(), 0, bytesToSend) }
+                                        socket.send(Datagram(packet, clientAddress))
+                                    }
+                                }
                             }
                         }
                     }
                 }
-            } catch (e: Exception) {
-                if (e !is CancellationException) onStatusUpdate("status_error_server", arrayOf(e.message ?: "Unknown"))
+            } catch (t: Throwable) {
+                if (t !is CancellationException) {
+                    t.printStackTrace()
+                    onStatusUpdate("CRITICAL ERROR: %s", arrayOf(t.message ?: t.toString()))
+                }
             } finally {
                 stopAnnouncingPresence()
-                onStatusUpdate("status_server_stopped", emptyArray())
-                audioLine?.stop(); audioLine?.close()
-                serverAudioLine = null
+                serverGrabber?.stop()
+                serverGrabber?.release()
+                serverGrabber = null
             }
         }
     }
@@ -338,9 +449,10 @@ object NetworkHandler_v1 {
         sendMicrophone: Boolean,
         micInputMixerInfo: Mixer.Info?,
         micPort: Int,
-        onStatusUpdate: (key: String, args: Array<out Any>) -> Unit // <- CORREZIONE 1: Firma modificata
+        onStatusUpdate: (key: String, args: Array<out Any>) -> Unit
     ) {
         if (sendMicrophone && micInputMixerInfo != null) {
+            // Note: launchMicSender, not launchMicReceiver — this is the client sending mic to server
             micReceiverJob = scope.launchMicSender(audioSettings, serverInfo, micInputMixerInfo, micPort)
         }
         streamingJob = scope.launch {
@@ -354,7 +466,8 @@ object NetworkHandler_v1 {
                         socket.send(Datagram(helloPacket, remoteAddress))
 
                         onStatusUpdate("status_waiting_ack", emptyArray())
-                        val ackDatagram = withTimeout(5000) { socket.receive() }
+                        // FIX BUG #3: Increased timeout from 5s to 15s to give FFmpeg time to start
+                        val ackDatagram = withTimeout(15000) { socket.receive() }
                         if (ackDatagram.packet.readText().trim() != "HELLO_ACK") {
                             onStatusUpdate("status_handshake_failed", emptyArray())
                             return@use
@@ -391,10 +504,16 @@ object NetworkHandler_v1 {
             } catch (e: TimeoutCancellationException) {
                 onStatusUpdate("status_server_no_response", emptyArray())
             } catch (e: Exception) {
-                if (e !is CancellationException) onStatusUpdate("status_error_client", arrayOf(e.message ?: "Unknown"))
+                if (e !is CancellationException) {
+                    e.printStackTrace()
+                    onStatusUpdate("Error: %s", arrayOf(e.message ?: e.toString()))
+                }
             } finally {
-                onStatusUpdate("status_streaming_ended", emptyArray())
-                sourceDataLine?.drain(); sourceDataLine?.stop(); sourceDataLine?.close()
+                // FIX BUG #4: Don't touch serverGrabber in client mode — it's always null here
+                // and releasing it would cause confusion if a server was somehow running.
+                sourceDataLine?.drain()
+                sourceDataLine?.stop()
+                sourceDataLine?.close()
             }
         }
     }
@@ -416,8 +535,12 @@ object NetworkHandler_v1 {
         stopAnnouncingPresence()
         streamingJob?.cancelAndJoin()
         micReceiverJob?.cancelAndJoin()
-        serverAudioLine?.stop(); serverAudioLine?.close()
-        streamingJob = null; micReceiverJob = null; serverAudioLine = null
+
+        serverGrabber?.stop()
+        serverGrabber?.release()
+        serverGrabber = null
+        streamingJob = null
+        micReceiverJob = null
     }
 
     fun terminateAllServices() {
@@ -425,343 +548,10 @@ object NetworkHandler_v1 {
     }
 }
 
-/*
-
-// --- UI (INVARIATA, INCLUSA PER COMPLETEZZA) ---
-@OptIn(ExperimentalMaterial3Api::class)
-@Composable
-@Preview
-fun LegacyAppUI() {
-    var isServer by remember { mutableStateOf(true) }
-    val discoveredDevices = remember { mutableStateMapOf<String, ServerInfo>() }
-    var connectionStatus by remember { mutableStateOf("Inattivo") }
-    var isStreaming by remember { mutableStateOf(false) }
-    val scope = rememberCoroutineScope()
-
-    var audioSettings by remember {
-        mutableStateOf(AudioSettings_V1(sampleRate = 48000f, bitDepth = 16, channels = 2, bufferSize = 4096))
-    }
-    var streamingPort by remember { mutableStateOf("9090") }
-    var micPort by remember { mutableStateOf("9092") }
-
-    val outputDevices = remember { mutableStateOf<List<Mixer.Info>>(emptyList()) }
-    var selectedOutputDevice by remember { mutableStateOf<Mixer.Info?>(null) }
-    var outputMenuExpanded by remember { mutableStateOf(false) }
-
-    val inputDevices = remember { mutableStateOf<List<Mixer.Info>>(emptyList()) }
-    var selectedInputDevice by remember { mutableStateOf<Mixer.Info?>(null) }
-    var inputMenuExpanded by remember { mutableStateOf(false) }
-
-    var sendMicrophone by remember { mutableStateOf(false) }
-    var selectedClientMic by remember { mutableStateOf<Mixer.Info?>(null) }
-    var clientMicMenuExpanded by remember { mutableStateOf(false) }
-
-    var selectedServerMicOutput by remember { mutableStateOf<Mixer.Info?>(null) }
-    var serverMicOutputMenuExpanded by remember { mutableStateOf(false) }
-
-    var isMulticastMode by remember { mutableStateOf(true) }
-
-    LaunchedEffect(Unit) {
-        outputDevices.value = NetworkHandler_v1.findAvailableOutputMixers()
-        inputDevices.value = NetworkHandler_v1.findAvailableInputMixers()
-        selectedOutputDevice = outputDevices.value.firstOrNull()
-        selectedInputDevice = inputDevices.value.firstOrNull()
-        selectedClientMic = inputDevices.value.firstOrNull()
-        selectedServerMicOutput = outputDevices.value.find { it.name.contains("CABLE Input", ignoreCase = true) }
-            ?: outputDevices.value.firstOrNull()
-    }
-
-    LaunchedEffect(isServer) {
-        if (!isServer) {
-            scope.launch { NetworkHandler_v1.stopCurrentStream() }
-            isStreaming = false
-            connectionStatus = "Inattivo"
-            NetworkHandler_v1.beginDeviceDiscovery { hostname, serverInfo ->
-                discoveredDevices[hostname] = serverInfo
-            }
-        } else {
-            NetworkHandler_v1.endDeviceDiscovery()
-            discoveredDevices.clear()
-        }
-    }
-
-    MaterialTheme {
-        Surface(modifier = Modifier.fillMaxSize()) {
-            Column(
-                modifier = Modifier.padding(16.dp).fillMaxWidth().verticalScroll(rememberScrollState()),
-                horizontalAlignment = Alignment.CenterHorizontally,
-                verticalArrangement = Arrangement.spacedBy(16.dp)
-            ) {
-                Text("WiFi Audio Streamer (Desktop)", style = MaterialTheme.typography.headlineLarge)
-                Text("Stato: $connectionStatus", style = MaterialTheme.typography.bodyMedium, modifier = Modifier.height(60.dp))
-
-                if (!isStreaming) {
-                    OutlinedCard(modifier = Modifier.fillMaxWidth()) {
-                        Row(modifier = Modifier.fillMaxWidth()) {
-                            TextButton(onClick = { isServer = false }, colors = if (!isServer) ButtonDefaults.textButtonColors(containerColor = MaterialTheme.colorScheme.secondaryContainer) else ButtonDefaults.textButtonColors(), modifier = Modifier.weight(1f)) { Text("Ricevi (Client)") }
-                            TextButton(onClick = { isServer = true }, colors = if (isServer) ButtonDefaults.textButtonColors(containerColor = MaterialTheme.colorScheme.secondaryContainer) else ButtonDefaults.textButtonColors(), modifier = Modifier.weight(1f)) { Text("Invia (Server)") }
-                        }
-                    }
-                    NetworkSettingsPanel(
-                        port = streamingPort,
-                        onPortChange = { streamingPort = it },
-                        micPort = micPort,
-                        onMicPortChange = { micPort = it },
-                        enabled = !isStreaming
-                    )
-                    AudioSettingsPanel(settings = audioSettings, onSettingsChange = { newSettings -> audioSettings = newSettings })
-                    if (isServer) {
-                        Card(modifier = Modifier.fillMaxWidth()) {
-                            Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                                Text("Impostazioni Server", style = MaterialTheme.typography.titleMedium)
-                                Text("Sorgente Audio Principale (Input):", style = MaterialTheme.typography.titleSmall)
-                                ExposedDropdownMenuBox(expanded = inputMenuExpanded, onExpandedChange = { inputMenuExpanded = !inputMenuExpanded }) {
-                                    OutlinedTextField(value = selectedInputDevice?.name ?: "Nessun dispositivo", onValueChange = {}, readOnly = true, trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = inputMenuExpanded) }, modifier = Modifier.menuAnchor().fillMaxWidth())
-                                    ExposedDropdownMenu(expanded = inputMenuExpanded, onDismissRequest = { inputMenuExpanded = false }) {
-                                        inputDevices.value.forEach { device -> DropdownMenuItem(text = { Text(device.name) }, onClick = { selectedInputDevice = device; inputMenuExpanded = false }) }
-                                    }
-                                }
-                                Text("Output Microfoni Ricevuti (es. Virtual Cable):", style = MaterialTheme.typography.titleSmall)
-                                ExposedDropdownMenuBox(expanded = serverMicOutputMenuExpanded, onExpandedChange = { serverMicOutputMenuExpanded = !serverMicOutputMenuExpanded }) {
-                                    OutlinedTextField(value = selectedServerMicOutput?.name ?: "Nessun dispositivo", onValueChange = {}, readOnly = true, trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = serverMicOutputMenuExpanded) }, modifier = Modifier.menuAnchor().fillMaxWidth())
-                                    ExposedDropdownMenu(expanded = serverMicOutputMenuExpanded, onDismissRequest = { serverMicOutputMenuExpanded = false }) {
-                                        outputDevices.value.forEach { device -> DropdownMenuItem(text = { Text(device.name) }, onClick = { selectedServerMicOutput = device; serverMicOutputMenuExpanded = false }) }
-                                    }
-                                }
-                                Divider(Modifier.padding(vertical = 8.dp))
-                                Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceBetween) {
-                                    Column(Modifier.weight(1f)) { Text("Modalità Streaming", style = MaterialTheme.typography.bodyLarge); Text(if (isMulticastMode) "Multicast: Più client." else "Unicast: Singolo client.", style = MaterialTheme.typography.bodySmall) }
-                                    Switch(checked = isMulticastMode, onCheckedChange = { isMulticastMode = it })
-                                }
-                            }
-                        }
-                    }
-                    if (!isServer) {
-                        Card(modifier = Modifier.fillMaxWidth()) {
-                            Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                                Text("Impostazioni Client", style = MaterialTheme.typography.titleMedium)
-                                Text("Dispositivo di Output (Audio dal Server):", style = MaterialTheme.typography.titleSmall)
-                                ExposedDropdownMenuBox(expanded = outputMenuExpanded, onExpandedChange = { outputMenuExpanded = !outputMenuExpanded }) {
-                                    OutlinedTextField(value = selectedOutputDevice?.name ?: "Nessun dispositivo", onValueChange = {}, readOnly = true, trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = outputMenuExpanded) }, modifier = Modifier.menuAnchor().fillMaxWidth())
-                                    ExposedDropdownMenu(expanded = outputMenuExpanded, onDismissRequest = { outputMenuExpanded = false }) {
-                                        outputDevices.value.forEach { device -> DropdownMenuItem(text = { Text(device.name) }, onClick = { selectedOutputDevice = device; outputMenuExpanded = false }) }
-                                    }
-                                }
-                                Divider(Modifier.padding(vertical = 8.dp))
-                                Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceBetween) {
-                                    Text("Invia Microfono al Server", style = MaterialTheme.typography.bodyLarge)
-                                    Switch(checked = sendMicrophone, onCheckedChange = { sendMicrophone = it })
-                                }
-                                if (sendMicrophone) {
-                                    Text("Seleziona Microfono da Inviare:", style = MaterialTheme.typography.titleSmall)
-                                    ExposedDropdownMenuBox(expanded = clientMicMenuExpanded, onExpandedChange = { clientMicMenuExpanded = !clientMicMenuExpanded }) {
-                                        OutlinedTextField(value = selectedClientMic?.name ?: "Nessun microfono", onValueChange = {}, readOnly = true, trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = clientMicMenuExpanded) }, modifier = Modifier.menuAnchor().fillMaxWidth())
-                                        ExposedDropdownMenu(expanded = clientMicMenuExpanded, onDismissRequest = { clientMicMenuExpanded = false }) {
-                                            inputDevices.value.forEach { device -> DropdownMenuItem(text = { Text(device.name) }, onClick = { selectedClientMic = device; clientMicMenuExpanded = false }) }
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                        Spacer(Modifier.height(16.dp))
-                        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.Center) {
-                            Text("Stream Attivi Trovati:", style = MaterialTheme.typography.titleMedium)
-                            IconButton(onClick = { discoveredDevices.clear() }) { Icon(Icons.Filled.Refresh, "Aggiorna lista") }
-                        }
-                        if (discoveredDevices.isEmpty()) {
-                            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) { CircularProgressIndicator(Modifier.size(24.dp)); Text("Ricerca stream...") }
-                        } else {
-                            LazyColumn(modifier = Modifier.fillMaxWidth().heightIn(max = 200.dp), horizontalAlignment = Alignment.CenterHorizontally) {
-                                items(discoveredDevices.toList()) { (_, serverInfo) ->
-                                    val modeText = if (serverInfo.isMulticast) "Multicast" else "Unicast"
-                                    val buttonText = "Ascolta da ${serverInfo.ip} ($modeText - Porta ${serverInfo.port})"
-                                    Button(onClick = {
-                                        isStreaming = true
-                                        val micPortToUse = micPort.toIntOrNull()?.coerceIn(1024, 65535) ?: 9092
-                                        NetworkHandler_v1.launchClientInstance(
-                                            audioSettings = audioSettings,
-                                            serverInfo = serverInfo,
-                                            selectedMixerInfo = selectedOutputDevice!!,
-                                            sendMicrophone = sendMicrophone,
-                                            micInputMixerInfo = selectedClientMic,
-                                            micPort = micPortToUse
-                                        ) { status -> connectionStatus = status }
-                                    }, enabled = selectedOutputDevice != null && (!sendMicrophone || selectedClientMic != null)) { Text(buttonText) }
-                                }
-                            }
-                        }
-                    }
-                }
-
-                Spacer(Modifier.weight(1f, fill = false))
-
-                if (isStreaming) {
-                    Button(onClick = {
-                        isStreaming = false
-                        connectionStatus = "Inattivo"
-                        scope.launch {
-                            NetworkHandler_v1.stopCurrentStream()
-                        }
-                    }) { Text("Ferma Streaming") }
-                } else {
-                    if (isServer) {
-                        Button(onClick = {
-                            isStreaming = true
-                            val portToUse = streamingPort.toIntOrNull()?.coerceIn(1024, 65535) ?: 9090
-                            val micPortToUse = micPort.toIntOrNull()?.coerceIn(1024, 65535) ?: 9092
-                            NetworkHandler_v1.launchServerInstance(
-                                audioSettings,
-                                portToUse,
-                                isMulticastMode,
-                                selectedInputDevice,
-                                selectedServerMicOutput,
-                                micPortToUse
-                            ) { status -> connectionStatus = status }
-                        }, enabled = selectedInputDevice != null && selectedServerMicOutput != null && (streamingPort.toIntOrNull() ?: 0) in 1024..65535 && (micPort.toIntOrNull() ?: 0) in 1024..65535) { Text("Avvia Server") }
-                    }
-                }
-            }
-        }
-    }
-}
-
-@OptIn(ExperimentalMaterial3Api::class)
-@Composable
-fun AudioSettingsPanel(
-    settings: AudioSettings_V1,
-    onSettingsChange: (AudioSettings_V1) -> Unit
-) {
-    var sampleRateMenuExpanded by remember { mutableStateOf(false) }
-    var bitDepthMenuExpanded by remember { mutableStateOf(false) }
-
-    val sampleRates = listOf(44100f, 48000f, 96000f)
-    val bitDepths = listOf(8, 16)
-
-    OutlinedCard(modifier = Modifier.fillMaxWidth()) {
-        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-            Text("Impostazioni Audio", style = MaterialTheme.typography.titleMedium)
-
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                ExposedDropdownMenuBox(
-                    expanded = sampleRateMenuExpanded,
-                    onExpandedChange = { sampleRateMenuExpanded = !sampleRateMenuExpanded },
-                    modifier = Modifier.weight(1f)
-                ) {
-                    OutlinedTextField(
-                        value = "${settings.sampleRate.toInt()} Hz", onValueChange = {}, readOnly = true,
-                        label = { Text("Sample Rate") },
-                        trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = sampleRateMenuExpanded) },
-                        modifier = Modifier.menuAnchor()
-                    )
-                    ExposedDropdownMenu(expanded = sampleRateMenuExpanded, onDismissRequest = { sampleRateMenuExpanded = false }) {
-                        sampleRates.forEach { rate ->
-                            DropdownMenuItem(
-                                text = { Text("${rate.toInt()} Hz") },
-                                onClick = {
-                                    onSettingsChange(settings.copy(sampleRate = rate))
-                                    sampleRateMenuExpanded = false
-                                }
-                            )
-                        }
-                    }
-                }
-                ExposedDropdownMenuBox(
-                    expanded = bitDepthMenuExpanded,
-                    onExpandedChange = { bitDepthMenuExpanded = !bitDepthMenuExpanded },
-                    modifier = Modifier.weight(1f)
-                ) {
-                    OutlinedTextField(
-                        value = "${settings.bitDepth}-bit", onValueChange = {}, readOnly = true,
-                        label = { Text("Bit Depth") },
-                        trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = bitDepthMenuExpanded) },
-                        modifier = Modifier.menuAnchor()
-                    )
-                    ExposedDropdownMenu(expanded = bitDepthMenuExpanded, onDismissRequest = { bitDepthMenuExpanded = false }) {
-                        bitDepths.forEach { depth ->
-                            DropdownMenuItem(
-                                text = { Text("$depth-bit") },
-                                onClick = {
-                                    onSettingsChange(settings.copy(bitDepth = depth))
-                                    bitDepthMenuExpanded = false
-                                }
-                            )
-                        }
-                    }
-                }
-            }
-
-            Column {
-                Text("Canali", style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Bold)
-                SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {
-                    SegmentedButton(
-                        shape = RoundedCornerShape(topStartPercent = 50, bottomStartPercent = 50),
-                        onClick = { onSettingsChange(settings.copy(channels = 1)) },
-                        selected = settings.channels == 1
-                    ) { Text("Mono") }
-                    SegmentedButton(
-                        shape = RoundedCornerShape(topEndPercent = 50, bottomEndPercent = 50),
-                        onClick = { onSettingsChange(settings.copy(channels = 2)) },
-                        selected = settings.channels == 2
-                    ) { Text("Stereo") }
-                }
-            }
-
-            Column {
-                Text("Dimensione Buffer: ${settings.bufferSize} byte", style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Bold)
-                Slider(
-                    value = settings.bufferSize.toFloat(),
-                    onValueChange = { onSettingsChange(settings.copy(bufferSize = it.roundToInt())) },
-                    valueRange = 512f..8192f,
-                    steps = ((8192f - 512f) / 256f).toInt() - 1
-                )
-            }
-        }
-    }
-}
-
-
-@OptIn(ExperimentalMaterial3Api::class)
-@Composable
-fun NetworkSettingsPanel(
-    port: String,
-    onPortChange: (String) -> Unit,
-    micPort: String,
-    onMicPortChange: (String) -> Unit,
-    enabled: Boolean
-) {
-    OutlinedCard(modifier = Modifier.fillMaxWidth()) {
-        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            Text("Impostazioni di Rete", style = MaterialTheme.typography.titleMedium)
-            OutlinedTextField(
-                value = port,
-                onValueChange = { newValue ->
-                    if (newValue.all { it.isDigit() } && newValue.length <= 5) {
-                        onPortChange(newValue)
-                    }
-                },
-                label = { Text("Porta Audio Principale (1024-65535)") },
-                singleLine = true,
-                modifier = Modifier.fillMaxWidth(),
-                enabled = enabled
-            )
-            OutlinedTextField(
-                value = micPort,
-                onValueChange = { newValue ->
-                    if (newValue.all { it.isDigit() } && newValue.length <= 5) {
-                        onMicPortChange(newValue)
-                    }
-                },
-                label = { Text("Porta Microfono (1024-65535)") },
-                singleLine = true,
-                modifier = Modifier.fillMaxWidth(),
-                enabled = enabled
-            )
-        }
-    }
-}
-*/
-
 fun main() = application {
+    System.setProperty("java.net.preferIPv4Stack", "true")
+    org.bytedeco.javacv.FFmpegLogCallback.set()
+    org.bytedeco.ffmpeg.global.avdevice.avdevice_register_all()
     val loadedSettings = SettingsRepository.loadSettings()
     var appSettings by remember { mutableStateOf(loadedSettings.app) }
     var audioSettings by remember { mutableStateOf(loadedSettings.audio) }
@@ -777,6 +567,8 @@ fun main() = application {
     val discoveredDevices = remember { mutableStateMapOf<String, ServerInfo>() }
     var connectionStatus by remember { mutableStateOf(Strings.get("status_inactive")) }
     var isStreaming by remember { mutableStateOf(false) }
+    // State for the virtual driver banner — checked once and shown until dismissed
+    var virtualDriverStatus by remember { mutableStateOf<VirtualDriverStatus>(VirtualDriverStatus.Ok) }
     val scope = rememberCoroutineScope()
 
     val outputDevices = remember { mutableStateOf<List<Mixer.Info>>(emptyList()) }
@@ -794,7 +586,11 @@ fun main() = application {
         selectedOutputDevice = outputDevices.value.firstOrNull()
         selectedInputDevice = inputDevices.value.firstOrNull()
         selectedClientMic = inputDevices.value.firstOrNull()
-        selectedServerMicOutput = outputDevices.value.find { it.name.contains("CABLE Input", ignoreCase = true) } ?: outputDevices.value.firstOrNull()
+        selectedServerMicOutput = outputDevices.value.find { it.name.contains("CABLE Input", ignoreCase = true) }
+            ?: outputDevices.value.firstOrNull()
+
+        // Check for the virtual driver on startup and store status
+        virtualDriverStatus = NetworkHandler_v1.checkVirtualDriverStatus()
     }
 
     val useDarkTheme = when (appSettings.theme) {
@@ -817,6 +613,8 @@ fun main() = application {
                     onMinimize = { windowState.isMinimized = true },
                     onClose = ::exitApplication
                 )
+                val localIp = remember { NetworkHandler_v1.getLocalIpAddress() }
+
                 Box(Modifier.fillMaxSize()) {
                     AppContent(
                         appSettings = appSettings,
@@ -829,9 +627,30 @@ fun main() = application {
                         outputDevices = outputDevices.value,
                         selectedOutputDevice = selectedOutputDevice,
                         inputDevices = inputDevices.value,
-                        selectedInputDevice = selectedInputDevice,
+                        selectedInputDevice = null,
                         selectedClientMic = selectedClientMic,
                         selectedServerMicOutput = selectedServerMicOutput,
+                        streamingPort = streamingPort,
+                        localIp = localIp,
+                        virtualDriverStatus = virtualDriverStatus, // PASS STATUS TO UI
+                        onConnectManual = { ip ->
+                            isStreaming = true
+                            connectionStatus = "Connecting manually to $ip..."
+                            val port = streamingPort.toIntOrNull() ?: 9090
+                            val mic = micPort.toIntOrNull() ?: 9092
+                            val manualServerInfo = ServerInfo(ip, false, port)
+                            NetworkHandler_v1.endDeviceDiscovery()
+                            NetworkHandler_v1.launchClientInstance(
+                                audioSettings,
+                                manualServerInfo,
+                                selectedOutputDevice!!,
+                                sendMicrophone,
+                                selectedClientMic,
+                                mic
+                            ) { key, args ->
+                                connectionStatus = if (args.isEmpty()) key else String.format(key, *args)
+                            }
+                        },
                         onModeChange = { isSrv ->
                             isServer = isSrv
                             if (!isSrv) {
@@ -849,16 +668,26 @@ fun main() = application {
                         },
                         onStartStreaming = {
                             isStreaming = true
+                            connectionStatus = "Starting Server..."
                             val port = streamingPort.toIntOrNull() ?: 9090
                             val mic = micPort.toIntOrNull() ?: 9092
                             NetworkHandler_v1.launchServerInstance(
                                 audioSettings,
                                 port,
                                 isMulticastMode,
-                                selectedInputDevice,
                                 selectedServerMicOutput,
                                 mic
-                            ) { key, args -> connectionStatus = Strings.get(key, *args) }
+                            ) { key, args ->
+                                // If the virtual driver is missing, update UI status and flag it
+                                if (key == "error_virtual_driver_missing") {
+                                    isStreaming = false
+                                    // Re-check so UI refreshes the banner
+                                    virtualDriverStatus = NetworkHandler_v1.checkVirtualDriverStatus()
+                                    connectionStatus = Strings.get("status_inactive")
+                                } else {
+                                    connectionStatus = if (args.isEmpty()) key else String.format(key, *args)
+                                }
+                            }
                         },
                         onStopStreaming = {
                             isStreaming = false
@@ -923,11 +752,9 @@ fun WindowScope.CustomTitleBar(
     val onSurfaceColor = MaterialTheme.colorScheme.onSurface
     val surfaceColor = MaterialTheme.colorScheme.surface
 
-    // Memorizziamo la dimensione e la posizione prima di massimizzare per poterle ripristinare
     var preMaximizeSize by remember { mutableStateOf(windowState.size) }
     var preMaximizePosition by remember { mutableStateOf(windowState.position) }
 
-    // Otteniamo i limiti massimi della finestra che escludono la taskbar/dock
     val maxBounds = GraphicsEnvironment.getLocalGraphicsEnvironment().maximumWindowBounds
     val density = LocalDensity.current.density
 
@@ -962,15 +789,11 @@ fun WindowScope.CustomTitleBar(
                 IconButton(
                     onClick = {
                         if (isManuallyMaximized) {
-                            // Se è massimizzato, ripristina la dimensione e posizione precedenti
                             windowState.size = preMaximizeSize
                             windowState.position = preMaximizePosition
                         } else {
-                            // Salva la dimensione e posizione attuali
                             preMaximizeSize = windowState.size
                             preMaximizePosition = windowState.position
-
-                            // Massimizza manualmente usando i bordi calcolati
                             windowState.size = DpSize(maximizedWidth, maximizedHeight)
                             windowState.position = WindowPosition(maximizedPositionX, maximizedPositionY)
                         }

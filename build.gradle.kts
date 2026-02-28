@@ -1,9 +1,12 @@
 import org.jetbrains.compose.desktop.application.dsl.TargetFormat
 
-
 plugins {
-    kotlin("jvm") version "1.9.23"
-    id("org.jetbrains.compose") version "1.7.0"
+    // Aggiornato a Kotlin 2.x
+    kotlin("jvm") version "2.1.0"
+    // Plugin ufficiale di Compose Multiplatform
+    id("org.jetbrains.compose") version "1.7.3"
+    // NOVITÀ KOTLIN 2: Il compilatore Compose è ora un plugin di Kotlin
+    id("org.jetbrains.kotlin.plugin.compose") version "2.1.0"
 }
 
 group = "com.wifiaudiostreaming"
@@ -16,22 +19,26 @@ repositories {
 }
 
 dependencies {
-    // Dipendenza per la UI di Compose Multiplatform
+    // Dipendenze UI Compose
     implementation(compose.desktop.currentOs)
-    // Aggiungiamo esplicitamente la dipendenza per Material 3
     implementation(compose.material3)
     implementation(compose.materialIconsExtended)
 
-    // Ktor per il networking (TCP/UDP)
-    val ktorVersion = "2.3.11"
+    // Aggiornato a Ktor 3.x
+    val ktorVersion = "3.0.3"
     implementation("io.ktor:ktor-network:$ktorVersion")
     implementation("io.ktor:ktor-network-tls:$ktorVersion")
 
-    // Per la gestione delle coroutine (necessario per Ktor e operazioni asincrone)
-    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.8.1")
-    implementation("org.bouncycastle:bcprov-jdk15on:1.70")
-    implementation("org.bouncycastle:bctls-jdk15on:1.70")
-    implementation("org.bouncycastle:bcpkix-jdk15on:1.70")
+    // Aggiornato Coroutines
+    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.9.0")
+
+    // Aggiornato BouncyCastle (jdk15on è obsoleto, si usa jdk18on per Java 17+)
+    val bcVersion = "1.78.1"
+    implementation("org.bouncycastle:bcprov-jdk18on:$bcVersion")
+    implementation("org.bouncycastle:bctls-jdk18on:$bcVersion")
+    implementation("org.bouncycastle:bcpkix-jdk18on:$bcVersion")
+    val javacvVersion = "1.5.10"
+    implementation("org.bytedeco:javacv-platform:$javacvVersion")
 }
 
 compose.desktop {
@@ -39,8 +46,6 @@ compose.desktop {
         mainClass = "MainKt"
 
         nativeDistributions {
-            // === PASSO 1: AGGIUNGI I NUOVI FORMATI ===
-            // Aggiungiamo .dmg per macOS e .deb/.rpm per Linux
             targetFormats(TargetFormat.Msi, TargetFormat.Dmg, TargetFormat.Deb, TargetFormat.Rpm)
 
             packageName = "WiFi Audio Streaming"
@@ -51,36 +56,26 @@ compose.desktop {
                 configurationFiles.from(project.file("proguard-rules.pro"))
             }
 
-            // Configurazione specifica per Windows
             windows {
                 iconFile.set(project.file("src/main/resources/app_icon.ico"))
                 shortcut = true
                 menu = true
             }
 
-            // === PASSO 2: DECOMMENTA E ABILITA LE SEZIONI PER macOS e LINUX ===
             macOS {
-                // IMPORTANTE: Devi creare e inserire un'icona .icns in questo percorso
                 iconFile.set(project.file("src/main/resources/app_icon.icns"))
-                // Puoi personalizzare altre opzioni qui, come il bundle ID
                 bundleID = "com.wifiaudiostreaming"
             }
 
             linux {
-                // IMPORTANTE: Devi creare e inserire un'icona .png in questo percorso
                 iconFile.set(project.file("src/main/resources/app_icon.png"))
-                // Nome del pacchetto per i gestori di pacchetti Linux
                 packageName = "wifi-audio-streaming"
-                // Aggiungiamo una categoria per il menu delle applicazioni (es. "AudioVideo", "Network")
                 appCategory = "AudioVideo"
             }
         }
     }
 }
 
-// Torniamo a Java 17, che è stabile e compatibile
 kotlin {
     jvmToolchain(17)
 }
-
-
