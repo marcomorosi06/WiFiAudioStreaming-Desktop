@@ -5,6 +5,7 @@ import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.shape.CircleShape
@@ -19,6 +20,7 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -29,6 +31,21 @@ import javax.sound.sampled.Mixer
 import kotlin.math.roundToInt
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.border
+import androidx.compose.foundation.gestures.detectDragGestures
+import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.toArgb
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.text.input.KeyboardType
+import kotlin.math.atan2
+import kotlin.math.cos
+import kotlin.math.sin
 
 // =================================================================
 // ==                  SCHERMATA PRINCIPALE                       ==
@@ -52,7 +69,12 @@ fun AppContent(
     selectedServerMicOutput: Mixer.Info?,
     streamingPort: String,
     localIp: String,
-    virtualDriverStatus: VirtualDriverStatus, // NEW PARAMETER
+    serverVolume: Float,
+    onServerVolumeChange: (Float) -> Unit,
+    isWindowsOS: Boolean,
+    onDismissPrivacyBanner: (Boolean) -> Unit,
+    onDismissRoutingBanner: (Boolean) -> Unit,
+    virtualDriverStatus: VirtualDriverStatus,
     onConnectManual: (String) -> Unit,
     onModeChange: (Boolean) -> Unit,
     onStartStreaming: () -> Unit,
@@ -129,6 +151,16 @@ fun AppContent(
                 }
             }
 
+            // --- BANNER WINDOWS (Instradamento e Privacy) ---
+            if (isWindowsOS && isServer && !isStreaming) {
+                if (!appSettings.hideWindowsRoutingBanner) {
+                    item { WindowsRoutingBanner(onDismiss = onDismissRoutingBanner) }
+                }
+                if (!appSettings.hideWindowsPrivacyBanner) {
+                    item { WindowsPrivacyBanner(onDismiss = onDismissPrivacyBanner) }
+                }
+            }
+
             item {
                 Text(connectionStatus, style = MaterialTheme.typography.bodyLarge, textAlign = TextAlign.Center)
                 if (isServer) {
@@ -146,9 +178,10 @@ fun AppContent(
                 StreamingControlCenter(
                     isStreaming = isStreaming,
                     isServer = isServer,
-                    // Disable the Start button if the driver is missing in server mode
                     isServerReady = if (isServer && virtualDriverStatus is VirtualDriverStatus.Missing) false
                     else (!appSettings.experimentalFeaturesEnabled || selectedServerMicOutput != null),
+                    serverVolume = serverVolume,
+                    onServerVolumeChange = onServerVolumeChange,
                     onStart = onStartStreaming,
                     onStop = onStopStreaming
                 )
@@ -315,6 +348,7 @@ fun SettingsScreen(
     onAudioSettingsChange: (AudioSettings_V1) -> Unit,
     onStreamingPortChange: (String) -> Unit,
     onMicPortChange: (String) -> Unit,
+    onCustomColorChange: (Long?) -> Unit,
     onClose: () -> Unit
 ) {
     var showExperimentalWarningDialog by remember { mutableStateOf(false) }
@@ -366,6 +400,61 @@ fun SettingsScreen(
                             currentTheme = appSettings.theme,
                             onThemeChange = { onAppSettingsChange(appSettings.copy(theme = it)) }
                         )
+                    }
+                }
+                item {
+                    SettingsGroup(title = "Material You Theming", icon = Icons.Outlined.FormatPaint) {
+
+                        Row(
+                            modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp),
+                            horizontalArrangement = Arrangement.SpaceEvenly,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            // 1. Il nostro nuovo Color Picker Avanzato
+                            AdvancedColorPicker(
+                                initialColor = appSettings.customThemeColor,
+                                onColorChange = { colorLong -> onCustomColorChange(colorLong) }
+                            )
+
+                            // 2. I controlli aggiuntivi sulla destra
+                            Column(
+                                verticalArrangement = Arrangement.spacedBy(16.dp),
+                                horizontalAlignment = Alignment.CenterHorizontally
+                            ) {
+                                Button(
+                                    onClick = {
+                                        val extractedColor = ThemeEngine.pickImageAndExtractColor()
+                                        if (extractedColor != null) onCustomColorChange(extractedColor)
+                                    }
+                                ) {
+                                    Icon(Icons.Outlined.Image, contentDescription = null)
+                                    Spacer(Modifier.width(8.dp))
+                                    Text("Extract from Image")
+                                }
+
+                                OutlinedButton(
+                                    onClick = { onCustomColorChange(null) },
+                                    enabled = appSettings.customThemeColor != null
+                                ) {
+                                    Icon(Icons.Outlined.Restore, contentDescription = null)
+                                    Spacer(Modifier.width(8.dp))
+                                    Text("Reset to Default")
+                                }
+
+                                if (appSettings.customThemeColor != null) {
+                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                        Text("Current Seed: ", style = MaterialTheme.typography.bodyMedium)
+                                        Box(
+                                            modifier = Modifier
+                                                .size(32.dp)
+                                                .clip(CircleShape)
+                                                .background(Color(appSettings.customThemeColor!!.toULong()))
+                                                .border(1.dp, MaterialTheme.colorScheme.onSurface, CircleShape)
+                                        )
+                                    }
+                                }
+                            }
+                        }
                     }
                 }
                 item {
@@ -435,7 +524,9 @@ fun SettingsScreen(
 
 @Composable
 fun StreamingControlCenter(
-    isStreaming: Boolean, isServer: Boolean, isServerReady: Boolean, onStart: () -> Unit, onStop: () -> Unit
+    isStreaming: Boolean, isServer: Boolean, isServerReady: Boolean,
+    serverVolume: Float, onServerVolumeChange: (Float) -> Unit,
+    onStart: () -> Unit, onStop: () -> Unit
 ) {
     ElevatedCard(modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(24.dp)) {
         AnimatedContent(
@@ -459,6 +550,17 @@ fun StreamingControlCenter(
                         stringResource("streaming_active"),
                         style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold
                     )
+                    if (isServer) {
+                        Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.padding(top = 16.dp)) {
+                            Text("Transmission Volume: ${(serverVolume * 100).toInt()}%", style = MaterialTheme.typography.bodyMedium)
+                            Slider(
+                                value = serverVolume,
+                                onValueChange = onServerVolumeChange,
+                                valueRange = 0f..2f, // Da 0 (muto) a 200% (boost)
+                                modifier = Modifier.width(200.dp)
+                            )
+                        }
+                    }
                     Button(
                         onClick = onStop,
                         colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error)
@@ -885,5 +987,282 @@ fun ClickableSetting(title: String, description: String, icon: ImageVector, onCl
             }
             Icon(Icons.AutoMirrored.Filled.ArrowForward, contentDescription = "Go")
         }
+    }
+}
+
+@Composable
+fun WindowsPrivacyBanner(onDismiss: (Boolean) -> Unit) {
+    var isVisible by remember { mutableStateOf(true) } // <-- Stato locale aggiunto
+    var dontShowAgain by remember { mutableStateOf(false) }
+
+    // Se è stato nascosto per questa sessione, distrugge il componente
+    if (!isVisible) return
+
+    val containerColor = MaterialTheme.colorScheme.tertiaryContainer
+    val onContainerColor = MaterialTheme.colorScheme.onTertiaryContainer
+
+    ElevatedCard(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(16.dp),
+        colors = CardDefaults.elevatedCardColors(containerColor = containerColor)
+    ) {
+        Column(modifier = Modifier.padding(16.dp)) {
+            Row(horizontalArrangement = Arrangement.spacedBy(12.dp), verticalAlignment = Alignment.CenterVertically) {
+                Icon(Icons.Outlined.MicOff, contentDescription = "Privacy", tint = onContainerColor, modifier = Modifier.size(32.dp))
+                Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    Text("Windows Mic Privacy", fontWeight = FontWeight.Bold, color = onContainerColor)
+                    Text(
+                        "If the client hears total silence, Windows is blocking the virtual cable. You MUST allow desktop apps to access the microphone in Windows Settings.",
+                        style = MaterialTheme.typography.bodySmall, color = onContainerColor
+                    )
+                }
+            }
+            Spacer(modifier = Modifier.height(12.dp))
+            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Checkbox(
+                        checked = dontShowAgain,
+                        onCheckedChange = { dontShowAgain = it },
+                        colors = CheckboxDefaults.colors(checkedColor = MaterialTheme.colorScheme.tertiary)
+                    )
+                    Text("Do not show again", style = MaterialTheme.typography.bodySmall, color = onContainerColor)
+                }
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Button(
+                        onClick = {
+                            try { Runtime.getRuntime().exec("cmd /c start ms-settings:privacy-microphone") } catch (e: Exception) {}
+                        },
+                        colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.tertiary, contentColor = MaterialTheme.colorScheme.onTertiary)
+                    ) { Text("Fix") }
+
+                    Button(
+                        onClick = {
+                            isVisible = false // <-- Nasconde IMMEDIATAMENTE il banner dalla UI
+                            onDismiss(dontShowAgain) // Comunica a Main.kt se deve salvarlo per sempre
+                        },
+                        colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.tertiary, contentColor = MaterialTheme.colorScheme.onTertiary)
+                    ) { Text("OK") }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+fun WindowsRoutingBanner(onDismiss: (Boolean) -> Unit) {
+    var isVisible by remember { mutableStateOf(true) } // <-- Stato locale aggiunto
+    var dontShowAgain by remember { mutableStateOf(false) }
+
+    // Se è stato nascosto per questa sessione, distrugge il componente
+    if (!isVisible) return
+
+    val containerColor = MaterialTheme.colorScheme.secondaryContainer
+    val onContainerColor = MaterialTheme.colorScheme.onSecondaryContainer
+
+    ElevatedCard(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(16.dp),
+        colors = CardDefaults.elevatedCardColors(containerColor = containerColor)
+    ) {
+        Column(modifier = Modifier.padding(16.dp)) {
+            Row(horizontalArrangement = Arrangement.spacedBy(12.dp), verticalAlignment = Alignment.CenterVertically) {
+                Icon(Icons.Outlined.VolumeUp, contentDescription = "Routing", tint = onContainerColor, modifier = Modifier.size(32.dp))
+                Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    Text("Action Required: Set Audio Output", fontWeight = FontWeight.Bold, color = onContainerColor)
+                    Text(
+                        "To stream system audio, you must click the speaker icon in your Windows taskbar and set 'CABLE Input' as your default playback device before starting.",
+                        style = MaterialTheme.typography.bodySmall, color = onContainerColor
+                    )
+                }
+            }
+            Spacer(modifier = Modifier.height(12.dp))
+            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Checkbox(
+                        checked = dontShowAgain,
+                        onCheckedChange = { dontShowAgain = it },
+                        colors = CheckboxDefaults.colors(checkedColor = MaterialTheme.colorScheme.secondary)
+                    )
+                    Text("Do not show again", style = MaterialTheme.typography.bodySmall, color = onContainerColor)
+                }
+                Button(
+                    onClick = {
+                        isVisible = false // <-- Nasconde IMMEDIATAMENTE il banner dalla UI
+                        onDismiss(dontShowAgain)
+                    },
+                    colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.secondary, contentColor = MaterialTheme.colorScheme.onSecondary)
+                ) { Text("OK") }
+            }
+        }
+    }
+}
+
+@Composable
+fun AdvancedColorPicker(
+    initialColor: Long?,
+    onColorChange: (Long) -> Unit
+) {
+    var hue by remember { mutableFloatStateOf(0f) } // 0f .. 360f
+    var lightness by remember { mutableFloatStateOf(0.5f) } // 0f (Nero) .. 0.5f (Puro) .. 1f (Bianco)
+    var hexText by remember { mutableStateOf("") }
+
+    // Motore HSL -> RGB
+    fun hslToColor(h: Float, s: Float, l: Float): Color {
+        val c = (1f - Math.abs(2f * l - 1f)) * s
+        val x = c * (1f - Math.abs((h / 60f) % 2f - 1f))
+        val m = l - c / 2f
+        var r = 0f; var g = 0f; var b = 0f
+        when {
+            h < 60f -> { r = c; g = x; b = 0f }
+            h < 120f -> { r = x; g = c; b = 0f }
+            h < 180f -> { r = 0f; g = c; b = x }
+            h < 240f -> { r = 0f; g = x; b = c }
+            h < 300f -> { r = x; g = 0f; b = c }
+            else -> { r = c; g = 0f; b = x }
+        }
+        return Color(r + m, g + m, b + m)
+    }
+
+    // Motore RGB -> HSL
+    fun colorToHsl(color: Color): FloatArray {
+        val r = color.red
+        val g = color.green
+        val b = color.blue
+        val max = maxOf(r, g, b)
+        val min = minOf(r, g, b)
+        val l = (max + min) / 2f
+        var h = 0f
+        var s = 0f
+        if (max != min) {
+            val d = max - min
+            s = if (l > 0.5f) d / (2f - max - min) else d / (max + min)
+            h = when (max) {
+                r -> (g - b) / d + (if (g < b) 6f else 0f)
+                g -> (b - r) / d + 2f
+                else -> (r - g) / d + 4f
+            }
+            h *= 60f
+            if (h < 0f) h += 360f
+        }
+        return floatArrayOf(h, s, l)
+    }
+
+    // Caricamento del colore salvato
+    LaunchedEffect(initialColor) {
+        if (initialColor != null) {
+            val c = Color(initialColor.toULong())
+            val hsl = colorToHsl(c)
+            hue = hsl[0]
+            lightness = hsl[2]
+            hexText = String.format("%06X", 0xFFFFFF and c.toArgb())
+        } else {
+            hue = 0f
+            lightness = 0.5f // 0.5 è il colore naturale!
+            hexText = "FF0000"
+        }
+    }
+
+    fun updateColor(newHue: Float, newLightness: Float) {
+        hue = newHue
+        lightness = newLightness
+        val composeColor = hslToColor(newHue, 1f, newLightness)
+        hexText = String.format("%06X", 0xFFFFFF and composeColor.toArgb())
+        onColorChange(composeColor.value.toLong())
+    }
+
+    Column(
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.spacedBy(16.dp)
+    ) {
+        // 1. LA RUOTA DEI COLORI (Ora reagisce visivamente alla luminosità!)
+        Box(
+            modifier = Modifier
+                .size(160.dp)
+                .clip(CircleShape)
+                .pointerInput(Unit) {
+                    detectDragGestures { change, _ ->
+                        val x = change.position.x - size.width / 2
+                        val y = change.position.y - size.height / 2
+                        var angle = Math.toDegrees(atan2(y.toDouble(), x.toDouble())).toFloat()
+                        if (angle < 0) angle += 360f
+                        updateColor(angle, lightness)
+                    }
+                }
+                .pointerInput(Unit) {
+                    detectTapGestures { offset ->
+                        val x = offset.x - size.width / 2
+                        val y = offset.y - size.height / 2
+                        var angle = Math.toDegrees(atan2(y.toDouble(), x.toDouble())).toFloat()
+                        if (angle < 0) angle += 360f
+                        updateColor(angle, lightness)
+                    }
+                }
+        ) {
+            Canvas(modifier = Modifier.fillMaxSize()) {
+                // I colori della ruota si aggiornano in tempo reale se muovi lo slider!
+                val sweepColors = listOf(
+                    hslToColor(0f, 1f, lightness), hslToColor(60f, 1f, lightness),
+                    hslToColor(120f, 1f, lightness), hslToColor(180f, 1f, lightness),
+                    hslToColor(240f, 1f, lightness), hslToColor(300f, 1f, lightness),
+                    hslToColor(360f, 1f, lightness)
+                )
+                drawCircle(brush = Brush.sweepGradient(colors = sweepColors))
+
+                // Cursore bianco e nero per essere sempre visibile
+                val angleRad = Math.toRadians(hue.toDouble())
+                val radius = (size.width / 2) - 10f
+                val dotX = center.x + (radius * cos(angleRad)).toFloat()
+                val dotY = center.y + (radius * sin(angleRad)).toFloat()
+
+                drawCircle(color = Color.Black, radius = 8f, center = Offset(dotX, dotY), style = Stroke(width = 2f))
+                drawCircle(color = Color.White, radius = 6f, center = Offset(dotX, dotY))
+            }
+        }
+
+        // 2. SLIDER DELLA LUMINANZA (0 = Nero, 0.5 = Naturale, 1 = Bianco)
+        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+            Text("Lightness: ${(lightness * 100).toInt()}%", style = MaterialTheme.typography.labelMedium)
+            Slider(
+                value = lightness,
+                onValueChange = { updateColor(hue, it) },
+                valueRange = 0.05f..0.95f, // Evitiamo gli estremi assoluti per non perdere la Tinta
+                modifier = Modifier.width(160.dp)
+            )
+        }
+
+        // 3. INPUT HEX
+        OutlinedTextField(
+            value = hexText,
+            onValueChange = { input ->
+                // Filtra solo i caratteri esadecimali validi
+                val filtered = input.uppercase().filter { it in "0123456789ABCDEF" }
+
+                if (filtered.length <= 6) {
+                    hexText = filtered // Aggiorna il testo a schermo
+
+                    // MAGIA REATTIVA: Applica il colore da solo non appena scrivi il 6° carattere!
+                    if (filtered.length == 6) {
+                        try {
+                            val parsedColor = java.awt.Color.decode("#$filtered")
+                            val c = Color(parsedColor.red, parsedColor.green, parsedColor.blue)
+                            val hsl = colorToHsl(c)
+
+                            // Aggiorniamo le variabili visive (ruota e slider)
+                            hue = hsl[0]
+                            lightness = hsl[2]
+
+                            // Inviamo il colore direttamente al nostro motore Material You
+                            onColorChange(c.value.toLong())
+                        } catch (e: Exception) {}
+                    }
+                }
+            },
+            label = { Text("HEX Color") },
+            prefix = { Text("#") },
+            singleLine = true,
+            modifier = Modifier.width(160.dp),
+            textStyle = LocalTextStyle.current.copy(textAlign = TextAlign.Center),
+            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Ascii)
+        )
     }
 }

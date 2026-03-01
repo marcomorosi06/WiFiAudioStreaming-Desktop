@@ -46,11 +46,154 @@ import androidx.compose.ui.window.WindowScope
 import androidx.compose.ui.window.WindowState
 import java.awt.GraphicsEnvironment
 import java.awt.Toolkit
+import java.awt.FileDialog
+import java.awt.Frame
+import java.awt.image.BufferedImage
+import java.io.File
+import javax.imageio.ImageIO
+import androidx.compose.ui.graphics.Color
+
+object ThemeEngine {
+    fun pickImageAndExtractColor(): Long? {
+        try {
+            // 1. Apriamo il selettore file nativo del PC
+            val dialog = FileDialog(null as Frame?, "Select a Wallpaper", FileDialog.LOAD)
+            dialog.file = "*.jpg;*.png;*.jpeg"
+            dialog.isVisible = true
+
+            if (dialog.directory == null || dialog.file == null) return null
+            val file = File(dialog.directory, dialog.file)
+            if (!file.exists()) return null
+
+            // 2. Leggiamo l'immagine
+            val img = ImageIO.read(file) ?: return null
+
+            // 3. TRUCCO MAGICO: Ridimensioniamo a 1x1 pixel per ottenere la media di tutti i colori all'istante!
+            val img1x1 = BufferedImage(1, 1, BufferedImage.TYPE_INT_RGB)
+            val graphics = img1x1.createGraphics()
+            graphics.drawImage(img.getScaledInstance(1, 1, java.awt.Image.SCALE_FAST), 0, 0, null)
+            graphics.dispose()
+
+            // 4. Estraiamo il colore e lo convertiamo per Compose
+            val rgb = img1x1.getRGB(0, 0)
+            val awtColor = java.awt.Color(rgb)
+            val composeColor = Color(awtColor.red, awtColor.green, awtColor.blue)
+
+            return composeColor.value.toLong() // Restituiamo il valore da salvare nelle impostazioni
+        } catch (e: Exception) {
+            e.printStackTrace()
+            return null
+        }
+    }
+}
+
+object MaterialYouGenerator {
+    fun generateDynamicColorScheme(seedColor: Color, isDark: Boolean): ColorScheme {
+        val hsb = FloatArray(3)
+        java.awt.Color.RGBtoHSB(
+            (seedColor.red * 255).toInt(),
+            (seedColor.green * 255).toInt(),
+            (seedColor.blue * 255).toInt(),
+            hsb
+        )
+        val h = hsb[0]
+        val s = hsb[1].coerceAtLeast(0.15f)
+
+        // LA MAGIA MANCANTE: Recuperiamo la luminosità reale (da 0.0 a 1.0)
+        val b = hsb[2]
+
+        // Creiamo due moltiplicatori.
+        // bFactor scurisce bottoni e accenti (limite 0.5 per non farli diventare neri).
+        val bFactor = b.coerceIn(0.5f, 1.0f)
+
+        // bgFactor scurisce gli sfondi, ma pochissimo (limite 0.85) per garantire
+        // che il testo nero continui a essere leggibile in modalità chiara!
+        val bgFactor = b.coerceIn(0.85f, 1.0f)
+
+        // Applichiamo i moltiplicatori alla funzione di generazione
+        fun fromHsb(hue: Float, sat: Float, bright: Float, factor: Float = 1f): Color {
+            return Color(java.awt.Color.HSBtoRGB(hue % 1f, sat.coerceIn(0f, 1f), (bright * factor).coerceIn(0f, 1f)))
+        }
+
+        val tH = (h + 0.15f) % 1f
+
+        if (!isDark) {
+            return lightColorScheme(
+                primary = fromHsb(h, s * 0.9f, 0.4f, bFactor),
+                onPrimary = Color.White,
+                primaryContainer = fromHsb(h, s * 0.4f, 0.9f, bFactor),
+                onPrimaryContainer = fromHsb(h, s * 1.0f, 0.15f),
+
+                secondary = fromHsb(h, s * 0.3f, 0.45f, bFactor),
+                onSecondary = Color.White,
+                secondaryContainer = fromHsb(h, s * 0.2f, 0.92f, bFactor),
+                onSecondaryContainer = fromHsb(h, s * 0.5f, 0.15f),
+
+                tertiary = fromHsb(tH, s * 0.4f, 0.45f, bFactor),
+                onTertiary = Color.White,
+                tertiaryContainer = fromHsb(tH, s * 0.25f, 0.92f, bFactor),
+                onTertiaryContainer = fromHsb(tH, s * 0.6f, 0.15f),
+
+                background = fromHsb(h, s * 0.05f, 0.98f, bgFactor),
+                onBackground = fromHsb(h, s * 0.1f, 0.1f),
+                surface = fromHsb(h, s * 0.05f, 0.98f, bgFactor),
+                onSurface = fromHsb(h, s * 0.1f, 0.1f),
+                surfaceVariant = fromHsb(h, s * 0.1f, 0.9f, bgFactor),
+                onSurfaceVariant = fromHsb(h, s * 0.15f, 0.3f),
+
+                surfaceContainerLowest = fromHsb(h, s * 0.02f, 1.0f, bgFactor),
+                surfaceContainerLow = fromHsb(h, s * 0.05f, 0.96f, bgFactor),
+                surfaceContainer = fromHsb(h, s * 0.08f, 0.94f, bgFactor),
+                surfaceContainerHigh = fromHsb(h, s * 0.1f, 0.92f, bgFactor),
+                surfaceContainerHighest = fromHsb(h, s * 0.12f, 0.90f, bgFactor),
+
+                outline = fromHsb(h, s * 0.1f, 0.5f, bFactor),
+                outlineVariant = fromHsb(h, s * 0.1f, 0.8f, bFactor)
+            )
+        } else {
+            return darkColorScheme(
+                primary = fromHsb(h, s * 0.7f, 0.85f, bFactor),
+                onPrimary = fromHsb(h, s * 1.0f, 0.2f),
+                primaryContainer = fromHsb(h, s * 0.8f, 0.3f, bFactor),
+                onPrimaryContainer = fromHsb(h, s * 0.4f, 0.9f),
+
+                secondary = fromHsb(h, s * 0.4f, 0.8f, bFactor),
+                onSecondary = fromHsb(h, s * 0.6f, 0.2f),
+                secondaryContainer = fromHsb(h, s * 0.4f, 0.3f, bFactor),
+                onSecondaryContainer = fromHsb(h, s * 0.2f, 0.9f),
+
+                tertiary = fromHsb(tH, s * 0.5f, 0.8f, bFactor),
+                onTertiary = fromHsb(tH, s * 0.7f, 0.2f),
+                tertiaryContainer = fromHsb(tH, s * 0.5f, 0.3f, bFactor),
+                onTertiaryContainer = fromHsb(tH, s * 0.2f, 0.9f),
+
+                background = fromHsb(h, s * 0.15f, 0.10f, bFactor),
+                onBackground = fromHsb(h, s * 0.1f, 0.9f),
+                surface = fromHsb(h, s * 0.15f, 0.10f, bFactor),
+                onSurface = fromHsb(h, s * 0.1f, 0.9f),
+                surfaceVariant = fromHsb(h, s * 0.20f, 0.25f, bFactor),
+                onSurfaceVariant = fromHsb(h, s * 0.15f, 0.8f),
+
+                surfaceContainerLowest = fromHsb(h, s * 0.15f, 0.05f, bFactor),
+                surfaceContainerLow = fromHsb(h, s * 0.15f, 0.12f, bFactor),
+                surfaceContainer = fromHsb(h, s * 0.15f, 0.15f, bFactor),
+                surfaceContainerHigh = fromHsb(h, s * 0.15f, 0.18f, bFactor),
+                surfaceContainerHighest = fromHsb(h, s * 0.15f, 0.22f, bFactor),
+
+                outline = fromHsb(h, s * 0.15f, 0.6f, bFactor),
+                outlineVariant = fromHsb(h, s * 0.15f, 0.3f, bFactor)
+            )
+        }
+    }
+}
 
 enum class Theme { Light, Dark, System }
 data class AppSettings(
     val theme: Theme = Theme.System,
-    val experimentalFeaturesEnabled: Boolean = false
+    val experimentalFeaturesEnabled: Boolean = false,
+    val hideWindowsPrivacyBanner: Boolean = false,
+    val hideWindowsRoutingBanner: Boolean = false,
+    val customThemeColor: Long? = null
 )
 
 data class ServerInfo(val ip: String, val isMulticast: Boolean, val port: Int)
@@ -99,6 +242,13 @@ object NetworkHandler_v1 {
                         }
             }
         } catch (e: Exception) { null }
+    }
+
+    // --- Gestione Volume Server ---
+    @Volatile var currentServerVolume: Float = 1.0f
+
+    fun setServerVolume(volume: Float) {
+        currentServerVolume = volume
     }
 
     private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
@@ -449,6 +599,7 @@ object NetworkHandler_v1 {
                         deviceName = "audio=BlackHole 2ch"
                     }
                     else -> {
+                        // Su Linux usiamo ALSA per ascoltare il cavo virtuale di PulseAudio/PipeWire
                         grabberFormat = "alsa"
                         deviceName = "default"
                     }
@@ -461,10 +612,10 @@ object NetworkHandler_v1 {
                     sampleFormat = org.bytedeco.ffmpeg.global.avutil.AV_SAMPLE_FMT_S16
                 }
 
-                // FIX BUG #1: The "driver missing" error is now surfaced via a specific
-                // status key so the UI can show a proper banner with a download button.
                 try {
+                    // Eseguiamo il routing automatico su Linux prima di accendere il motore
                     routeLinuxAudioToVirtualCable()
+
                     serverGrabber?.start()
                     println("--- FFMPEG started successfully ---")
                 } catch (e: Exception) {
@@ -479,6 +630,8 @@ object NetworkHandler_v1 {
 
                     MulticastSocket().use { socket ->
                         socket.timeToLive = 4
+                        // Assicuriamoci di usare la vera interfaccia di rete e non un'interfaccia virtuale
+                        getActiveNetworkInterface()?.let { socket.networkInterface = it }
                         val group = InetAddress.getByName(MULTICAST_GROUP_IP)
 
                         val maxBytesPerPacket = audioSettings.bufferSize
@@ -497,6 +650,18 @@ object NetworkHandler_v1 {
                                 while (shortBuffer.hasRemaining()) {
                                     val shortsToRead = minOf(shortBuffer.remaining(), maxShortsPerPacket)
                                     shortBuffer.get(chunkArray, 0, shortsToRead)
+
+                                    // --- APPLICAZIONE DEL VOLUME IN TEMPO REALE ---
+                                    val vol = currentServerVolume
+                                    if (vol != 1.0f) {
+                                        for (i in 0 until shortsToRead) {
+                                            var sample = (chunkArray[i] * vol).toInt()
+                                            // Limitiamo il campione per evitare la distorsione (clipping)
+                                            sample = sample.coerceIn(Short.MIN_VALUE.toInt(), Short.MAX_VALUE.toInt())
+                                            chunkArray[i] = sample.toShort()
+                                        }
+                                    }
+                                    // ----------------------------------------------
 
                                     byteBuffer.clear()
                                     byteBuffer.asShortBuffer().put(chunkArray, 0, shortsToRead)
@@ -536,6 +701,18 @@ object NetworkHandler_v1 {
                                         val shortsToRead = minOf(shortBuffer.remaining(), maxShortsPerPacket)
                                         shortBuffer.get(chunkArray, 0, shortsToRead)
 
+                                        // --- APPLICAZIONE DEL VOLUME IN TEMPO REALE ---
+                                        val vol = currentServerVolume
+                                        if (vol != 1.0f) {
+                                            for (i in 0 until shortsToRead) {
+                                                var sample = (chunkArray[i] * vol).toInt()
+                                                // Limitiamo il campione per evitare la distorsione (clipping)
+                                                sample = sample.coerceIn(Short.MIN_VALUE.toInt(), Short.MAX_VALUE.toInt())
+                                                chunkArray[i] = sample.toShort()
+                                            }
+                                        }
+                                        // ----------------------------------------------
+
                                         byteBuffer.clear()
                                         byteBuffer.asShortBuffer().put(chunkArray, 0, shortsToRead)
                                         val bytesToSend = shortsToRead * 2
@@ -550,8 +727,9 @@ object NetworkHandler_v1 {
                 }
             } catch (t: Throwable) {
                 if (t !is CancellationException) {
+                    println("=== CRITICAL SERVER ERROR ===")
                     t.printStackTrace()
-                    onStatusUpdate("CRITICAL ERROR: %s", arrayOf(t.message ?: t.toString()))
+                    onStatusUpdate("Error: %s", arrayOf(t.message ?: t.toString()))
                 }
             } finally {
                 stopAnnouncingPresence()
@@ -681,6 +859,14 @@ fun main() = application {
     var streamingPort by remember { mutableStateOf(loadedSettings.streamingPort) }
     var micPort by remember { mutableStateOf(loadedSettings.micPort) }
 
+    val isWindowsOS = remember { System.getProperty("os.name").lowercase().contains("win") }
+    var serverVolume by remember { mutableStateOf(1f) }
+
+    // Diciamo al motore audio di aggiornarsi quando muovi lo slider
+    LaunchedEffect(serverVolume) {
+        NetworkHandler_v1.setServerVolume(serverVolume)
+    }
+
     LaunchedEffect(appSettings, audioSettings, streamingPort, micPort) {
         SettingsRepository.saveSettings(AllSettings(appSettings, audioSettings, streamingPort, micPort))
     }
@@ -726,144 +912,169 @@ fun main() = application {
 
     Window(
         onCloseRequest = {
-            // Forza il ripristino dell'audio fisico prima di chiudere il processo
             NetworkHandler_v1.restoreLinuxAudioRouting()
             exitApplication()
         },
         state = windowState,
         undecorated = true
     ) {
-        MaterialTheme(colorScheme = if (useDarkTheme) darkColorScheme() else lightColorScheme()) {
-            Column(Modifier.fillMaxSize()) {
-                CustomTitleBar(
-                    windowState = windowState,
-                    onMinimize = { windowState.isMinimized = true },
-                    onClose = ::exitApplication
-                )
-                val localIp = remember { NetworkHandler_v1.getLocalIpAddress() }
+        // --- CALCOLO DEL TEMA DINAMICO MATERIAL YOU ---
+        val customColor = appSettings.customThemeColor?.toULong()?.let { Color(it) }
 
-                Box(Modifier.fillMaxSize()) {
-                    AppContent(
-                        appSettings = appSettings,
-                        isServer = isServer,
-                        isStreaming = isStreaming,
-                        connectionStatus = connectionStatus,
-                        discoveredDevices = discoveredDevices,
-                        isMulticastMode = isMulticastMode,
-                        sendMicrophone = sendMicrophone,
-                        outputDevices = outputDevices.value,
-                        selectedOutputDevice = selectedOutputDevice,
-                        inputDevices = inputDevices.value,
-                        selectedInputDevice = null,
-                        selectedClientMic = selectedClientMic,
-                        selectedServerMicOutput = selectedServerMicOutput,
-                        streamingPort = streamingPort,
-                        localIp = localIp,
-                        virtualDriverStatus = virtualDriverStatus, // PASS STATUS TO UI
-                        onConnectManual = { ip ->
-                            isStreaming = true
-                            connectionStatus = "Connecting manually to $ip..."
-                            val port = streamingPort.toIntOrNull() ?: 9090
-                            val mic = micPort.toIntOrNull() ?: 9092
-                            val manualServerInfo = ServerInfo(ip, false, port)
-                            NetworkHandler_v1.endDeviceDiscovery()
-                            NetworkHandler_v1.launchClientInstance(
-                                audioSettings,
-                                manualServerInfo,
-                                selectedOutputDevice!!,
-                                sendMicrophone,
-                                selectedClientMic,
-                                mic
-                            ) { key, args ->
-                                connectionStatus = if (args.isEmpty()) key else String.format(key, *args)
-                            }
-                        },
-                        onModeChange = { isSrv ->
-                            isServer = isSrv
-                            if (!isSrv) {
-                                scope.launch { NetworkHandler_v1.stopCurrentStream() }
+        val currentColorScheme = if (customColor != null) {
+            MaterialYouGenerator.generateDynamicColorScheme(customColor, useDarkTheme)
+        } else {
+            if (useDarkTheme) darkColorScheme() else lightColorScheme()
+        }
+        // ----------------------------------------------
+
+        // --- APPLICAZIONE DEL TEMA (FIX: Ora usa currentColorScheme) ---
+        MaterialTheme(colorScheme = currentColorScheme) {
+            // FIX: Surface necessario per far propagare il colore di sfondo a tutta la finestra
+            Surface(modifier = Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
+                Column(Modifier.fillMaxSize()) {
+                    CustomTitleBar(
+                        windowState = windowState,
+                        onMinimize = { windowState.isMinimized = true },
+                        onClose = ::exitApplication
+                    )
+                    val localIp = remember { NetworkHandler_v1.getLocalIpAddress() }
+
+                    Box(Modifier.fillMaxSize()) {
+                        AppContent(
+                            appSettings = appSettings,
+                            isServer = isServer,
+                            isStreaming = isStreaming,
+                            connectionStatus = connectionStatus,
+                            discoveredDevices = discoveredDevices,
+                            isMulticastMode = isMulticastMode,
+                            sendMicrophone = sendMicrophone,
+                            outputDevices = outputDevices.value,
+                            selectedOutputDevice = selectedOutputDevice,
+                            inputDevices = inputDevices.value,
+                            selectedInputDevice = null,
+                            selectedClientMic = selectedClientMic,
+                            selectedServerMicOutput = selectedServerMicOutput,
+                            streamingPort = streamingPort,
+                            localIp = localIp,
+                            serverVolume = serverVolume,
+                            onServerVolumeChange = { serverVolume = it },
+                            isWindowsOS = isWindowsOS,
+                            virtualDriverStatus = virtualDriverStatus,
+                            onDismissPrivacyBanner = { dontShowAgain ->
+                                if (dontShowAgain) {
+                                    appSettings = appSettings.copy(hideWindowsPrivacyBanner = true)
+                                }
+                            },
+                            onDismissRoutingBanner = { dontShowAgain ->
+                                if (dontShowAgain) {
+                                    appSettings = appSettings.copy(hideWindowsRoutingBanner = true)
+                                }
+                            },
+                            onConnectManual = { ip ->
+                                isStreaming = true
+                                connectionStatus = "Connecting manually to $ip..."
+                                val port = streamingPort.toIntOrNull() ?: 9090
+                                val mic = micPort.toIntOrNull() ?: 9092
+                                val manualServerInfo = ServerInfo(ip, false, port)
+                                NetworkHandler_v1.endDeviceDiscovery()
+                                NetworkHandler_v1.launchClientInstance(
+                                    audioSettings,
+                                    manualServerInfo,
+                                    selectedOutputDevice!!,
+                                    sendMicrophone,
+                                    selectedClientMic,
+                                    mic
+                                ) { key, args ->
+                                    connectionStatus = if (args.isEmpty()) key else String.format(key, *args)
+                                }
+                            },
+                            onModeChange = { isSrv ->
+                                isServer = isSrv
+                                if (!isSrv) {
+                                    scope.launch { NetworkHandler_v1.stopCurrentStream() }
+                                    isStreaming = false
+                                    connectionStatus = Strings.get("status_inactive")
+                                    discoveredDevices.clear()
+                                    NetworkHandler_v1.beginDeviceDiscovery { hostname, serverInfo ->
+                                        discoveredDevices[hostname] = serverInfo
+                                    }
+                                } else {
+                                    NetworkHandler_v1.endDeviceDiscovery()
+                                    discoveredDevices.clear()
+                                }
+                            },
+                            onStartStreaming = {
+                                isStreaming = true
+                                connectionStatus = "Starting Server..."
+                                val port = streamingPort.toIntOrNull() ?: 9090
+                                val mic = micPort.toIntOrNull() ?: 9092
+                                NetworkHandler_v1.launchServerInstance(
+                                    audioSettings,
+                                    port,
+                                    isMulticastMode,
+                                    selectedServerMicOutput,
+                                    mic
+                                ) { key, args ->
+                                    if (key == "error_virtual_driver_missing") {
+                                        isStreaming = false
+                                        virtualDriverStatus = NetworkHandler_v1.checkVirtualDriverStatus()
+                                        connectionStatus = Strings.get("status_inactive")
+                                    } else {
+                                        connectionStatus = if (args.isEmpty()) key else String.format(key, *args)
+                                    }
+                                }
+                            },
+                            onStopStreaming = {
                                 isStreaming = false
                                 connectionStatus = Strings.get("status_inactive")
+                                scope.launch { NetworkHandler_v1.stopCurrentStream() }
+                            },
+                            onConnectToServer = { serverInfo ->
+                                isStreaming = true
+                                val mic = micPort.toIntOrNull() ?: 9092
+                                NetworkHandler_v1.endDeviceDiscovery()
+                                NetworkHandler_v1.launchClientInstance(
+                                    audioSettings,
+                                    serverInfo,
+                                    selectedOutputDevice!!,
+                                    sendMicrophone,
+                                    selectedClientMic,
+                                    mic
+                                ) { key, args -> connectionStatus = Strings.get(key, *args) }
+                            },
+                            onRefreshDevices = {
                                 discoveredDevices.clear()
+                                NetworkHandler_v1.endDeviceDiscovery()
                                 NetworkHandler_v1.beginDeviceDiscovery { hostname, serverInfo ->
                                     discoveredDevices[hostname] = serverInfo
                                 }
-                            } else {
-                                NetworkHandler_v1.endDeviceDiscovery()
-                                discoveredDevices.clear()
-                            }
-                        },
-                        onStartStreaming = {
-                            isStreaming = true
-                            connectionStatus = "Starting Server..."
-                            val port = streamingPort.toIntOrNull() ?: 9090
-                            val mic = micPort.toIntOrNull() ?: 9092
-                            NetworkHandler_v1.launchServerInstance(
-                                audioSettings,
-                                port,
-                                isMulticastMode,
-                                selectedServerMicOutput,
-                                mic
-                            ) { key, args ->
-                                // If the virtual driver is missing, update UI status and flag it
-                                if (key == "error_virtual_driver_missing") {
-                                    isStreaming = false
-                                    // Re-check so UI refreshes the banner
-                                    virtualDriverStatus = NetworkHandler_v1.checkVirtualDriverStatus()
-                                    connectionStatus = Strings.get("status_inactive")
-                                } else {
-                                    connectionStatus = if (args.isEmpty()) key else String.format(key, *args)
-                                }
-                            }
-                        },
-                        onStopStreaming = {
-                            isStreaming = false
-                            connectionStatus = Strings.get("status_inactive")
-                            scope.launch { NetworkHandler_v1.stopCurrentStream() }
-                        },
-                        onConnectToServer = { serverInfo ->
-                            isStreaming = true
-                            val mic = micPort.toIntOrNull() ?: 9092
-                            NetworkHandler_v1.endDeviceDiscovery()
-                            NetworkHandler_v1.launchClientInstance(
-                                audioSettings,
-                                serverInfo,
-                                selectedOutputDevice!!,
-                                sendMicrophone,
-                                selectedClientMic,
-                                mic
-                            ) { key, args -> connectionStatus = Strings.get(key, *args) }
-                        },
-                        onRefreshDevices = {
-                            discoveredDevices.clear()
-                            NetworkHandler_v1.endDeviceDiscovery()
-                            NetworkHandler_v1.beginDeviceDiscovery { hostname, serverInfo ->
-                                discoveredDevices[hostname] = serverInfo
-                            }
-                        },
-                        onMulticastModeChange = { isMulti -> isMulticastMode = isMulti },
-                        onSendMicrophoneChange = { send ->
-                            sendMicrophone = if (!appSettings.experimentalFeaturesEnabled) false else send
-                        },
-                        onSelectedOutputDeviceChange = { dev -> selectedOutputDevice = dev },
-                        onSelectedInputDeviceChange = { dev -> selectedInputDevice = dev },
-                        onSelectedClientMicChange = { dev -> selectedClientMic = dev },
-                        onSelectedServerMicOutputChange = { dev -> selectedServerMicOutput = dev },
-                        onOpenSettings = { showSettings = true }
-                    )
+                            },
+                            onMulticastModeChange = { isMulti -> isMulticastMode = isMulti },
+                            onSendMicrophoneChange = { send ->
+                                sendMicrophone = if (!appSettings.experimentalFeaturesEnabled) false else send
+                            },
+                            onSelectedOutputDeviceChange = { dev -> selectedOutputDevice = dev },
+                            onSelectedInputDeviceChange = { dev -> selectedInputDevice = dev },
+                            onSelectedClientMicChange = { dev -> selectedClientMic = dev },
+                            onSelectedServerMicOutputChange = { dev -> selectedServerMicOutput = dev },
+                            onOpenSettings = { showSettings = true }
+                        )
 
-                    SettingsScreen(
-                        visible = showSettings,
-                        appSettings = appSettings,
-                        audioSettings = audioSettings,
-                        streamingPort = streamingPort,
-                        micPort = micPort,
-                        onAppSettingsChange = { newSettings -> appSettings = newSettings },
-                        onAudioSettingsChange = { settings -> audioSettings = settings },
-                        onStreamingPortChange = { port -> streamingPort = port },
-                        onMicPortChange = { port -> micPort = port },
-                        onClose = { showSettings = false }
-                    )
+                        SettingsScreen(
+                            visible = showSettings,
+                            appSettings = appSettings,
+                            audioSettings = audioSettings,
+                            streamingPort = streamingPort,
+                            micPort = micPort,
+                            onAppSettingsChange = { newSettings -> appSettings = newSettings },
+                            onAudioSettingsChange = { settings -> audioSettings = settings },
+                            onStreamingPortChange = { port -> streamingPort = port },
+                            onMicPortChange = { port -> micPort = port },
+                            onClose = { showSettings = false },
+                            onCustomColorChange = { color -> appSettings = appSettings.copy(customThemeColor = color) }
+                        )
+                    }
                 }
             }
         }
