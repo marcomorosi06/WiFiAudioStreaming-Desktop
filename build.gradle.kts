@@ -10,7 +10,7 @@ plugins {
 }
 
 group = "com.wifiaudiostreaming"
-version = "0.1-beta"
+version = "0.2-beta"
 
 repositories {
     google()
