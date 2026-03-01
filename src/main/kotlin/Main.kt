@@ -56,7 +56,6 @@ import androidx.compose.ui.graphics.Color
 object ThemeEngine {
     fun pickImageAndExtractColor(): Long? {
         try {
-            // 1. Apriamo il selettore file nativo del PC
             val dialog = FileDialog(null as Frame?, "Select a Wallpaper", FileDialog.LOAD)
             dialog.file = "*.jpg;*.png;*.jpeg"
             dialog.isVisible = true
@@ -65,21 +64,18 @@ object ThemeEngine {
             val file = File(dialog.directory, dialog.file)
             if (!file.exists()) return null
 
-            // 2. Leggiamo l'immagine
             val img = ImageIO.read(file) ?: return null
 
-            // 3. TRUCCO MAGICO: Ridimensioniamo a 1x1 pixel per ottenere la media di tutti i colori all'istante!
             val img1x1 = BufferedImage(1, 1, BufferedImage.TYPE_INT_RGB)
             val graphics = img1x1.createGraphics()
             graphics.drawImage(img.getScaledInstance(1, 1, java.awt.Image.SCALE_FAST), 0, 0, null)
             graphics.dispose()
 
-            // 4. Estraiamo il colore e lo convertiamo per Compose
             val rgb = img1x1.getRGB(0, 0)
             val awtColor = java.awt.Color(rgb)
             val composeColor = Color(awtColor.red, awtColor.green, awtColor.blue)
 
-            return composeColor.value.toLong() // Restituiamo il valore da salvare nelle impostazioni
+            return composeColor.value.toLong()
         } catch (e: Exception) {
             e.printStackTrace()
             return null
@@ -98,19 +94,10 @@ object MaterialYouGenerator {
         )
         val h = hsb[0]
         val s = hsb[1].coerceAtLeast(0.15f)
-
-        // LA MAGIA MANCANTE: Recuperiamo la luminosità reale (da 0.0 a 1.0)
         val b = hsb[2]
-
-        // Creiamo due moltiplicatori.
-        // bFactor scurisce bottoni e accenti (limite 0.5 per non farli diventare neri).
         val bFactor = b.coerceIn(0.5f, 1.0f)
-
-        // bgFactor scurisce gli sfondi, ma pochissimo (limite 0.85) per garantire
-        // che il testo nero continui a essere leggibile in modalità chiara!
         val bgFactor = b.coerceIn(0.85f, 1.0f)
 
-        // Applichiamo i moltiplicatori alla funzione di generazione
         fun fromHsb(hue: Float, sat: Float, bright: Float, factor: Float = 1f): Color {
             return Color(java.awt.Color.HSBtoRGB(hue % 1f, sat.coerceIn(0f, 1f), (bright * factor).coerceIn(0f, 1f)))
         }
@@ -123,30 +110,25 @@ object MaterialYouGenerator {
                 onPrimary = Color.White,
                 primaryContainer = fromHsb(h, s * 0.4f, 0.9f, bFactor),
                 onPrimaryContainer = fromHsb(h, s * 1.0f, 0.15f),
-
                 secondary = fromHsb(h, s * 0.3f, 0.45f, bFactor),
                 onSecondary = Color.White,
                 secondaryContainer = fromHsb(h, s * 0.2f, 0.92f, bFactor),
                 onSecondaryContainer = fromHsb(h, s * 0.5f, 0.15f),
-
                 tertiary = fromHsb(tH, s * 0.4f, 0.45f, bFactor),
                 onTertiary = Color.White,
                 tertiaryContainer = fromHsb(tH, s * 0.25f, 0.92f, bFactor),
                 onTertiaryContainer = fromHsb(tH, s * 0.6f, 0.15f),
-
                 background = fromHsb(h, s * 0.05f, 0.98f, bgFactor),
                 onBackground = fromHsb(h, s * 0.1f, 0.1f),
                 surface = fromHsb(h, s * 0.05f, 0.98f, bgFactor),
                 onSurface = fromHsb(h, s * 0.1f, 0.1f),
                 surfaceVariant = fromHsb(h, s * 0.1f, 0.9f, bgFactor),
                 onSurfaceVariant = fromHsb(h, s * 0.15f, 0.3f),
-
                 surfaceContainerLowest = fromHsb(h, s * 0.02f, 1.0f, bgFactor),
                 surfaceContainerLow = fromHsb(h, s * 0.05f, 0.96f, bgFactor),
                 surfaceContainer = fromHsb(h, s * 0.08f, 0.94f, bgFactor),
                 surfaceContainerHigh = fromHsb(h, s * 0.1f, 0.92f, bgFactor),
                 surfaceContainerHighest = fromHsb(h, s * 0.12f, 0.90f, bgFactor),
-
                 outline = fromHsb(h, s * 0.1f, 0.5f, bFactor),
                 outlineVariant = fromHsb(h, s * 0.1f, 0.8f, bFactor)
             )
@@ -156,30 +138,25 @@ object MaterialYouGenerator {
                 onPrimary = fromHsb(h, s * 1.0f, 0.2f),
                 primaryContainer = fromHsb(h, s * 0.8f, 0.3f, bFactor),
                 onPrimaryContainer = fromHsb(h, s * 0.4f, 0.9f),
-
                 secondary = fromHsb(h, s * 0.4f, 0.8f, bFactor),
                 onSecondary = fromHsb(h, s * 0.6f, 0.2f),
                 secondaryContainer = fromHsb(h, s * 0.4f, 0.3f, bFactor),
                 onSecondaryContainer = fromHsb(h, s * 0.2f, 0.9f),
-
                 tertiary = fromHsb(tH, s * 0.5f, 0.8f, bFactor),
                 onTertiary = fromHsb(tH, s * 0.7f, 0.2f),
                 tertiaryContainer = fromHsb(tH, s * 0.5f, 0.3f, bFactor),
                 onTertiaryContainer = fromHsb(tH, s * 0.2f, 0.9f),
-
                 background = fromHsb(h, s * 0.15f, 0.10f, bFactor),
                 onBackground = fromHsb(h, s * 0.1f, 0.9f),
                 surface = fromHsb(h, s * 0.15f, 0.10f, bFactor),
                 onSurface = fromHsb(h, s * 0.1f, 0.9f),
                 surfaceVariant = fromHsb(h, s * 0.20f, 0.25f, bFactor),
                 onSurfaceVariant = fromHsb(h, s * 0.15f, 0.8f),
-
                 surfaceContainerLowest = fromHsb(h, s * 0.15f, 0.05f, bFactor),
                 surfaceContainerLow = fromHsb(h, s * 0.15f, 0.12f, bFactor),
                 surfaceContainer = fromHsb(h, s * 0.15f, 0.15f, bFactor),
                 surfaceContainerHigh = fromHsb(h, s * 0.15f, 0.18f, bFactor),
                 surfaceContainerHighest = fromHsb(h, s * 0.15f, 0.22f, bFactor),
-
                 outline = fromHsb(h, s * 0.15f, 0.6f, bFactor),
                 outlineVariant = fromHsb(h, s * 0.15f, 0.3f, bFactor)
             )
@@ -208,7 +185,6 @@ data class AudioSettings_V1(
     }
 }
 
-// --- Sealed class for the virtual audio driver status ---
 sealed class VirtualDriverStatus {
     object Ok : VirtualDriverStatus()
     data class Missing(val driverName: String, val downloadUrl: String) : VirtualDriverStatus()
@@ -232,7 +208,6 @@ object NetworkHandler_v1 {
             NetworkInterface.getNetworkInterfaces().toList().firstOrNull { iface ->
                 iface.isUp &&
                         !iface.isLoopback &&
-                        // Escludiamo tutte le schede virtuali di Windows (VMware, VirtualBox, Hyper-V, WSL)
                         !iface.displayName.contains("Virtual", ignoreCase = true) &&
                         !iface.displayName.contains("VMware", ignoreCase = true) &&
                         !iface.displayName.contains("Hyper-V", ignoreCase = true) &&
@@ -244,7 +219,6 @@ object NetworkHandler_v1 {
         } catch (e: Exception) { null }
     }
 
-    // --- Gestione Volume Server ---
     @Volatile var currentServerVolume: Float = 1.0f
 
     fun setServerVolume(volume: Float) {
@@ -258,23 +232,27 @@ object NetworkHandler_v1 {
     private var serverGrabber: org.bytedeco.javacv.FFmpegFrameGrabber? = null
     private var micReceiverJob: Job? = null
 
+    // =========================================================
+    // FIX 2 — FFmpeg avviato in anticipo, indipendentemente dal client
+    // Il grabber viene preparato non appena il server inizia,
+    // così quando il client si connette i campioni sono già pronti.
+    // =========================================================
+    private var grabberPrewarmJob: Job? = null
+
     private const val DISCOVERY_PORT = 9091
     private const val CLIENT_HELLO_MESSAGE = "HELLO_FROM_CLIENT"
     private const val MULTICAST_GROUP_IP = "239.255.0.1"
     private const val DISCOVERY_MESSAGE = "WIFI_AUDIO_STREAMER_DISCOVERY"
 
-    // --- Memoria per il routing Linux ---
     private var originalLinuxSink: String? = null
     private var originalLinuxSource: String? = null
 
     private fun getPactlDefault(type: String): String? {
         try {
-            // Prova il comando moderno
             val direct = ProcessBuilder("pactl", "get-default-$type").start()
             val directOutput = direct.inputStream.bufferedReader().readText().trim()
             if (direct.waitFor() == 0 && directOutput.isNotEmpty()) return directOutput
 
-            // Fallback per versioni di PulseAudio più vecchie
             val info = ProcessBuilder("pactl", "info").start()
             val infoOutput = info.inputStream.bufferedReader().readText()
             if (info.waitFor() == 0) {
@@ -289,7 +267,6 @@ object NetworkHandler_v1 {
         val os = System.getProperty("os.name").lowercase()
         if (!os.contains("linux")) return
 
-        // Fotografa i dispositivi attuali solo se non siamo già sul VirtualCable
         val currentSink = getPactlDefault("sink")
         val currentSource = getPactlDefault("source")
 
@@ -330,15 +307,10 @@ object NetworkHandler_v1 {
             }
     }
 
-    /**
-     * Checks whether the required virtual audio driver is installed for the current OS.
-     * Returns VirtualDriverStatus.Ok if found, VirtualDriverStatus.Missing with name and download URL otherwise.
-     */
     fun checkVirtualDriverStatus(): VirtualDriverStatus {
         val os = System.getProperty("os.name").lowercase()
         return when {
             os.contains("win") -> {
-                val driverName = "CABLE Output (VB-Audio Virtual Cable)"
                 val isInstalled = AudioSystem.getMixerInfo().any { it.name.contains("CABLE Output", ignoreCase = true) }
                 if (isInstalled) VirtualDriverStatus.Ok else VirtualDriverStatus.Missing("VB-Audio Virtual Cable", "https://vb-audio.com/Cable/")
             }
@@ -347,7 +319,6 @@ object NetworkHandler_v1 {
                 if (isInstalled) VirtualDriverStatus.Ok else VirtualDriverStatus.Missing("BlackHole 2ch", "https://existential.audio/blackhole/")
             }
             else -> {
-                // LINUX: Controllo Adattivo
                 try {
                     val checkPactl = ProcessBuilder("which", "pactl").start()
                     if (checkPactl.waitFor() != 0) {
@@ -356,13 +327,10 @@ object NetworkHandler_v1 {
                             commands = "sudo apt update && sudo apt install pulseaudio-utils"
                         )
                     }
-
-                    // Crea solo il VirtualCable in background, MA NON lo imposta ancora come default
                     val checkSink = ProcessBuilder("sh", "-c", "pactl list short sinks | grep VirtualCable").start()
                     if (checkSink.waitFor() != 0) {
                         ProcessBuilder("pactl", "load-module", "module-null-sink", "sink_name=VirtualCable", "sink_properties=device.description=VirtualCable").start().waitFor()
                     }
-
                     VirtualDriverStatus.Ok
                 } catch (e: Exception) {
                     VirtualDriverStatus.Ok
@@ -371,30 +339,23 @@ object NetworkHandler_v1 {
         }
     }
 
-    /**
-     * Rileva se siamo su Linux e, in modo trasparente e senza permessi di root,
-     * interroga PulseAudio/PipeWire per creare un Cavo Virtuale se non esiste già.
-     */
     fun setupLinuxVirtualCable() {
         val os = System.getProperty("os.name").lowercase()
         if (!os.contains("linux")) return
 
         try {
-            // 1. Verifichiamo se il sistema usa PulseAudio/PipeWire (pactl è installato?)
             val checkPactl = ProcessBuilder("which", "pactl").start()
             if (checkPactl.waitFor() != 0) {
                 println("Comando 'pactl' non trovato. Impossibile creare il cavo virtuale in automatico.")
                 return
             }
 
-            // 2. Controlliamo se il nostro VirtualCable è già stato creato in questa sessione
             val checkSink = ProcessBuilder("sh", "-c", "pactl list short sinks | grep VirtualCable").start()
             if (checkSink.waitFor() == 0) {
                 println("--- Linux: VirtualCable rilevato e già operativo ---")
                 return
             }
 
-            // 3. Se non esiste, lo creiamo silenziosamente in background!
             println("--- Linux: Creazione VirtualCable in corso... ---")
             val createSink = ProcessBuilder(
                 "pactl", "load-module", "module-null-sink",
@@ -466,8 +427,6 @@ object NetworkHandler_v1 {
         listeningJob?.cancel()
     }
 
-    // FIX BUG #2: Use MulticastSocket (not DatagramSocket) with TTL set,
-    // so the announcement packets are correctly routed on the local network.
     fun startAnnouncingPresence(isMulticast: Boolean, port: Int) {
         broadcastingJob?.cancel()
         broadcastingJob = scope.launch {
@@ -476,7 +435,6 @@ object NetworkHandler_v1 {
             val message = "$DISCOVERY_MESSAGE;$hostname;$mode;$port"
             val groupAddress = InetAddress.getByName(MULTICAST_GROUP_IP)
 
-            // Use MulticastSocket so the OS routes multicast packets correctly
             MulticastSocket().use { socket ->
                 socket.timeToLive = 4
                 getActiveNetworkInterface()?.let { socket.networkInterface = it }
@@ -569,6 +527,49 @@ object NetworkHandler_v1 {
         }
     }
 
+    // =========================================================
+    // FIX 2 — Prepara e avvia FFmpeg in anticipo rispetto al client.
+    // Chiamato all'inizio di launchServerInstance, prima ancora di
+    // aspettare qualsiasi connessione in unicast.
+    // =========================================================
+    private fun buildAndStartGrabber(audioSettings: AudioSettings_V1): org.bytedeco.javacv.FFmpegFrameGrabber? {
+        val os = System.getProperty("os.name").lowercase()
+        val grabberFormat: String
+        val deviceName: String
+
+        when {
+            os.contains("win") -> {
+                grabberFormat = "dshow"
+                deviceName = "audio=CABLE Output (VB-Audio Virtual Cable)"
+            }
+            os.contains("mac") -> {
+                grabberFormat = "avfoundation"
+                deviceName = "audio=BlackHole 2ch"
+            }
+            else -> {
+                grabberFormat = "alsa"
+                deviceName = "default"
+            }
+        }
+
+        return try {
+            routeLinuxAudioToVirtualCable()
+            org.bytedeco.javacv.FFmpegFrameGrabber(deviceName).apply {
+                setFormat(grabberFormat)
+                sampleRate = audioSettings.sampleRate.toInt()
+                audioChannels = audioSettings.channels
+                sampleFormat = org.bytedeco.ffmpeg.global.avutil.AV_SAMPLE_FMT_S16
+                start()
+            }.also {
+                println("--- FFMPEG pre-warmed and started successfully ---")
+            }
+        } catch (e: Exception) {
+            println("=== FFMPEG PRE-WARM FAILED ===")
+            e.printStackTrace()
+            null
+        }
+    }
+
     fun launchServerInstance(
         audioSettings: AudioSettings_V1,
         port: Int,
@@ -584,43 +585,11 @@ object NetworkHandler_v1 {
 
         streamingJob = scope.launch {
             try {
-                val os = System.getProperty("os.name").lowercase()
-
-                val grabberFormat: String
-                val deviceName: String
-
-                when {
-                    os.contains("win") -> {
-                        grabberFormat = "dshow"
-                        deviceName = "audio=CABLE Output (VB-Audio Virtual Cable)"
-                    }
-                    os.contains("mac") -> {
-                        grabberFormat = "avfoundation"
-                        deviceName = "audio=BlackHole 2ch"
-                    }
-                    else -> {
-                        // Su Linux usiamo ALSA per ascoltare il cavo virtuale di PulseAudio/PipeWire
-                        grabberFormat = "alsa"
-                        deviceName = "default"
-                    }
-                }
-
-                serverGrabber = org.bytedeco.javacv.FFmpegFrameGrabber(deviceName).apply {
-                    setFormat(grabberFormat)
-                    sampleRate = audioSettings.sampleRate.toInt()
-                    audioChannels = audioSettings.channels
-                    sampleFormat = org.bytedeco.ffmpeg.global.avutil.AV_SAMPLE_FMT_S16
-                }
-
-                try {
-                    // Eseguiamo il routing automatico su Linux prima di accendere il motore
-                    routeLinuxAudioToVirtualCable()
-
-                    serverGrabber?.start()
-                    println("--- FFMPEG started successfully ---")
-                } catch (e: Exception) {
-                    println("=== FFMPEG START FAILED ===")
-                    e.printStackTrace()
+                // =========================================================
+                // FIX 2 — FFmpeg parte subito, prima di aspettare il client.
+                // =========================================================
+                serverGrabber = buildAndStartGrabber(audioSettings)
+                if (serverGrabber == null) {
                     onStatusUpdate("error_virtual_driver_missing", emptyArray())
                     return@launch
                 }
@@ -630,7 +599,6 @@ object NetworkHandler_v1 {
 
                     MulticastSocket().use { socket ->
                         socket.timeToLive = 4
-                        // Assicuriamoci di usare la vera interfaccia di rete e non un'interfaccia virtuale
                         getActiveNetworkInterface()?.let { socket.networkInterface = it }
                         val group = InetAddress.getByName(MULTICAST_GROUP_IP)
 
@@ -641,47 +609,85 @@ object NetworkHandler_v1 {
                             order(java.nio.ByteOrder.LITTLE_ENDIAN)
                         }
 
-                        while (isActive) {
-                            val frame = serverGrabber?.grabSamples()
-                            if (frame != null && frame.samples != null) {
-                                val shortBuffer = frame.samples[0] as java.nio.ShortBuffer
-                                shortBuffer.position(0)
-
-                                while (shortBuffer.hasRemaining()) {
-                                    val shortsToRead = minOf(shortBuffer.remaining(), maxShortsPerPacket)
-                                    shortBuffer.get(chunkArray, 0, shortsToRead)
-
-                                    // --- APPLICAZIONE DEL VOLUME IN TEMPO REALE ---
-                                    val vol = currentServerVolume
-                                    if (vol != 1.0f) {
-                                        for (i in 0 until shortsToRead) {
-                                            var sample = (chunkArray[i] * vol).toInt()
-                                            // Limitiamo il campione per evitare la distorsione (clipping)
-                                            sample = sample.coerceIn(Short.MIN_VALUE.toInt(), Short.MAX_VALUE.toInt())
-                                            chunkArray[i] = sample.toShort()
+                        try {
+                            while (isActive) {
+                                val frame = serverGrabber?.grabSamples()
+                                if (frame != null && frame.samples != null) {
+                                    val shortBuffer = frame.samples[0] as java.nio.ShortBuffer
+                                    shortBuffer.position(0)
+                                    while (shortBuffer.hasRemaining()) {
+                                        val shortsToRead = minOf(shortBuffer.remaining(), maxShortsPerPacket)
+                                        shortBuffer.get(chunkArray, 0, shortsToRead)
+                                        val vol = currentServerVolume
+                                        if (vol != 1.0f) {
+                                            for (i in 0 until shortsToRead) {
+                                                var sample = (chunkArray[i] * vol).toInt()
+                                                sample = sample.coerceIn(Short.MIN_VALUE.toInt(), Short.MAX_VALUE.toInt())
+                                                chunkArray[i] = sample.toShort()
+                                            }
                                         }
+                                        byteBuffer.clear()
+                                        byteBuffer.asShortBuffer().put(chunkArray, 0, shortsToRead)
+                                        val bytesToSend = shortsToRead * 2
+                                        socket.send(DatagramPacket(byteBuffer.array(), bytesToSend, group, port))
                                     }
-                                    // ----------------------------------------------
-
-                                    byteBuffer.clear()
-                                    byteBuffer.asShortBuffer().put(chunkArray, 0, shortsToRead)
-                                    val bytesToSend = shortsToRead * 2
-
-                                    socket.send(DatagramPacket(byteBuffer.array(), bytesToSend, group, port))
                                 }
                             }
+                        } finally {
+                            // Manda BYE al gruppo: tutti i client in ascolto si disconnetteranno
+                            try {
+                                val byeBytes = "BYE".toByteArray()
+                                socket.send(DatagramPacket(byeBytes, byeBytes.size, group, port))
+                                println("--- Sent BYE to multicast group $MULTICAST_GROUP_IP:$port ---")
+                            } catch (_: Exception) {}
                         }
                     }
                 } else { // Unicast
-                    onStatusUpdate("Waiting for Unicast Client on Port %d...", arrayOf(port))
-
+                    // Loop esterno: il server rimane attivo e torna in attesa
+                    // ogni volta che un client si disconnette.
                     val localAddress = InetSocketAddress("0.0.0.0", port)
                     aSocket(SelectorManager(Dispatchers.IO)).udp().bind(localAddress) { reuseAddress = true }.use { socket ->
-                        val clientDatagram = socket.receive()
-                        if (clientDatagram.packet.readText().trim() == CLIENT_HELLO_MESSAGE) {
+                        while (isActive) {
+                            startAnnouncingPresence(isMulticast = false, port = port)
+                            onStatusUpdate("Waiting for Unicast Client on Port %d...", arrayOf(port))
+
+                            val clientDatagram = socket.receive()
+                            if (clientDatagram.packet.readText().trim() != CLIENT_HELLO_MESSAGE) continue
+
                             val clientAddress = clientDatagram.address
                             onStatusUpdate("Client Connected: %s", arrayOf(clientAddress.toString()))
                             stopAnnouncingPresence()
+
+                            // =========================================================
+                            // FIX 2 CORRETTO — Drain FFmpeg con deadline temporale.
+                            // grabSamples() è BLOCCANTE quindi non si può usare
+                            // "loop fino a null". Si usa withTimeout(100ms): se non
+                            // arriva nessun frame in 100ms il buffer è svuotato.
+                            // =========================================================
+                            serverGrabber?.let { grabber ->
+                                var staleFrames = 0
+                                val drainDeadlineMs = 100L
+                                val maxDrainMs = 2000L
+                                val overallDeadline = System.currentTimeMillis() + maxDrainMs
+                                var lastFrameTime = System.currentTimeMillis()
+
+                                withContext(Dispatchers.IO) {
+                                    while (System.currentTimeMillis() < overallDeadline) {
+                                        if (System.currentTimeMillis() - lastFrameTime > drainDeadlineMs) break
+                                        try {
+                                            withTimeout(drainDeadlineMs) {
+                                                val staleFrame = withContext(Dispatchers.IO) { grabber.grabSamples() }
+                                                if (staleFrame?.samples != null) {
+                                                    staleFrames++
+                                                    lastFrameTime = System.currentTimeMillis()
+                                                }
+                                            }
+                                        } catch (_: TimeoutCancellationException) { break }
+                                    }
+                                }
+                                println("--- Drained $staleFrames stale FFmpeg frames before streaming ---")
+                            }
+
                             socket.send(Datagram(buildPacket { writeText("HELLO_ACK") }, clientAddress))
 
                             val maxBytesPerPacket = audioSettings.bufferSize
@@ -691,36 +697,72 @@ object NetworkHandler_v1 {
                                 order(java.nio.ByteOrder.LITTLE_ENDIAN)
                             }
 
-                            while (isActive) {
-                                val frame = serverGrabber?.grabSamples()
-                                if (frame != null && frame.samples != null) {
-                                    val shortBuffer = frame.samples[0] as java.nio.ShortBuffer
-                                    shortBuffer.position(0)
+                            // Flag condiviso: il pingJob lo abbassa se il client sparisce,
+                            // così il loop audio esce anche se grabSamples() è bloccante.
+                            val clientAlive = java.util.concurrent.atomic.AtomicBoolean(true)
 
-                                    while (shortBuffer.hasRemaining()) {
-                                        val shortsToRead = minOf(shortBuffer.remaining(), maxShortsPerPacket)
-                                        shortBuffer.get(chunkArray, 0, shortsToRead)
-
-                                        // --- APPLICAZIONE DEL VOLUME IN TEMPO REALE ---
-                                        val vol = currentServerVolume
-                                        if (vol != 1.0f) {
-                                            for (i in 0 until shortsToRead) {
-                                                var sample = (chunkArray[i] * vol).toInt()
-                                                // Limitiamo il campione per evitare la distorsione (clipping)
-                                                sample = sample.coerceIn(Short.MIN_VALUE.toInt(), Short.MAX_VALUE.toInt())
-                                                chunkArray[i] = sample.toShort()
-                                            }
+                            // Job separato: manda PING ogni secondo al client.
+                            // Se il send fallisce 3 volte consecutive → client sparito.
+                            val pingJob = launch {
+                                var failures = 0
+                                while (isActive && clientAlive.get()) {
+                                    delay(1000)
+                                    try {
+                                        socket.send(Datagram(buildPacket { writeText("PING") }, clientAddress))
+                                        failures = 0
+                                    } catch (_: Exception) {
+                                        failures++
+                                        if (failures >= 3) {
+                                            println("--- PING failed 3 times, client considered gone ---")
+                                            clientAlive.set(false)
                                         }
-                                        // ----------------------------------------------
-
-                                        byteBuffer.clear()
-                                        byteBuffer.asShortBuffer().put(chunkArray, 0, shortsToRead)
-                                        val bytesToSend = shortsToRead * 2
-
-                                        val packet = buildPacket { writeFully(byteBuffer.array(), 0, bytesToSend) }
-                                        socket.send(Datagram(packet, clientAddress))
                                     }
                                 }
+                            }
+
+                            try {
+                                while (isActive && clientAlive.get()) {
+                                    val frame = serverGrabber?.grabSamples()
+                                    if (!clientAlive.get()) break  // controlla dopo il blocco
+                                    if (frame != null && frame.samples != null) {
+                                        val shortBuffer = frame.samples[0] as java.nio.ShortBuffer
+                                        shortBuffer.position(0)
+                                        while (shortBuffer.hasRemaining()) {
+                                            val shortsToRead = minOf(shortBuffer.remaining(), maxShortsPerPacket)
+                                            shortBuffer.get(chunkArray, 0, shortsToRead)
+                                            val vol = currentServerVolume
+                                            if (vol != 1.0f) {
+                                                for (i in 0 until shortsToRead) {
+                                                    var sample = (chunkArray[i] * vol).toInt()
+                                                    sample = sample.coerceIn(Short.MIN_VALUE.toInt(), Short.MAX_VALUE.toInt())
+                                                    chunkArray[i] = sample.toShort()
+                                                }
+                                            }
+                                            byteBuffer.clear()
+                                            byteBuffer.asShortBuffer().put(chunkArray, 0, shortsToRead)
+                                            val bytesToSend = shortsToRead * 2
+                                            val packet = buildPacket { writeFully(byteBuffer.array(), 0, bytesToSend) }
+                                            try {
+                                                socket.send(Datagram(packet, clientAddress))
+                                            } catch (_: Exception) {
+                                                // send fallito → client sparito, esci
+                                                clientAlive.set(false)
+                                                break
+                                            }
+                                        }
+                                    }
+                                }
+                            } finally {
+                                pingJob.cancel()
+                                // Manda BYE solo se il server si sta fermando volontariamente
+                                // (se clientAlive è false il client è già sparito)
+                                if (clientAlive.get()) {
+                                    try {
+                                        socket.send(Datagram(buildPacket { writeText("BYE") }, clientAddress))
+                                        println("--- Sent BYE to $clientAddress ---")
+                                    } catch (_: Exception) {}
+                                }
+                                // Il while(isActive) esterno torna automaticamente in waiting
                             }
                         }
                     }
@@ -750,7 +792,6 @@ object NetworkHandler_v1 {
         onStatusUpdate: (key: String, args: Array<out Any>) -> Unit
     ) {
         if (sendMicrophone && micInputMixerInfo != null) {
-            // Note: launchMicSender, not launchMicReceiver — this is the client sending mic to server
             micReceiverJob = scope.launchMicSender(audioSettings, serverInfo, micInputMixerInfo, micPort)
         }
         streamingJob = scope.launch {
@@ -759,12 +800,20 @@ object NetworkHandler_v1 {
                 if (!serverInfo.isMulticast) { // Unicast
                     val remoteAddress = InetSocketAddress(serverInfo.ip, serverInfo.port)
                     aSocket(SelectorManager(Dispatchers.IO)).udp().bind().use { socket ->
+
+                        // =========================================================
+                        // FIX 1 — Apri la SourceDataLine PRIMA di mandare HELLO.
+                        // Così quando arriva l'ACK la linea audio è già pronta
+                        // e non si perde tempo ad inizializzarla dopo l'handshake.
+                        // =========================================================
+                        sourceDataLine = prepareSourceDataLine(selectedMixerInfo, audioSettings)
+                        sourceDataLine?.start()
+
                         onStatusUpdate("status_contacting_server", arrayOf(remoteAddress))
                         val helloPacket = buildPacket { writeText(CLIENT_HELLO_MESSAGE) }
                         socket.send(Datagram(helloPacket, remoteAddress))
 
                         onStatusUpdate("status_waiting_ack", emptyArray())
-                        // FIX BUG #3: Increased timeout from 5s to 15s to give FFmpeg time to start
                         val ackDatagram = withTimeout(15000) { socket.receive() }
                         if (ackDatagram.packet.readText().trim() != "HELLO_ACK") {
                             onStatusUpdate("status_handshake_failed", emptyArray())
@@ -772,14 +821,45 @@ object NetworkHandler_v1 {
                         }
 
                         onStatusUpdate("status_connected_streaming_from", arrayOf(remoteAddress))
-                        sourceDataLine = prepareSourceDataLine(selectedMixerInfo, audioSettings)
-                        sourceDataLine?.start()
 
                         val buffer = ByteArray(audioSettings.bufferSize * 2)
-                        while (isActive) {
-                            val datagram = socket.receive()
-                            val bytesRead = datagram.packet.readAvailable(buffer)
-                            if (bytesRead > 0) sourceDataLine?.write(buffer, 0, bytesRead)
+                        var lastPingReceived = System.currentTimeMillis()
+                        val pingTimeoutMs = 3000L
+                        val serverAlive = java.util.concurrent.atomic.AtomicBoolean(true)
+
+                        // Watchdog: se non arriva PING per 3s il server è sparito
+                        val watchdogJob = launch {
+                            while (isActive && serverAlive.get()) {
+                                delay(1000)
+                                if (System.currentTimeMillis() - lastPingReceived > pingTimeoutMs) {
+                                    println("--- Server timeout: no PING for ${pingTimeoutMs}ms ---")
+                                    onStatusUpdate("status_server_disconnected", emptyArray())
+                                    serverAlive.set(false)
+                                    break
+                                }
+                            }
+                        }
+
+                        try {
+                            while (isActive && serverAlive.get()) {
+                                val datagram = socket.receive()
+                                val bytes = ByteArray(datagram.packet.remaining.toInt())
+                                datagram.packet.readFully(bytes)
+                                val text = bytes.toString(Charsets.UTF_8).trim()
+
+                                when (text) {
+                                    "PING" -> lastPingReceived = System.currentTimeMillis()
+                                    "BYE"  -> {
+                                        println("--- Received BYE from server ---")
+                                        onStatusUpdate("status_server_disconnected", emptyArray())
+                                        serverAlive.set(false)
+                                        break
+                                    }
+                                    else -> if (bytes.isNotEmpty()) sourceDataLine?.write(bytes, 0, bytes.size)
+                                }
+                            }
+                        } finally {
+                            watchdogJob.cancel()
                         }
                     }
                 } else { // Multicast
@@ -793,8 +873,14 @@ object NetworkHandler_v1 {
                         onStatusUpdate("status_multicast_streaming", arrayOf(serverInfo.port))
                         val buffer = ByteArray(audioSettings.bufferSize * 2)
                         val packet = DatagramPacket(buffer, buffer.size)
+
                         while (isActive) {
                             socket.receive(packet)
+                            if (packet.length == 3 && String(packet.data, 0, 3, Charsets.UTF_8) == "BYE") {
+                                println("--- Received BYE from multicast server ---")
+                                onStatusUpdate("status_server_disconnected", emptyArray())
+                                break
+                            }
                             if (packet.length > 0) sourceDataLine?.write(packet.data, 0, packet.length)
                         }
                     }
@@ -807,8 +893,6 @@ object NetworkHandler_v1 {
                     onStatusUpdate("Error: %s", arrayOf(e.message ?: e.toString()))
                 }
             } finally {
-                // FIX BUG #4: Don't touch serverGrabber in client mode — it's always null here
-                // and releasing it would cause confusion if a server was somehow running.
                 sourceDataLine?.drain()
                 sourceDataLine?.stop()
                 sourceDataLine?.close()
@@ -816,6 +900,14 @@ object NetworkHandler_v1 {
         }
     }
 
+    // =========================================================
+    // FIX 3 — Buffer ridotto da *4 a *2 per abbassare la latenza
+    // strutturale della SourceDataLine in modalità unicast.
+    // Il valore *4 aggiungeva fino a (bufferSize*4) / (sampleRate*channels*2)
+    // secondi di ritardo fisso prima che il primo campione fosse riprodotto.
+    // *2 mantiene abbastanza headroom per assorbire jitter di rete
+    // senza introdurre latenza eccessiva.
+    // =========================================================
     private fun prepareSourceDataLine(mixerInfo: Mixer.Info, audioSettings: AudioSettings_V1): SourceDataLine? {
         val mixer = AudioSystem.getMixer(mixerInfo)
         val format = audioSettings.toAudioFormat()
@@ -825,7 +917,9 @@ object NetworkHandler_v1 {
         val frameSize = format.frameSize
         val adjustedBufferSize = (audioSettings.bufferSize / frameSize) * frameSize
         val sourceDataLine = mixer.getLine(dataLineInfo) as SourceDataLine
-        sourceDataLine.open(format, adjustedBufferSize * 4)
+
+        // FIX 3: Ridotto da *4 a *2 — meno buffer = meno latenza strutturale
+        sourceDataLine.open(format, adjustedBufferSize * 2)
         return sourceDataLine
     }
 
@@ -862,7 +956,6 @@ fun main() = application {
     val isWindowsOS = remember { System.getProperty("os.name").lowercase().contains("win") }
     var serverVolume by remember { mutableStateOf(1f) }
 
-    // Diciamo al motore audio di aggiornarsi quando muovi lo slider
     LaunchedEffect(serverVolume) {
         NetworkHandler_v1.setServerVolume(serverVolume)
     }
@@ -876,7 +969,6 @@ fun main() = application {
     val discoveredDevices = remember { mutableStateMapOf<String, ServerInfo>() }
     var connectionStatus by remember { mutableStateOf(Strings.get("status_inactive")) }
     var isStreaming by remember { mutableStateOf(false) }
-    // State for the virtual driver banner — checked once and shown until dismissed
     var virtualDriverStatus by remember { mutableStateOf<VirtualDriverStatus>(VirtualDriverStatus.Ok) }
     val scope = rememberCoroutineScope()
 
@@ -897,8 +989,6 @@ fun main() = application {
         selectedClientMic = inputDevices.value.firstOrNull()
         selectedServerMicOutput = outputDevices.value.find { it.name.contains("CABLE Input", ignoreCase = true) }
             ?: outputDevices.value.firstOrNull()
-
-        // Check for the virtual driver on startup and store status
         virtualDriverStatus = NetworkHandler_v1.checkVirtualDriverStatus()
     }
 
@@ -918,19 +1008,14 @@ fun main() = application {
         state = windowState,
         undecorated = true
     ) {
-        // --- CALCOLO DEL TEMA DINAMICO MATERIAL YOU ---
         val customColor = appSettings.customThemeColor?.toULong()?.let { Color(it) }
-
         val currentColorScheme = if (customColor != null) {
             MaterialYouGenerator.generateDynamicColorScheme(customColor, useDarkTheme)
         } else {
             if (useDarkTheme) darkColorScheme() else lightColorScheme()
         }
-        // ----------------------------------------------
 
-        // --- APPLICAZIONE DEL TEMA (FIX: Ora usa currentColorScheme) ---
         MaterialTheme(colorScheme = currentColorScheme) {
-            // FIX: Surface necessario per far propagare il colore di sfondo a tutta la finestra
             Surface(modifier = Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
                 Column(Modifier.fillMaxSize()) {
                     CustomTitleBar(
@@ -962,14 +1047,10 @@ fun main() = application {
                             isWindowsOS = isWindowsOS,
                             virtualDriverStatus = virtualDriverStatus,
                             onDismissPrivacyBanner = { dontShowAgain ->
-                                if (dontShowAgain) {
-                                    appSettings = appSettings.copy(hideWindowsPrivacyBanner = true)
-                                }
+                                if (dontShowAgain) appSettings = appSettings.copy(hideWindowsPrivacyBanner = true)
                             },
                             onDismissRoutingBanner = { dontShowAgain ->
-                                if (dontShowAgain) {
-                                    appSettings = appSettings.copy(hideWindowsRoutingBanner = true)
-                                }
+                                if (dontShowAgain) appSettings = appSettings.copy(hideWindowsRoutingBanner = true)
                             },
                             onConnectManual = { ip ->
                                 isStreaming = true
@@ -979,12 +1060,8 @@ fun main() = application {
                                 val manualServerInfo = ServerInfo(ip, false, port)
                                 NetworkHandler_v1.endDeviceDiscovery()
                                 NetworkHandler_v1.launchClientInstance(
-                                    audioSettings,
-                                    manualServerInfo,
-                                    selectedOutputDevice!!,
-                                    sendMicrophone,
-                                    selectedClientMic,
-                                    mic
+                                    audioSettings, manualServerInfo, selectedOutputDevice!!,
+                                    sendMicrophone, selectedClientMic, mic
                                 ) { key, args ->
                                     connectionStatus = if (args.isEmpty()) key else String.format(key, *args)
                                 }
@@ -1010,11 +1087,7 @@ fun main() = application {
                                 val port = streamingPort.toIntOrNull() ?: 9090
                                 val mic = micPort.toIntOrNull() ?: 9092
                                 NetworkHandler_v1.launchServerInstance(
-                                    audioSettings,
-                                    port,
-                                    isMulticastMode,
-                                    selectedServerMicOutput,
-                                    mic
+                                    audioSettings, port, isMulticastMode, selectedServerMicOutput, mic
                                 ) { key, args ->
                                     if (key == "error_virtual_driver_missing") {
                                         isStreaming = false
@@ -1035,12 +1108,8 @@ fun main() = application {
                                 val mic = micPort.toIntOrNull() ?: 9092
                                 NetworkHandler_v1.endDeviceDiscovery()
                                 NetworkHandler_v1.launchClientInstance(
-                                    audioSettings,
-                                    serverInfo,
-                                    selectedOutputDevice!!,
-                                    sendMicrophone,
-                                    selectedClientMic,
-                                    mic
+                                    audioSettings, serverInfo, selectedOutputDevice!!,
+                                    sendMicrophone, selectedClientMic, mic
                                 ) { key, args -> connectionStatus = Strings.get(key, *args) }
                             },
                             onRefreshDevices = {
@@ -1123,7 +1192,6 @@ fun WindowScope.CustomTitleBar(
                 IconButton(onClick = onMinimize, modifier = Modifier.size(24.dp)) {
                     Icon(Icons.Default.Minimize, "Minimize", tint = onSurfaceColor)
                 }
-
                 IconButton(
                     onClick = {
                         if (isManuallyMaximized) {
@@ -1141,7 +1209,6 @@ fun WindowScope.CustomTitleBar(
                     val icon = if (isManuallyMaximized) Icons.Filled.FullscreenExit else Icons.Filled.Fullscreen
                     Icon(icon, "Maximize/Restore", tint = onSurfaceColor)
                 }
-
                 IconButton(onClick = onClose, modifier = Modifier.size(24.dp)) {
                     Icon(Icons.Default.Close, "Close", tint = onSurfaceColor)
                 }
