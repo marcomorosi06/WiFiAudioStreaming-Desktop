@@ -29,8 +29,11 @@ import kotlinx.coroutines.*
 import java.net.DatagramPacket
 import java.net.DatagramSocket
 import java.net.InetAddress
+import java.net.InetSocketAddress
 import java.net.MulticastSocket
 import java.net.NetworkInterface
+import java.net.SocketAddress
+import javax.crypto.spec.SecretKeySpec
 import javax.sound.sampled.*
 import kotlin.coroutines.cancellation.CancellationException
 import kotlin.math.roundToInt
@@ -173,7 +176,13 @@ data class AppSettings(
     val customThemeColor: Long? = null
 )
 
-data class ServerInfo(val ip: String, val isMulticast: Boolean, val port: Int)
+data class ServerInfo(
+    val ip: String,
+    val isMulticast: Boolean,
+    val port: Int,
+    val isPasswordProtected: Boolean = false,
+    val multicastGroupIp: String = "239.255.0.1"
+)
 data class AudioSettings_V1(
     val sampleRate: Float,
     val bitDepth: Int,
@@ -241,8 +250,32 @@ object NetworkHandler_v1 {
 
     private const val DISCOVERY_PORT = 9091
     private const val CLIENT_HELLO_MESSAGE = "HELLO_FROM_CLIENT"
-    private const val MULTICAST_GROUP_IP = "239.255.0.1"
     private const val DISCOVERY_MESSAGE = "WIFI_AUDIO_STREAMER_DISCOVERY"
+    // Canale discovery fisso — sempre 239.255.0.1
+    private const val DISCOVERY_MULTICAST_IP = "239.255.0.1"
+    // IP multicast di streaming: derivato dall'IP locale per ridurre collisioni.
+    // L'utente può sovrascriverlo con customMulticastLastOctet.
+    var customMulticastLastOctet: Int? = null
+
+    private fun resolveStreamingMulticastIp(): String {
+        customMulticastLastOctet?.let { return "239.255.0.$it" }
+        return try {
+            val localIp = NetworkInterface.getNetworkInterfaces().asSequence()
+                .filter { it.isUp && !it.isLoopback }
+                .flatMap { it.inetAddresses.asSequence() }
+                .filterIsInstance<java.net.Inet4Address>()
+                .firstOrNull()?.hostAddress
+            if (localIp != null) {
+                val parts = localIp.split(".")
+                if (parts.size == 4) {
+                    val o3 = parts[2].toIntOrNull() ?: 0
+                    val o4 = parts[3].toIntOrNull() ?: 1
+                    val derived = ((o3 xor o4) and 0xFF).let { if (it == 0) 1 else it }
+                    "239.255.0.$derived"
+                } else "239.255.0.1"
+            } else "239.255.0.1"
+        } catch (_: Exception) { "239.255.0.1" }
+    }
 
     private var originalLinuxSink: String? = null
     private var originalLinuxSource: String? = null
@@ -383,7 +416,7 @@ object NetworkHandler_v1 {
                     .map { it.hostAddress }
                     .toSet()
 
-                val groupAddress = InetAddress.getByName(MULTICAST_GROUP_IP)
+                val groupAddress = InetAddress.getByName(DISCOVERY_MULTICAST_IP)
                 socket = MulticastSocket(DISCOVERY_PORT).apply {
                     getActiveNetworkInterface()?.let { networkInterface = it }
                     joinGroup(groupAddress)
@@ -401,11 +434,14 @@ object NetworkHandler_v1 {
 
                         if (remoteIp != null && remoteIp !in localIps && message.startsWith(DISCOVERY_MESSAGE)) {
                             val parts = message.split(";")
-                            if (parts.size == 4) {
+                            if (parts.size >= 4) {
                                 val hostname = parts[1]
                                 val isMulticast = parts[2].equals("MULTICAST", ignoreCase = true)
                                 val port = parts[3].toIntOrNull() ?: continue
-                                onDeviceFound(hostname, ServerInfo(remoteIp, isMulticast, port))
+                                val isPasswordProtected = parts.getOrNull(4)?.equals("LOCKED", ignoreCase = true) == true
+                                val multicastGroupIp = parts.getOrNull(5)?.takeIf { it.startsWith("239.") }
+                                    ?: "239.255.0.1"
+                                onDeviceFound(hostname, ServerInfo(remoteIp, isMulticast, port, isPasswordProtected, multicastGroupIp))
                             }
                         }
                     } catch (e: java.net.SocketTimeoutException) {
@@ -416,7 +452,7 @@ object NetworkHandler_v1 {
                 if (e !is CancellationException) println("Listening Error: ${e.message}")
             } finally {
                 try {
-                    socket?.leaveGroup(InetAddress.getByName(MULTICAST_GROUP_IP))
+                    socket?.leaveGroup(InetAddress.getByName(DISCOVERY_MULTICAST_IP))
                 } catch (_: Exception) {}
                 socket?.close()
             }
@@ -427,13 +463,16 @@ object NetworkHandler_v1 {
         listeningJob?.cancel()
     }
 
-    fun startAnnouncingPresence(isMulticast: Boolean, port: Int) {
+    fun startAnnouncingPresence(isMulticast: Boolean, port: Int, isPasswordProtected: Boolean = false) {
         broadcastingJob?.cancel()
         broadcastingJob = scope.launch {
             val hostname = try { InetAddress.getLocalHost().hostName } catch (e: Exception) { "Desktop-PC" }
             val mode = if (isMulticast) "MULTICAST" else "UNICAST"
-            val message = "$DISCOVERY_MESSAGE;$hostname;$mode;$port"
-            val groupAddress = InetAddress.getByName(MULTICAST_GROUP_IP)
+            val locked = if (isPasswordProtected) "LOCKED" else "OPEN"
+            val streamingMulticastIp = resolveStreamingMulticastIp()
+            val message = "$DISCOVERY_MESSAGE;$hostname;$mode;$port;$locked;$streamingMulticastIp"
+            // Discovery sempre su canale fisso 239.255.0.1
+            val discoveryGroup = InetAddress.getByName(DISCOVERY_MULTICAST_IP)
 
             MulticastSocket().use { socket ->
                 socket.timeToLive = 4
@@ -441,7 +480,7 @@ object NetworkHandler_v1 {
                 while (isActive) {
                     try {
                         val bytes = message.toByteArray()
-                        val packet = DatagramPacket(bytes, bytes.size, groupAddress, DISCOVERY_PORT)
+                        val packet = DatagramPacket(bytes, bytes.size, discoveryGroup, DISCOVERY_PORT)
                         socket.send(packet)
                     } catch (e: Exception) {
                         if (e !is CancellationException) println("Announcing error: ${e.message}")
@@ -474,7 +513,7 @@ object NetworkHandler_v1 {
             val packet = DatagramPacket(buffer, buffer.size)
 
             socket = if (isMulticast) {
-                MulticastSocket(micPort).apply { joinGroup(InetAddress.getByName(MULTICAST_GROUP_IP)) }
+                MulticastSocket(micPort).apply { joinGroup(InetAddress.getByName(DISCOVERY_MULTICAST_IP)) }
             } else {
                 DatagramSocket(micPort)
             }
@@ -507,7 +546,7 @@ object NetworkHandler_v1 {
         try {
             socket = DatagramSocket()
             val destinationAddress = if (serverInfo.isMulticast) {
-                InetAddress.getByName(MULTICAST_GROUP_IP)
+                InetAddress.getByName(DISCOVERY_MULTICAST_IP)
             } else {
                 InetAddress.getByName(serverInfo.ip)
             }
@@ -570,18 +609,115 @@ object NetworkHandler_v1 {
         }
     }
 
+    // =========================================================
+    // SRP-6a helpers — Desktop (usa CryptoManagerDesktop)
+    // =========================================================
+
+    private fun ByteArray.toHex(): String = joinToString("") { "%02x".format(it) }
+    private fun String.hexToBytes(): ByteArray {
+        check(length % 2 == 0)
+        return ByteArray(length / 2) { i -> Integer.parseInt(substring(i * 2, i * 2 + 2), 16).toByte() }
+    }
+    private fun authPort(streamingPort: Int) = streamingPort + 1
+
+    private suspend fun serverSrpHandshake(
+        socket: io.ktor.network.sockets.BoundDatagramSocket,
+        clientAddress: io.ktor.network.sockets.SocketAddress,
+        onAuthFailed: (String) -> Unit
+    ): SecretKeySpec? {
+        return try {
+            val aMsg = withTimeout(10_000) { socket.receive() }.packet.readText().trim()
+            if (!aMsg.startsWith("SRP_A:")) return null
+            val clientA = java.math.BigInteger(aMsg.removePrefix("SRP_A:"), 16)
+
+            val session = CryptoManagerDesktop.createServerSession() ?: run {
+                onAuthFailed("No password configured on server")
+                return null
+            }
+            if (session.computeSessionKey(clientA) == null) {
+                onAuthFailed("Invalid client public key A")
+                return null
+            }
+            socket.send(io.ktor.network.sockets.Datagram(
+                io.ktor.utils.io.core.buildPacket { writeText("SRP_SB:${session.salt.toHex()}:${session.serverPublicKey.toString(16)}") },
+                clientAddress
+            ))
+
+            val m1Msg = withTimeout(10_000) { socket.receive() }.packet.readText().trim()
+            if (!m1Msg.startsWith("SRP_M1:")) return null
+            val clientM1 = m1Msg.removePrefix("SRP_M1:").hexToBytes()
+
+            if (!session.verifyClientProof(clientA, clientM1)) {
+                socket.send(io.ktor.network.sockets.Datagram(
+                    io.ktor.utils.io.core.buildPacket { writeText("AUTH_DENIED") }, clientAddress
+                ))
+                onAuthFailed("Wrong password from $clientAddress")
+                return null
+            }
+            val serverM2 = session.computeServerProof(clientA, clientM1)
+            socket.send(io.ktor.network.sockets.Datagram(
+                io.ktor.utils.io.core.buildPacket { writeText("SRP_M2:${serverM2.toHex()}") }, clientAddress
+            ))
+            session.getAesKey()
+        } catch (e: Exception) {
+            if (e !is CancellationException) println("SRP server error: ${e.message}")
+            null
+        }
+    }
+
+    private suspend fun clientSrpHandshake(
+        password: String,
+        socket: io.ktor.network.sockets.BoundDatagramSocket,
+        serverAddress: io.ktor.network.sockets.SocketAddress,
+        onAuthDenied: () -> Unit
+    ): SecretKeySpec? {
+        return try {
+            val session = CryptoManagerDesktop.ClientSession(password)
+            socket.send(io.ktor.network.sockets.Datagram(
+                io.ktor.utils.io.core.buildPacket { writeText("SRP_A:${session.clientPublicKey.toString(16)}") },
+                serverAddress
+            ))
+            val sbMsg = withTimeout(10_000) { socket.receive() }.packet.readText().trim()
+            if (!sbMsg.startsWith("SRP_SB:")) return null
+            val parts = sbMsg.removePrefix("SRP_SB:").split(":")
+            if (parts.size != 2) return null
+            val salt = parts[0].hexToBytes()
+            val serverB = java.math.BigInteger(parts[1], 16)
+            if (session.computeSessionKey(salt, serverB) == null) return null
+
+            val clientM1 = session.computeClientProof(serverB)
+            socket.send(io.ktor.network.sockets.Datagram(
+                io.ktor.utils.io.core.buildPacket { writeText("SRP_M1:${clientM1.toHex()}") },
+                serverAddress
+            ))
+            val replyMsg = withTimeout(10_000) { socket.receive() }.packet.readText().trim()
+            if (replyMsg == "AUTH_DENIED") { onAuthDenied(); return null }
+            if (!replyMsg.startsWith("SRP_M2:")) return null
+            val serverM2 = replyMsg.removePrefix("SRP_M2:").hexToBytes()
+            if (!session.verifyServerProof(serverM2, serverB, clientM1)) {
+                println("SRP: server proof INVALID — possible rogue server!")
+                return null
+            }
+            session.getAesKey()
+        } catch (e: Exception) {
+            if (e !is CancellationException) println("SRP client error: ${e.message}")
+            null
+        }
+    }
+
     fun launchServerInstance(
         audioSettings: AudioSettings_V1,
         port: Int,
         isMulticast: Boolean,
         micOutputMixerInfo: Mixer.Info?,
         micPort: Int,
+        isPasswordProtected: Boolean = false,
         onStatusUpdate: (key: String, args: Array<out Any>) -> Unit
     ) {
         if (micOutputMixerInfo != null) {
             micReceiverJob = scope.launchMicReceiver(audioSettings, isMulticast, micOutputMixerInfo, micPort)
         }
-        startAnnouncingPresence(isMulticast, port)
+        startAnnouncingPresence(isMulticast, port, isPasswordProtected)
 
         streamingJob = scope.launch {
             try {
@@ -600,14 +736,58 @@ object NetworkHandler_v1 {
                     MulticastSocket().use { socket ->
                         socket.timeToLive = 4
                         getActiveNetworkInterface()?.let { socket.networkInterface = it }
-                        val group = InetAddress.getByName(MULTICAST_GROUP_IP)
+                        // IP di streaming derivato dall'IP locale (non hardcoded)
+                        val streamingIp = resolveStreamingMulticastIp()
+                        val group = InetAddress.getByName(streamingIp)
 
                         val maxBytesPerPacket = audioSettings.bufferSize
                         val maxShortsPerPacket = maxBytesPerPacket / 2
                         val chunkArray = ShortArray(maxShortsPerPacket)
-                        val byteBuffer = java.nio.ByteBuffer.allocate(maxBytesPerPacket).apply {
-                            order(java.nio.ByteOrder.LITTLE_ENDIAN)
+                        val byteBuffer = java.nio.ByteBuffer.allocate(maxBytesPerPacket).apply { order(java.nio.ByteOrder.LITTLE_ENDIAN) }
+
+                        // Multicast con password: CipherSession condivisa
+                        var multicastCipherSession: CryptoManagerDesktop.CipherSession? = null
+                        if (isPasswordProtected) {
+                            val sharedAesKey = SecretKeySpec(ByteArray(16).also { java.security.SecureRandom().nextBytes(it) }, "AES")
+                            multicastCipherSession = CryptoManagerDesktop.createCipherSession(sharedAesKey)
+                            val sharedKeyBytes = sharedAesKey.encoded
+                            val sessionPrefix = multicastCipherSession.getSessionPrefix()
+
+                            val authAddr = io.ktor.network.sockets.InetSocketAddress("0.0.0.0", authPort(port))
+                            val authKtorSocket = aSocket(SelectorManager(Dispatchers.IO)).udp().bind(authAddr) { reuseAddress = true }
+                            launch {
+                                while (isActive) {
+                                    try {
+                                        val helloD = authKtorSocket.receive()
+                                        if (helloD.packet.readText().trim() != "HELLO_FROM_CLIENT") continue
+                                        val clientAddr = helloD.address
+                                        launch {
+                                            val srpKey = serverSrpHandshake(authKtorSocket, clientAddr) { msg ->
+                                                onStatusUpdate("Auth failed: %s", arrayOf(msg))
+                                            }
+                                            if (srpKey != null) {
+                                                val srpSession = CryptoManagerDesktop.createCipherSession(srpKey)
+                                                val encKey = srpSession.encrypt(sharedKeyBytes)
+                                                val payload = ByteArray(4 + encKey.size + 4)
+                                                payload[0] = (encKey.size shr 24).toByte()
+                                                payload[1] = (encKey.size shr 16).toByte()
+                                                payload[2] = (encKey.size shr 8).toByte()
+                                                payload[3] = encKey.size.toByte()
+                                                System.arraycopy(encKey, 0, payload, 4, encKey.size)
+                                                System.arraycopy(sessionPrefix, 0, payload, 4 + encKey.size, 4)
+                                                authKtorSocket.send(io.ktor.network.sockets.Datagram(
+                                                    io.ktor.utils.io.core.buildPacket { writeFully(payload) }, clientAddr
+                                                ))
+                                                println("AUTH OK (multicast): sent session to $clientAddr")
+                                            }
+                                        }
+                                    } catch (_: Exception) {}
+                                }
+                                authKtorSocket.close()
+                            }
                         }
+
+                        val plainSessionMulticast = if (!isPasswordProtected) CryptoManagerDesktop.createPlainSession() else null
 
                         try {
                             while (isActive) {
@@ -616,7 +796,10 @@ object NetworkHandler_v1 {
                                     val shortBuffer = frame.samples[0] as java.nio.ShortBuffer
                                     shortBuffer.position(0)
                                     while (shortBuffer.hasRemaining()) {
-                                        val shortsToRead = minOf(shortBuffer.remaining(), maxShortsPerPacket)
+                                        var shortsToRead = minOf(shortBuffer.remaining(), maxShortsPerPacket)
+                                        val channels = audioSettings.channels
+                                        shortsToRead = (shortsToRead / channels) * channels
+                                        if (shortsToRead <= 0) break
                                         shortBuffer.get(chunkArray, 0, shortsToRead)
                                         val vol = currentServerVolume
                                         if (vol != 1.0f) {
@@ -628,27 +811,28 @@ object NetworkHandler_v1 {
                                         }
                                         byteBuffer.clear()
                                         byteBuffer.asShortBuffer().put(chunkArray, 0, shortsToRead)
-                                        val bytesToSend = shortsToRead * 2
-                                        socket.send(DatagramPacket(byteBuffer.array(), bytesToSend, group, port))
+                                        val raw = byteBuffer.array().copyOf(shortsToRead * 2)
+                                        val payload = when {
+                                            multicastCipherSession != null -> multicastCipherSession.encrypt(raw)
+                                            else -> plainSessionMulticast!!.wrap(raw)
+                                        }
+                                        socket.send(DatagramPacket(payload, payload.size, group, port))
                                     }
                                 }
                             }
                         } finally {
-                            // Manda BYE al gruppo: tutti i client in ascolto si disconnetteranno
                             try {
                                 val byeBytes = "BYE".toByteArray()
                                 socket.send(DatagramPacket(byeBytes, byeBytes.size, group, port))
-                                println("--- Sent BYE to multicast group $MULTICAST_GROUP_IP:$port ---")
+                                println("--- Sent BYE to multicast group ---")
                             } catch (_: Exception) {}
                         }
                     }
                 } else { // Unicast
-                    // Loop esterno: il server rimane attivo e torna in attesa
-                    // ogni volta che un client si disconnette.
-                    val localAddress = InetSocketAddress("0.0.0.0", port)
+                    val localAddress = io.ktor.network.sockets.InetSocketAddress("0.0.0.0", port)
                     aSocket(SelectorManager(Dispatchers.IO)).udp().bind(localAddress) { reuseAddress = true }.use { socket ->
                         while (isActive) {
-                            startAnnouncingPresence(isMulticast = false, port = port)
+                            startAnnouncingPresence(isMulticast = false, port = port, isPasswordProtected)
                             onStatusUpdate("Waiting for Unicast Client on Port %d...", arrayOf(port))
 
                             val clientDatagram = socket.receive()
@@ -658,34 +842,40 @@ object NetworkHandler_v1 {
                             onStatusUpdate("Client Connected: %s", arrayOf(clientAddress.toString()))
                             stopAnnouncingPresence()
 
-                            // =========================================================
-                            // FIX 2 CORRETTO — Drain FFmpeg con deadline temporale.
-                            // grabSamples() è BLOCCANTE quindi non si può usare
-                            // "loop fino a null". Si usa withTimeout(100ms): se non
-                            // arriva nessun frame in 100ms il buffer è svuotato.
-                            // =========================================================
+                            // SRP Auth → CipherSession oppure PlainSession
+                            var cipherSession: CryptoManagerDesktop.CipherSession? = null
+                            var plainSession: CryptoManagerDesktop.PlainSession? = null
+                            if (isPasswordProtected) {
+                                val aesKey = serverSrpHandshake(socket, clientAddress) { msg ->
+                                    onStatusUpdate("Auth failed: %s", arrayOf(msg))
+                                }
+                                if (aesKey == null) continue
+                                cipherSession = CryptoManagerDesktop.createCipherSession(aesKey)
+                                socket.send(Datagram(buildPacket { writeFully(cipherSession.getSessionPrefix()) }, clientAddress))
+                            } else {
+                                socket.send(Datagram(buildPacket { writeText("AUTH_OK") }, clientAddress))
+                                plainSession = CryptoManagerDesktop.createPlainSession()
+                            }
+
+                            // Drain FFmpeg
                             serverGrabber?.let { grabber ->
                                 var staleFrames = 0
                                 val drainDeadlineMs = 100L
                                 val maxDrainMs = 2000L
                                 val overallDeadline = System.currentTimeMillis() + maxDrainMs
                                 var lastFrameTime = System.currentTimeMillis()
-
                                 withContext(Dispatchers.IO) {
                                     while (System.currentTimeMillis() < overallDeadline) {
                                         if (System.currentTimeMillis() - lastFrameTime > drainDeadlineMs) break
                                         try {
                                             withTimeout(drainDeadlineMs) {
                                                 val staleFrame = withContext(Dispatchers.IO) { grabber.grabSamples() }
-                                                if (staleFrame?.samples != null) {
-                                                    staleFrames++
-                                                    lastFrameTime = System.currentTimeMillis()
-                                                }
+                                                if (staleFrame?.samples != null) { staleFrames++; lastFrameTime = System.currentTimeMillis() }
                                             }
                                         } catch (_: TimeoutCancellationException) { break }
                                     }
                                 }
-                                println("--- Drained $staleFrames stale FFmpeg frames before streaming ---")
+                                println("--- Drained $staleFrames stale FFmpeg frames ---")
                             }
 
                             socket.send(Datagram(buildPacket { writeText("HELLO_ACK") }, clientAddress))
@@ -693,42 +883,30 @@ object NetworkHandler_v1 {
                             val maxBytesPerPacket = audioSettings.bufferSize
                             val maxShortsPerPacket = maxBytesPerPacket / 2
                             val chunkArray = ShortArray(maxShortsPerPacket)
-                            val byteBuffer = java.nio.ByteBuffer.allocate(maxBytesPerPacket).apply {
-                                order(java.nio.ByteOrder.LITTLE_ENDIAN)
-                            }
+                            val byteBuffer = java.nio.ByteBuffer.allocate(maxBytesPerPacket).apply { order(java.nio.ByteOrder.LITTLE_ENDIAN) }
 
-                            // Flag condiviso: il pingJob lo abbassa se il client sparisce,
-                            // così il loop audio esce anche se grabSamples() è bloccante.
                             val clientAlive = java.util.concurrent.atomic.AtomicBoolean(true)
-
-                            // Job separato: manda PING ogni secondo al client.
-                            // Se il send fallisce 3 volte consecutive → client sparito.
                             val pingJob = launch {
                                 var failures = 0
                                 while (isActive && clientAlive.get()) {
                                     delay(1000)
-                                    try {
-                                        socket.send(Datagram(buildPacket { writeText("PING") }, clientAddress))
-                                        failures = 0
-                                    } catch (_: Exception) {
-                                        failures++
-                                        if (failures >= 3) {
-                                            println("--- PING failed 3 times, client considered gone ---")
-                                            clientAlive.set(false)
-                                        }
-                                    }
+                                    try { socket.send(Datagram(buildPacket { writeText("PING") }, clientAddress)); failures = 0 }
+                                    catch (_: Exception) { if (++failures >= 3) { clientAlive.set(false) } }
                                 }
                             }
 
                             try {
                                 while (isActive && clientAlive.get()) {
                                     val frame = serverGrabber?.grabSamples()
-                                    if (!clientAlive.get()) break  // controlla dopo il blocco
+                                    if (!clientAlive.get()) break
                                     if (frame != null && frame.samples != null) {
                                         val shortBuffer = frame.samples[0] as java.nio.ShortBuffer
                                         shortBuffer.position(0)
                                         while (shortBuffer.hasRemaining()) {
-                                            val shortsToRead = minOf(shortBuffer.remaining(), maxShortsPerPacket)
+                                            var shortsToRead = minOf(shortBuffer.remaining(), maxShortsPerPacket)
+                                            val channels = audioSettings.channels
+                                            shortsToRead = (shortsToRead / channels) * channels
+                                            if (shortsToRead <= 0) break
                                             shortBuffer.get(chunkArray, 0, shortsToRead)
                                             val vol = currentServerVolume
                                             if (vol != 1.0f) {
@@ -740,29 +918,23 @@ object NetworkHandler_v1 {
                                             }
                                             byteBuffer.clear()
                                             byteBuffer.asShortBuffer().put(chunkArray, 0, shortsToRead)
-                                            val bytesToSend = shortsToRead * 2
-                                            val packet = buildPacket { writeFully(byteBuffer.array(), 0, bytesToSend) }
-                                            try {
-                                                socket.send(Datagram(packet, clientAddress))
-                                            } catch (_: Exception) {
-                                                // send fallito → client sparito, esci
-                                                clientAlive.set(false)
-                                                break
+                                            val raw = byteBuffer.array().copyOf(shortsToRead * 2)
+                                            val payload = when {
+                                                cipherSession != null -> cipherSession.encrypt(raw)
+                                                plainSession != null  -> plainSession.wrap(raw)
+                                                else -> raw
                                             }
+                                            try {
+                                                socket.send(Datagram(buildPacket { writeFully(payload) }, clientAddress))
+                                            } catch (_: Exception) { clientAlive.set(false); break }
                                         }
                                     }
                                 }
                             } finally {
                                 pingJob.cancel()
-                                // Manda BYE solo se il server si sta fermando volontariamente
-                                // (se clientAlive è false il client è già sparito)
                                 if (clientAlive.get()) {
-                                    try {
-                                        socket.send(Datagram(buildPacket { writeText("BYE") }, clientAddress))
-                                        println("--- Sent BYE to $clientAddress ---")
-                                    } catch (_: Exception) {}
+                                    try { socket.send(Datagram(buildPacket { writeText("BYE") }, clientAddress)) } catch (_: Exception) {}
                                 }
-                                // Il while(isActive) esterno torna automaticamente in waiting
                             }
                         }
                     }
@@ -789,6 +961,8 @@ object NetworkHandler_v1 {
         sendMicrophone: Boolean,
         micInputMixerInfo: Mixer.Info?,
         micPort: Int,
+        password: String? = null,
+        onAuthDenied: (() -> Unit)? = null,
         onStatusUpdate: (key: String, args: Array<out Any>) -> Unit
     ) {
         if (sendMicrophone && micInputMixerInfo != null) {
@@ -798,64 +972,75 @@ object NetworkHandler_v1 {
             var sourceDataLine: SourceDataLine? = null
             try {
                 if (!serverInfo.isMulticast) { // Unicast
-                    val remoteAddress = InetSocketAddress(serverInfo.ip, serverInfo.port)
+                    val remoteAddress = io.ktor.network.sockets.InetSocketAddress(serverInfo.ip, serverInfo.port)
                     aSocket(SelectorManager(Dispatchers.IO)).udp().bind().use { socket ->
 
-                        // =========================================================
-                        // FIX 1 — Apri la SourceDataLine PRIMA di mandare HELLO.
-                        // Così quando arriva l'ACK la linea audio è già pronta
-                        // e non si perde tempo ad inizializzarla dopo l'handshake.
-                        // =========================================================
+                        // FIX 1: SourceDataLine aperta prima dell'handshake
                         sourceDataLine = prepareSourceDataLine(selectedMixerInfo, audioSettings)
                         sourceDataLine?.start()
 
                         onStatusUpdate("status_contacting_server", arrayOf(remoteAddress))
-                        val helloPacket = buildPacket { writeText(CLIENT_HELLO_MESSAGE) }
-                        socket.send(Datagram(helloPacket, remoteAddress))
+                        socket.send(Datagram(buildPacket { writeText(CLIENT_HELLO_MESSAGE) }, remoteAddress))
+
+                        // SRP Auth → CipherSession oppure PlainSession
+                        var cipherSession: CryptoManagerDesktop.CipherSession? = null
+                        var plainSession: CryptoManagerDesktop.PlainSession? = null
+                        if (serverInfo.isPasswordProtected) {
+                            val pwd = password
+                            if (pwd.isNullOrEmpty()) { onStatusUpdate("status_auth_required", emptyArray()); return@use }
+                            onStatusUpdate("status_authenticating", emptyArray())
+                            val aesKey = clientSrpHandshake(pwd, socket, remoteAddress) {
+                                onStatusUpdate("status_auth_denied", emptyArray()); onAuthDenied?.invoke()
+                            }
+                            if (aesKey == null) return@use
+                            // Ricevi sessionPrefix (4 byte) dal server
+                            val prefixBytes = withTimeout(5_000) { socket.receive() }.let {
+                                val b = ByteArray(it.packet.remaining.toInt()); it.packet.readFully(b); b
+                            }
+                            if (prefixBytes.size != 4) { onStatusUpdate("status_handshake_failed", emptyArray()); return@use }
+                            cipherSession = CryptoManagerDesktop.createCipherSession(aesKey).createPeerSession(prefixBytes)
+                        } else {
+                            val authMsg = withTimeout(10_000) { socket.receive() }.packet.readText().trim()
+                            if (authMsg != "AUTH_OK") { onStatusUpdate("status_handshake_failed", emptyArray()); return@use }
+                            plainSession = CryptoManagerDesktop.createPlainSession()
+                        }
 
                         onStatusUpdate("status_waiting_ack", emptyArray())
-                        val ackDatagram = withTimeout(15000) { socket.receive() }
-                        if (ackDatagram.packet.readText().trim() != "HELLO_ACK") {
-                            onStatusUpdate("status_handshake_failed", emptyArray())
-                            return@use
-                        }
+                        val ackMsg = withTimeout(15_000) { socket.receive() }.packet.readText().trim()
+                        if (ackMsg != "HELLO_ACK") { onStatusUpdate("status_handshake_failed", emptyArray()); return@use }
 
                         onStatusUpdate("status_connected_streaming_from", arrayOf(remoteAddress))
 
-                        val buffer = ByteArray(audioSettings.bufferSize * 2)
                         var lastPingReceived = System.currentTimeMillis()
                         val pingTimeoutMs = 3000L
                         val serverAlive = java.util.concurrent.atomic.AtomicBoolean(true)
 
-                        // Watchdog: se non arriva PING per 3s il server è sparito
                         val watchdogJob = launch {
                             while (isActive && serverAlive.get()) {
                                 delay(1000)
                                 if (System.currentTimeMillis() - lastPingReceived > pingTimeoutMs) {
-                                    println("--- Server timeout: no PING for ${pingTimeoutMs}ms ---")
                                     onStatusUpdate("status_server_disconnected", emptyArray())
                                     serverAlive.set(false)
-                                    break
                                 }
                             }
                         }
 
                         try {
                             while (isActive && serverAlive.get()) {
-                                val datagram = socket.receive()
-                                val bytes = ByteArray(datagram.packet.remaining.toInt())
-                                datagram.packet.readFully(bytes)
-                                val text = bytes.toString(Charsets.UTF_8).trim()
-
+                                val rawBytes = socket.receive().let { val b = ByteArray(it.packet.remaining.toInt()); it.packet.readFully(b); b }
+                                val text = rawBytes.toString(Charsets.UTF_8).trim()
                                 when (text) {
                                     "PING" -> lastPingReceived = System.currentTimeMillis()
-                                    "BYE"  -> {
-                                        println("--- Received BYE from server ---")
-                                        onStatusUpdate("status_server_disconnected", emptyArray())
-                                        serverAlive.set(false)
-                                        break
+                                    "BYE"  -> { onStatusUpdate("status_server_disconnected", emptyArray()); serverAlive.set(false) }
+                                    else   -> {
+                                        // receive() gestisce il jitter buffer e ritorna frame in ordine
+                                        val frames = cipherSession?.receive(rawBytes)
+                                            ?: plainSession?.receive(rawBytes)
+                                            ?: listOf(rawBytes)
+                                        for (audio in frames) {
+                                            if (audio.isNotEmpty()) sourceDataLine?.write(audio, 0, audio.size)
+                                        }
                                     }
-                                    else -> if (bytes.isNotEmpty()) sourceDataLine?.write(bytes, 0, bytes.size)
                                 }
                             }
                         } finally {
@@ -863,25 +1048,67 @@ object NetworkHandler_v1 {
                         }
                     }
                 } else { // Multicast
+                    // Auth unicast su porta+1 prima di unirsi al gruppo
+                    var cipherSession: CryptoManagerDesktop.CipherSession? = null
+                    if (serverInfo.isPasswordProtected) {
+                        val pwd = password
+                        if (pwd.isNullOrEmpty()) { onStatusUpdate("status_auth_required", emptyArray()); return@launch }
+                        onStatusUpdate("status_authenticating", emptyArray())
+                        val authSocket = aSocket(SelectorManager(Dispatchers.IO)).udp().bind()
+                        val authAddress = io.ktor.network.sockets.InetSocketAddress(serverInfo.ip, authPort(serverInfo.port))
+                        try {
+                            authSocket.send(Datagram(buildPacket { writeText(CLIENT_HELLO_MESSAGE) }, authAddress))
+                            val srpKey = clientSrpHandshake(pwd, authSocket, authAddress) {
+                                onStatusUpdate("status_auth_denied", emptyArray()); onAuthDenied?.invoke()
+                            }
+                            if (srpKey == null) return@launch
+
+                            // Ricevi [encKeyLen 4B][encKey][sessionPrefix 4B] dal server
+                            val payload = withTimeout(10_000) { authSocket.receive() }.let {
+                                val b = ByteArray(it.packet.remaining.toInt()); it.packet.readFully(b); b
+                            }
+                            val encKeyLen = ((payload[0].toInt() and 0xFF) shl 24) or
+                                    ((payload[1].toInt() and 0xFF) shl 16) or
+                                    ((payload[2].toInt() and 0xFF) shl 8)  or
+                                    (payload[3].toInt() and 0xFF)
+                            if (payload.size < 4 + encKeyLen + 4) { onStatusUpdate("status_auth_denied", emptyArray()); return@launch }
+                            val srpSession = CryptoManagerDesktop.createCipherSession(srpKey)
+                            val sharedKeyBytes = srpSession.decrypt(payload.copyOfRange(4, 4 + encKeyLen)) ?: run {
+                                onStatusUpdate("status_auth_denied", emptyArray()); return@launch
+                            }
+                            val sessionPrefix = payload.copyOfRange(4 + encKeyLen, 4 + encKeyLen + 4)
+                            val sharedAesKey = SecretKeySpec(sharedKeyBytes, "AES")
+                            cipherSession = CryptoManagerDesktop.createCipherSession(sharedAesKey).createPeerSession(sessionPrefix)
+                        } finally {
+                            authSocket.close()
+                        }
+                    }
+
                     onStatusUpdate("status_joining_multicast", arrayOf(serverInfo.port))
-                    val groupAddress = InetAddress.getByName(MULTICAST_GROUP_IP)
+                    val groupAddress = InetAddress.getByName(DISCOVERY_MULTICAST_IP)
                     MulticastSocket(serverInfo.port).use { socket ->
                         socket.joinGroup(groupAddress)
                         sourceDataLine = prepareSourceDataLine(selectedMixerInfo, audioSettings)
                         sourceDataLine?.start()
 
                         onStatusUpdate("status_multicast_streaming", arrayOf(serverInfo.port))
-                        val buffer = ByteArray(audioSettings.bufferSize * 2)
-                        val packet = DatagramPacket(buffer, buffer.size)
+                        // Buffer: audio + SEQ (8B) + IV (12B) + GCM tag (16B)
+                        val buf = ByteArray(audioSettings.bufferSize * 2 + 8 + 12 + 16)
+                        val packet = DatagramPacket(buf, buf.size)
+                        val plainSession = if (cipherSession == null) CryptoManagerDesktop.createPlainSession() else null
 
                         while (isActive) {
                             socket.receive(packet)
-                            if (packet.length == 3 && String(packet.data, 0, 3, Charsets.UTF_8) == "BYE") {
-                                println("--- Received BYE from multicast server ---")
-                                onStatusUpdate("status_server_disconnected", emptyArray())
-                                break
+                            val rawBytes = packet.data.copyOf(packet.length)
+                            if (packet.length == 3 && String(rawBytes, Charsets.UTF_8) == "BYE") {
+                                onStatusUpdate("status_server_disconnected", emptyArray()); break
                             }
-                            if (packet.length > 0) sourceDataLine?.write(packet.data, 0, packet.length)
+                            val frames = cipherSession?.receive(rawBytes)
+                                ?: plainSession?.receive(rawBytes)
+                                ?: listOf(rawBytes)
+                            for (audio in frames) {
+                                if (audio.isNotEmpty()) sourceDataLine?.write(audio, 0, audio.size)
+                            }
                         }
                     }
                 }
@@ -1052,7 +1279,7 @@ fun main() = application {
                             onDismissRoutingBanner = { dontShowAgain ->
                                 if (dontShowAgain) appSettings = appSettings.copy(hideWindowsRoutingBanner = true)
                             },
-                            onConnectManual = { ip ->
+                            onConnectManual = { ip, pwd ->
                                 isStreaming = true
                                 connectionStatus = "Connecting manually to $ip..."
                                 val port = streamingPort.toIntOrNull() ?: 9090
@@ -1081,13 +1308,15 @@ fun main() = application {
                                     discoveredDevices.clear()
                                 }
                             },
-                            onStartStreaming = {
+                            onStartStreaming = { isProtected ->
                                 isStreaming = true
                                 connectionStatus = "Starting Server..."
                                 val port = streamingPort.toIntOrNull() ?: 9090
                                 val mic = micPort.toIntOrNull() ?: 9092
+
+                                // Aggiunto "isProtected" come sesto parametro
                                 NetworkHandler_v1.launchServerInstance(
-                                    audioSettings, port, isMulticastMode, selectedServerMicOutput, mic
+                                    audioSettings, port, isMulticastMode, selectedServerMicOutput, mic, isProtected
                                 ) { key, args ->
                                     if (key == "error_virtual_driver_missing") {
                                         isStreaming = false
@@ -1103,7 +1332,7 @@ fun main() = application {
                                 connectionStatus = Strings.get("status_inactive")
                                 scope.launch { NetworkHandler_v1.stopCurrentStream() }
                             },
-                            onConnectToServer = { serverInfo ->
+                            onConnectToServer = { serverInfo, pwd ->
                                 isStreaming = true
                                 val mic = micPort.toIntOrNull() ?: 9092
                                 NetworkHandler_v1.endDeviceDiscovery()

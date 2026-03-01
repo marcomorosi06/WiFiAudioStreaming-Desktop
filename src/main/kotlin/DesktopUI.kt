@@ -46,6 +46,7 @@ import androidx.compose.ui.text.input.KeyboardType
 import kotlin.math.atan2
 import kotlin.math.cos
 import kotlin.math.sin
+import androidx.compose.ui.text.input.PasswordVisualTransformation
 
 // =================================================================
 // ==                  SCHERMATA PRINCIPALE                       ==
@@ -75,11 +76,15 @@ fun AppContent(
     onDismissPrivacyBanner: (Boolean) -> Unit,
     onDismissRoutingBanner: (Boolean) -> Unit,
     virtualDriverStatus: VirtualDriverStatus,
-    onConnectManual: (String) -> Unit,
+
+    // --- FIRME AGGIORNATE PER LE PASSWORD ---
+    onConnectManual: (ip: String, password: String?) -> Unit,
     onModeChange: (Boolean) -> Unit,
-    onStartStreaming: () -> Unit,
+    onStartStreaming: (isPasswordProtected: Boolean) -> Unit,
     onStopStreaming: () -> Unit,
-    onConnectToServer: (ServerInfo) -> Unit,
+    onConnectToServer: (ServerInfo, password: String?) -> Unit,
+    // ----------------------------------------
+
     onRefreshDevices: () -> Unit,
     onMulticastModeChange: (Boolean) -> Unit,
     onSendMicrophoneChange: (Boolean) -> Unit,
@@ -89,6 +94,34 @@ fun AppContent(
     onSelectedServerMicOutputChange: (Mixer.Info) -> Unit,
     onOpenSettings: () -> Unit
 ) {
+    // Stati per la gestione dei dialoghi della password nel Client
+    var serverToConnect by remember { mutableStateOf<ServerInfo?>(null) }
+    var manualIpToConnect by remember { mutableStateOf<String?>(null) }
+    var showClientPasswordDialog by remember { mutableStateOf(false) }
+
+    // Dialogo per inserire la password (Client)
+    if (showClientPasswordDialog) {
+        PasswordDialog(
+            title = "Password Richiesta",
+            text = "Inserisci la password per connetterti a questo server:",
+            onConfirm = { pwd ->
+                showClientPasswordDialog = false
+                if (serverToConnect != null) {
+                    onConnectToServer(serverToConnect!!, pwd)
+                    serverToConnect = null
+                } else if (manualIpToConnect != null) {
+                    onConnectManual(manualIpToConnect!!, pwd)
+                    manualIpToConnect = null
+                }
+            },
+            onDismiss = {
+                showClientPasswordDialog = false
+                serverToConnect = null
+                manualIpToConnect = null
+            }
+        )
+    }
+
     Scaffold(
         topBar = {
             TopAppBar(
@@ -101,7 +134,7 @@ fun AppContent(
             )
         }
     ) { paddingValues ->
-        // --- INIZIO DIALOG LINUX ---
+        // --- DIALOG LINUX ---
         val clipboardManager = LocalClipboardManager.current
         if (isServer && virtualDriverStatus is VirtualDriverStatus.LinuxActionRequired) {
             var showLinuxDialog by remember { mutableStateOf(true) }
@@ -124,9 +157,7 @@ fun AppContent(
                         Button(onClick = {
                             clipboardManager.setText(AnnotatedString(virtualDriverStatus.commands))
                             showLinuxDialog = false
-                        }) {
-                            Text("Copy & Close")
-                        }
+                        }) { Text("Copy & Close") }
                     },
                     dismissButton = {
                         TextButton(onClick = { showLinuxDialog = false }) { Text("Ignore") }
@@ -134,31 +165,20 @@ fun AppContent(
                 )
             }
         }
+
         LazyColumn(
             modifier = Modifier.fillMaxSize().padding(paddingValues),
             contentPadding = PaddingValues(16.dp),
             verticalArrangement = Arrangement.spacedBy(16.dp),
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
-            // --- Virtual Driver Warning Banner ---
-            // Only shown in server mode when the required virtual audio driver is missing.
-            if (isServer) {
-                val driverStatus = virtualDriverStatus
-                if (driverStatus is VirtualDriverStatus.Missing) {
-                    item {
-                        VirtualDriverBanner(status = driverStatus)
-                    }
-                }
+            if (isServer && virtualDriverStatus is VirtualDriverStatus.Missing) {
+                item { VirtualDriverBanner(status = virtualDriverStatus) }
             }
 
-            // --- BANNER WINDOWS (Instradamento e Privacy) ---
             if (isWindowsOS && isServer && !isStreaming) {
-                if (!appSettings.hideWindowsRoutingBanner) {
-                    item { WindowsRoutingBanner(onDismiss = onDismissRoutingBanner) }
-                }
-                if (!appSettings.hideWindowsPrivacyBanner) {
-                    item { WindowsPrivacyBanner(onDismiss = onDismissPrivacyBanner) }
-                }
+                if (!appSettings.hideWindowsRoutingBanner) item { WindowsRoutingBanner(onDismiss = onDismissRoutingBanner) }
+                if (!appSettings.hideWindowsPrivacyBanner) item { WindowsPrivacyBanner(onDismiss = onDismissPrivacyBanner) }
             }
 
             item {
@@ -182,24 +202,16 @@ fun AppContent(
                     else (!appSettings.experimentalFeaturesEnabled || selectedServerMicOutput != null),
                     serverVolume = serverVolume,
                     onServerVolumeChange = onServerVolumeChange,
-                    onStart = onStartStreaming,
+                    onStart = { onStartStreaming(CryptoManagerDesktop.hasPassword()) }, // Passa lo stato della password!
                     onStop = onStopStreaming
                 )
             }
 
             if (!isStreaming) {
+                item { ModeSelectorCard(isServer = isServer, onModeChange = onModeChange) }
+
                 item {
-                    ModeSelectorCard(
-                        isServer = isServer,
-                        onModeChange = onModeChange
-                    )
-                }
-                item {
-                    AnimatedVisibility(
-                        visible = isServer,
-                        enter = fadeIn(animationSpec = tween(durationMillis = 300)),
-                        exit = fadeOut(animationSpec = tween(durationMillis = 300))
-                    ) {
+                    AnimatedVisibility(visible = isServer) {
                         ServerConfigCard(
                             experimentalFeaturesEnabled = appSettings.experimentalFeaturesEnabled,
                             inputDevices = inputDevices,
@@ -210,16 +222,13 @@ fun AppContent(
                             onServerMicOutputSelected = onSelectedServerMicOutputChange,
                             isMulticast = isMulticastMode,
                             onMulticastChanged = onMulticastModeChange,
-                            virtualDriverStatus = virtualDriverStatus // Pass down for the inline hint
+                            virtualDriverStatus = virtualDriverStatus
                         )
                     }
                 }
+
                 item {
-                    AnimatedVisibility(
-                        visible = !isServer,
-                        enter = fadeIn(animationSpec = tween(durationMillis = 300)),
-                        exit = fadeOut(animationSpec = tween(durationMillis = 300))
-                    ) {
+                    AnimatedVisibility(visible = !isServer) {
                         Column(verticalArrangement = Arrangement.spacedBy(16.dp)) {
                             ClientConfigCard(
                                 experimentalFeaturesEnabled = appSettings.experimentalFeaturesEnabled,
@@ -230,33 +239,27 @@ fun AppContent(
                                 onSendMicrophoneChanged = onSendMicrophoneChange,
                                 inputDevices = inputDevices,
                                 selectedClientMic = selectedClientMic,
-                                onClientMicSelected = onSelectedClientMicChange
-                            )
-
-                            var manualIp by remember { mutableStateOf("") }
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.spacedBy(8.dp)
-                            ) {
-                                OutlinedTextField(
-                                    value = manualIp,
-                                    onValueChange = { manualIp = it },
-                                    label = { Text("Manual Server IP") },
-                                    modifier = Modifier.weight(1f),
-                                    singleLine = true
-                                )
-                                Button(
-                                    onClick = { onConnectManual(manualIp) },
-                                    enabled = manualIp.isNotBlank() && selectedOutputDevice != null
-                                ) {
-                                    Text("Connect")
+                                onClientMicSelected = onSelectedClientMicChange,
+                                onConnectManual = { ip, requiresPwd ->
+                                    if (requiresPwd) {
+                                        manualIpToConnect = ip
+                                        showClientPasswordDialog = true
+                                    } else {
+                                        onConnectManual(ip, null)
+                                    }
                                 }
-                            }
+                            )
 
                             DeviceDiscoveryList(
                                 devices = discoveredDevices,
-                                onConnect = onConnectToServer,
+                                onConnect = { serverInfo ->
+                                    if (serverInfo.isPasswordProtected) {
+                                        serverToConnect = serverInfo
+                                        showClientPasswordDialog = true
+                                    } else {
+                                        onConnectToServer(serverInfo, null)
+                                    }
+                                },
                                 onRefresh = onRefreshDevices,
                                 enabled = selectedOutputDevice != null && (!sendMicrophone || selectedClientMic != null)
                             )
@@ -266,6 +269,47 @@ fun AppContent(
             }
         }
     }
+}
+
+// =================================================================
+// ==                 DIALOG PER LA PASSWORD                      ==
+// =================================================================
+
+@Composable
+fun PasswordDialog(
+    title: String,
+    text: String,
+    onConfirm: (String) -> Unit,
+    onDismiss: () -> Unit
+) {
+    var password by remember { mutableStateOf("") }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(title) },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text(text)
+                OutlinedTextField(
+                    value = password,
+                    onValueChange = { password = it },
+                    label = { Text("Password") },
+                    singleLine = true,
+                    visualTransformation = PasswordVisualTransformation(),
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password)
+                )
+            }
+        },
+        confirmButton = {
+            Button(
+                onClick = { onConfirm(password) },
+                enabled = password.isNotBlank()
+            ) { Text("OK") }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) { Text("Cancel") }
+        }
+    )
 }
 
 // =================================================================
@@ -643,51 +687,66 @@ fun ServerConfigCard(
     inputDevices: List<Mixer.Info>, selectedInputDevice: Mixer.Info?, onInputDeviceSelected: (Mixer.Info) -> Unit,
     outputDevices: List<Mixer.Info>, selectedServerMicOutput: Mixer.Info?, onServerMicOutputSelected: (Mixer.Info) -> Unit,
     isMulticast: Boolean, onMulticastChanged: (Boolean) -> Unit,
-    virtualDriverStatus: VirtualDriverStatus // NEW PARAMETER
+    virtualDriverStatus: VirtualDriverStatus
 ) {
+    // Stato per la gestione della password lato Server
+    var hasPassword by remember { mutableStateOf(CryptoManagerDesktop.hasPassword()) }
+    var showSetPasswordDialog by remember { mutableStateOf(false) }
+
+    if (showSetPasswordDialog) {
+        PasswordDialog(
+            title = "Set Server Password",
+            text = "Enter a secure password to protect your stream:",
+            onConfirm = { pwd ->
+                CryptoManagerDesktop.registerPassword(pwd)
+                hasPassword = true
+                showSetPasswordDialog = false
+            },
+            onDismiss = { showSetPasswordDialog = false }
+        )
+    }
+
     ElevatedCard(modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(24.dp)) {
         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
             Text("Server Configuration", style = MaterialTheme.typography.titleLarge)
 
-            // Show driver status inline: OK badge or a compact "not installed" note
             when (virtualDriverStatus) {
-                is VirtualDriverStatus.Ok -> {
-                    InfoSetting(
-                        title = "System Audio Capture",
-                        description = "Virtual audio driver detected ✓",
-                        icon = Icons.Outlined.VolumeUp
-                    )
-                }
-                is VirtualDriverStatus.Missing -> {
-                    InfoSetting(
-                        title = "System Audio Capture",
-                        description = "${virtualDriverStatus.driverName} — not installed. See the warning above.",
-                        icon = Icons.Outlined.VolumeOff
-                    )
-                }
-                is VirtualDriverStatus.LinuxActionRequired -> {
-                    InfoSetting(
-                        title = "System Audio Capture",
-                        description = "Missing Linux dependencies. Check the popup.",
-                        icon = Icons.Outlined.Warning
-                    )
-                }
+                is VirtualDriverStatus.Ok -> InfoSetting("System Audio Capture", "Virtual audio driver detected ✓", Icons.Outlined.VolumeUp)
+                is VirtualDriverStatus.Missing -> InfoSetting("System Audio Capture", "${virtualDriverStatus.driverName} not installed.", Icons.Outlined.VolumeOff)
+                is VirtualDriverStatus.LinuxActionRequired -> InfoSetting("System Audio Capture", "Missing Linux dependencies.", Icons.Outlined.Warning)
             }
 
             AnimatedVisibility(experimentalFeaturesEnabled) {
                 DeviceDropdown("Mic Output (Received)", outputDevices, selectedServerMicOutput, onServerMicOutputSelected)
             }
 
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.SpaceBetween
-            ) {
+            Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceBetween) {
                 Column(Modifier.weight(1f)) {
                     Text("Multicast Mode", style = MaterialTheme.typography.bodyLarge)
                     Text("Broadcast to multiple clients", style = MaterialTheme.typography.bodySmall)
                 }
                 Switch(checked = isMulticast, onCheckedChange = onMulticastChanged)
+            }
+
+            HorizontalDivider()
+
+            // --- TOGGLE PASSWORD ---
+            Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceBetween) {
+                Column(Modifier.weight(1f)) {
+                    Text("Password Protection", style = MaterialTheme.typography.bodyLarge)
+                    Text("Require clients to enter a password", style = MaterialTheme.typography.bodySmall)
+                }
+                Switch(
+                    checked = hasPassword,
+                    onCheckedChange = { checked ->
+                        if (checked) {
+                            showSetPasswordDialog = true
+                        } else {
+                            CryptoManagerDesktop.clearPassword()
+                            hasPassword = false
+                        }
+                    }
+                )
             }
         }
     }
@@ -698,8 +757,12 @@ fun ClientConfigCard(
     experimentalFeaturesEnabled: Boolean,
     outputDevices: List<Mixer.Info>, selectedOutputDevice: Mixer.Info?, onOutputDeviceSelected: (Mixer.Info) -> Unit,
     sendMicrophone: Boolean, onSendMicrophoneChanged: (Boolean) -> Unit,
-    inputDevices: List<Mixer.Info>, selectedClientMic: Mixer.Info?, onClientMicSelected: (Mixer.Info) -> Unit
+    inputDevices: List<Mixer.Info>, selectedClientMic: Mixer.Info?, onClientMicSelected: (Mixer.Info) -> Unit,
+    onConnectManual: (ip: String, requiresPassword: Boolean) -> Unit // Nuova callback interna
 ) {
+    var manualIp by remember { mutableStateOf("") }
+    var manualIpRequiresPassword by remember { mutableStateOf(false) }
+
     ElevatedCard(modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(24.dp)) {
         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
             Text(stringResource("client_configuration"), style = MaterialTheme.typography.titleLarge)
@@ -707,17 +770,37 @@ fun ClientConfigCard(
 
             AnimatedVisibility(experimentalFeaturesEnabled) {
                 Column(verticalArrangement = Arrangement.spacedBy(16.dp)) {
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.SpaceBetween
-                    ) {
+                    Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceBetween) {
                         Text(stringResource("send_mic_to_server"), style = MaterialTheme.typography.bodyLarge)
                         Switch(checked = sendMicrophone, onCheckedChange = onSendMicrophoneChanged)
                     }
                     AnimatedVisibility(sendMicrophone) {
                         DeviceDropdown(stringResource("select_mic_to_send"), inputDevices, selectedClientMic, onClientMicSelected)
                     }
+                }
+            }
+
+            HorizontalDivider()
+
+            // --- CONNESSIONE MANUALE AGGIORNATA ---
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text("Manual Connection", style = MaterialTheme.typography.labelLarge)
+                Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    OutlinedTextField(
+                        value = manualIp,
+                        onValueChange = { manualIp = it },
+                        label = { Text("Server IP") },
+                        modifier = Modifier.weight(1f),
+                        singleLine = true
+                    )
+                    Button(
+                        onClick = { onConnectManual(manualIp, manualIpRequiresPassword) },
+                        enabled = manualIp.isNotBlank() && selectedOutputDevice != null
+                    ) { Text("Connect") }
+                }
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Checkbox(checked = manualIpRequiresPassword, onCheckedChange = { manualIpRequiresPassword = it })
+                    Text("Server requires password", style = MaterialTheme.typography.bodySmall)
                 }
             }
         }
@@ -796,7 +879,13 @@ fun DeviceItem(hostname: String, serverInfo: ServerInfo, onClick: () -> Unit, en
                 Icon(if (serverInfo.isMulticast) Icons.Filled.Groups else Icons.Default.Person, contentDescription = modeText)
             }
             Column(modifier = Modifier.weight(1f)) {
-                Text(hostname, fontWeight = FontWeight.Bold)
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                    Text(hostname, fontWeight = FontWeight.Bold)
+                    // MOSTRA IL LUCCHETTO SE È PROTETTO
+                    if (serverInfo.isPasswordProtected) {
+                        Icon(Icons.Default.Lock, contentDescription = "Password Protected", modifier = Modifier.size(16.dp), tint = MaterialTheme.colorScheme.error)
+                    }
+                }
                 Text("${serverInfo.ip}:${serverInfo.port} ($modeText)", style = MaterialTheme.typography.bodySmall)
             }
             Icon(Icons.AutoMirrored.Filled.ArrowForward, contentDescription = stringResource("connect"))
