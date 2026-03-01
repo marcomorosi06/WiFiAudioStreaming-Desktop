@@ -544,7 +544,7 @@ object NetworkHandler_v1 {
             }
             os.contains("mac") -> {
                 grabberFormat = "avfoundation"
-                deviceName = "audio=BlackHole 2ch"
+                deviceName = ":BlackHole 2ch"
             }
             else -> {
                 grabberFormat = "alsa"
@@ -556,12 +556,15 @@ object NetworkHandler_v1 {
             routeLinuxAudioToVirtualCable()
             org.bytedeco.javacv.FFmpegFrameGrabber(deviceName).apply {
                 setFormat(grabberFormat)
+                // FORZA IL TEMPO REALE SU MAC
+                setOption("probesize", "32")
+                setOption("analyzeduration", "0")
+                setOption("fflags", "nobuffer")
+
                 sampleRate = audioSettings.sampleRate.toInt()
                 audioChannels = audioSettings.channels
                 sampleFormat = org.bytedeco.ffmpeg.global.avutil.AV_SAMPLE_FMT_S16
                 start()
-            }.also {
-                println("--- FFMPEG pre-warmed and started successfully ---")
             }
         } catch (e: Exception) {
             println("=== FFMPEG PRE-WARM FAILED ===")

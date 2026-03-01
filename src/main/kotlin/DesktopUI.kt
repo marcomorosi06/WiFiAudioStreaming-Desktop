@@ -308,7 +308,7 @@ fun VirtualDriverBanner(status: VirtualDriverStatus.Missing) {
                 )
                 Text(
                     text = "This app needs a virtual audio cable to capture system audio. " +
-                            "Without it, the server cannot stream anything.",
+                            "Without it, the server cannot stream anything. Install Blackhole 2inch.",
                     style = MaterialTheme.typography.bodySmall,
                     color = onErrorColor
                 )
