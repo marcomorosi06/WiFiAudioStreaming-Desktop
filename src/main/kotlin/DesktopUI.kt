@@ -242,7 +242,7 @@ fun AppContent(
                                 OutlinedTextField(
                                     value = manualIp,
                                     onValueChange = { manualIp = it },
-                                    label = { Text("Manual Server IP") },
+                                    label = { Text("Manual Server IP (only Unicast)") },
                                     modifier = Modifier.weight(1f),
                                     singleLine = true
                                 )
