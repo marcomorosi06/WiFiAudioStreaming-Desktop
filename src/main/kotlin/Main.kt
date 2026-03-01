@@ -248,18 +248,26 @@ object NetworkHandler_v1 {
     private var originalLinuxSource: String? = null
 
     private fun getPactlDefault(type: String): String? {
+        // Prima prova con pactl info che è più affidabile di get-default-*
         try {
-            val direct = ProcessBuilder("pactl", "get-default-$type").start()
-            val directOutput = direct.inputStream.bufferedReader().readText().trim()
-            if (direct.waitFor() == 0 && directOutput.isNotEmpty()) return directOutput
-
             val info = ProcessBuilder("pactl", "info").start()
             val infoOutput = info.inputStream.bufferedReader().readText()
             if (info.waitFor() == 0) {
                 val prefix = if (type == "sink") "Default Sink: " else "Default Source: "
-                return infoOutput.lines().find { it.startsWith(prefix) }?.substringAfter(prefix)?.trim()
+                val result = infoOutput.lines()
+                    .find { it.trimStart().startsWith(prefix) }
+                    ?.substringAfter(prefix)?.trim()
+                if (!result.isNullOrEmpty()) return result
             }
         } catch (e: Exception) {}
+
+        // Fallback con get-default-*
+        try {
+            val direct = ProcessBuilder("pactl", "get-default-$type").start()
+            val directOutput = direct.inputStream.bufferedReader().readText().trim()
+            if (direct.waitFor() == 0 && directOutput.isNotEmpty()) return directOutput
+        } catch (e: Exception) {}
+
         return null
     }
 
@@ -270,25 +278,55 @@ object NetworkHandler_v1 {
         val currentSink = getPactlDefault("sink")
         val currentSource = getPactlDefault("source")
 
-        if (currentSink != null && currentSink != "VirtualCable") originalLinuxSink = currentSink
-        if (currentSource != null && currentSource != "VirtualCable.monitor") originalLinuxSource = currentSource
+        // Salva SOLO se il sink attuale non è già il VirtualCable
+        // (evita di sovrascrivere il valore salvato con "VirtualCable" stesso)
+        if (currentSink != null && !currentSink.contains("VirtualCable", ignoreCase = true)) {
+            originalLinuxSink = currentSink
+        }
+        if (currentSource != null && !currentSource.contains("VirtualCable", ignoreCase = true)) {
+            originalLinuxSource = currentSource
+        }
+
+        println("--- Linux: Sink originale salvato: sink='$originalLinuxSink', source='$originalLinuxSource' ---")
 
         try {
             ProcessBuilder("pactl", "set-default-sink", "VirtualCable").start().waitFor()
             ProcessBuilder("pactl", "set-default-source", "VirtualCable.monitor").start().waitFor()
             println("--- Linux Audio instradato su VirtualCable ---")
-        } catch (e: Exception) {}
+        } catch (e: Exception) {
+            println("--- Errore routing VirtualCable: ${e.message} ---")
+        }
     }
 
     fun restoreLinuxAudioRouting() {
         val os = System.getProperty("os.name").lowercase()
         if (!os.contains("linux")) return
 
+        val sink = originalLinuxSink
+        val source = originalLinuxSource
+
+        println("--- Linux: Tentativo ripristino audio: sink='$sink', source='$source' ---")
+
+        if (sink == null && source == null) {
+            println("--- Linux: Nessun sink originale salvato, nulla da ripristinare ---")
+            return
+        }
+
         try {
-            originalLinuxSink?.let { ProcessBuilder("pactl", "set-default-sink", it).start().waitFor() }
-            originalLinuxSource?.let { ProcessBuilder("pactl", "set-default-source", it).start().waitFor() }
-            println("--- Linux Audio ripristinato alle casse originali ---")
-        } catch (e: Exception) {}
+            sink?.let {
+                ProcessBuilder("pactl", "set-default-sink", it).start().waitFor()
+                println("--- Linux: Sink ripristinato a '$it' ---")
+            }
+            source?.let {
+                ProcessBuilder("pactl", "set-default-source", it).start().waitFor()
+                println("--- Linux: Source ripristinato a '$it' ---")
+            }
+            // Azzera dopo il restore per non ripetere operazioni al secondo stop
+            originalLinuxSink = null
+            originalLinuxSource = null
+        } catch (e: Exception) {
+            println("--- Errore nel ripristino audio Linux: ${e.message} ---")
+        }
     }
 
     fun findAvailableOutputMixers(): List<Mixer.Info> {
@@ -349,6 +387,18 @@ object NetworkHandler_v1 {
                 println("Comando 'pactl' non trovato. Impossibile creare il cavo virtuale in automatico.")
                 return
             }
+
+            // Salva subito il sink/source reale PRIMA di fare qualsiasi modifica,
+            // così anche se VirtualCable esiste già lo salviamo correttamente
+            val currentSink = getPactlDefault("sink")
+            val currentSource = getPactlDefault("source")
+            if (currentSink != null && !currentSink.contains("VirtualCable", ignoreCase = true)) {
+                originalLinuxSink = currentSink
+            }
+            if (currentSource != null && !currentSource.contains("VirtualCable", ignoreCase = true)) {
+                originalLinuxSource = currentSource
+            }
+            println("--- Linux: Sink reale salvato all'avvio: sink='$originalLinuxSink', source='$originalLinuxSource' ---")
 
             val checkSink = ProcessBuilder("sh", "-c", "pactl list short sinks | grep VirtualCable").start()
             if (checkSink.waitFor() == 0) {
@@ -772,15 +822,20 @@ object NetworkHandler_v1 {
                 }
             } catch (t: Throwable) {
                 if (t !is CancellationException) {
-                    println("=== CRITICAL SERVER ERROR ===")
-                    t.printStackTrace()
-                    onStatusUpdate("Error: %s", arrayOf(t.message ?: t.toString()))
+                    // Se serverGrabber è null significa che stopCurrentStream() ha già
+                    // fermato FFmpeg intenzionalmente — l'eccezione è attesa, non è un crash
+                    if (serverGrabber != null) {
+                        println("=== CRITICAL SERVER ERROR ===")
+                        t.printStackTrace()
+                        onStatusUpdate("Error: %s", arrayOf(t.message ?: t.toString()))
+                    }
                 }
             } finally {
                 stopAnnouncingPresence()
                 serverGrabber?.stop()
                 serverGrabber?.release()
                 serverGrabber = null
+                restoreLinuxAudioRouting()
             }
         }
     }
@@ -928,16 +983,17 @@ object NetworkHandler_v1 {
 
     suspend fun stopCurrentStream() {
         stopAnnouncingPresence()
-        streamingJob?.cancelAndJoin()
-        micReceiverJob?.cancelAndJoin()
 
+        // Ferma FFmpeg: questo sblocca grabSamples() nel job
         serverGrabber?.stop()
         serverGrabber?.release()
         serverGrabber = null
+
+        // Ora il job può terminare pulito
+        streamingJob?.cancelAndJoin()
+        micReceiverJob?.cancelAndJoin()
         streamingJob = null
         micReceiverJob = null
-
-        restoreLinuxAudioRouting()
     }
 
     fun terminateAllServices() {
@@ -1005,8 +1061,13 @@ fun main() = application {
 
     Window(
         onCloseRequest = {
-            NetworkHandler_v1.restoreLinuxAudioRouting()
-            exitApplication()
+            scope.launch {
+                // stopCurrentStream() ferma FFmpeg e alla fine chiama restoreLinuxAudioRouting()
+                // È importante che FFmpeg sia già fermo quando si fa il restore,
+                // altrimenti il sink torna subito su VirtualCable
+                NetworkHandler_v1.stopCurrentStream()
+                exitApplication()
+            }
         },
         state = windowState,
         undecorated = true
