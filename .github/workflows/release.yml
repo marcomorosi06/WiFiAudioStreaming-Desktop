@@ -1,0 +1,33 @@
+name: Desktop Multi-Platform Build
+on:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  build:
+    name: Build on ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [windows-latest, ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: 'zulu'
+          java-version: '17'
+
+      - name: Build Packages
+        run: ./gradlew packageDistributionForCurrentOS
+
+      - name: Upload to Release
+        uses: softprops/action-gh-release@v1
+        with:
+          files: |
+            build/compose/binaries/main/msi/*.msi
+            build/compose/binaries/main/deb/*.deb
+            build/compose/binaries/main/rpm/*.rpm
+            build/compose/binaries/main/dmg/*.dmg
+            build/compose/binaries/main/app/*.zip
+            build/compose/binaries/main/app/*.tar.gz
