@@ -49,7 +49,7 @@ compose.desktop {
             targetFormats(TargetFormat.Msi, TargetFormat.Dmg, TargetFormat.Deb, TargetFormat.Rpm)
 
             packageName = "WiFi Audio Streaming"
-            packageVersion = "1.0.0"
+            packageVersion = "2.0.0"
 
             buildTypes.release.proguard {
                 isEnabled.set(true)
