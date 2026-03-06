@@ -1,0 +1,18 @@
+Index: .github/workflows/release.yml
+IDEA additional info:
+Subsystem: com.intellij.openapi.diff.impl.patch.BaseRevisionTextPatchEP
+<+>name: Desktop Multi-Platform Build\r\non:\r\n  push:\r\n    tags:\r\n      - 'v*'\r\n\r\njobs:\r\n  build:\r\n    name: Build on ${{ matrix.os }}\r\n    strategy:\r\n      matrix:\r\n        os: [windows-latest, ubuntu-latest, macos-latest]\r\n    runs-on: ${{ matrix.os }}\r\n    steps:\r\n      - uses: actions/checkout@v4\r\n      - uses: actions/setup-java@v4\r\n        with:\r\n          distribution: 'zulu'\r\n          java-version: '17'\r\n\r\n      - name: Build Packages\r\n        run: ./gradlew packageDistributionForCurrentOS\r\n\r\n      - name: Upload to Release\r\n        uses: softprops/action-gh-release@v1\r\n        with:\r\n          files: |\r\n            build/compose/binaries/main/msi/*.msi\r\n            build/compose/binaries/main/deb/*.deb\r\n            build/compose/binaries/main/rpm/*.rpm\r\n            build/compose/binaries/main/dmg/*.dmg\r\n            build/compose/binaries/main/app/*.zip\r\n            build/compose/binaries/main/app/*.tar.gz
+Subsystem: com.intellij.openapi.diff.impl.patch.CharsetEP
+<+>UTF-8
+===================================================================
+diff --git a/.github/workflows/release.yml b/.github/workflows/release.yml
+--- a/.github/workflows/release.yml	(revision dd34cab0864432c1c0112c680b678c6f1fd0db08)
++++ b/.github/workflows/release.yml	(date 1772474948634)
+@@ -8,6 +8,7 @@
+   build:
+     name: Build on ${{ matrix.os }}
+     strategy:
++      fail-fast: false
+       matrix:
+         os: [windows-latest, ubuntu-latest, macos-latest]
+     runs-on: ${{ matrix.os }}

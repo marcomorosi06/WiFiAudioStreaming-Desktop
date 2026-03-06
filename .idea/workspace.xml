@@ -1,0 +1,270 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project version="4">
+  <component name="AutoImportSettings">
+    <option name="autoReloadType" value="SELECTIVE" />
+  </component>
+  <component name="ChangeListManager">
+    <list default="true" id="5f86ce91-f37e-4a3e-9b89-95bbba8740e8" name="Changes" comment="Dettaglino per solo unicast con inserimento manuale ip.">
+      <change beforePath="$PROJECT_DIR$/.github/workflows/release.yml" beforeDir="false" afterPath="$PROJECT_DIR$/.github/workflows/release.yml" afterDir="false" />
+    </list>
+    <option name="SHOW_DIALOG" value="false" />
+    <option name="HIGHLIGHT_CONFLICTS" value="true" />
+    <option name="HIGHLIGHT_NON_ACTIVE_CHANGELIST" value="false" />
+    <option name="LAST_RESOLUTION" value="IGNORE" />
+  </component>
+  <component name="ExternalProjectsData">
+    <projectState path="$PROJECT_DIR$">
+      <ProjectState />
+    </projectState>
+  </component>
+  <component name="ExternalProjectsManager">
+    <system id="GRADLE">
+      <state>
+        <projects_view>
+          <tree_state>
+            <expand>
+              <path>
+                <item name="" type="6a2764b6:ExternalProjectsStructure$RootNode" />
+                <item name="WiFiAudioStreaming" type="f1a62948:ProjectNode" />
+              </path>
+            </expand>
+            <select />
+          </tree_state>
+        </projects_view>
+      </state>
+    </system>
+  </component>
+  <component name="FileTemplateManagerImpl">
+    <option name="RECENT_TEMPLATES">
+      <list>
+        <option value="Kotlin File" />
+      </list>
+    </option>
+  </component>
+  <component name="Git.Settings">
+    <option name="PUSH_TAGS">
+      <GitPushTagMode>
+        <option name="argument" value="--tags" />
+        <option name="title" value="All" />
+      </GitPushTagMode>
+    </option>
+    <option name="RECENT_BRANCH_BY_REPOSITORY">
+      <map>
+        <entry key="$PROJECT_DIR$" value="ffmpeg-update" />
+      </map>
+    </option>
+    <option name="RECENT_GIT_ROOT_PATH" value="$PROJECT_DIR$" />
+  </component>
+  <component name="GitHubPullRequestSearchHistory"><![CDATA[{
+  "lastFilter": {
+    "state": "OPEN",
+    "assignee": "marcomorosi06"
+  }
+}]]></component>
+  <component name="GitLabMergeRequestFiltersHistory">{
+  &quot;history&quot;: [
+    {
+      &quot;state&quot;: &quot;MERGED&quot;,
+      &quot;assignee&quot;: {
+        &quot;type&quot;: &quot;org.jetbrains.plugins.gitlab.mergerequest.ui.filters.GitLabMergeRequestsFiltersValue.MergeRequestsMemberFilterValue.MergeRequestsAssigneeFilterValue&quot;,
+        &quot;username&quot;: &quot;marcomorosi.dev&quot;,
+        &quot;fullname&quot;: &quot;Marco Morosi&quot;
+      }
+    }
+  ],
+  &quot;lastFilter&quot;: {
+    &quot;state&quot;: &quot;MERGED&quot;,
+    &quot;assignee&quot;: {
+      &quot;type&quot;: &quot;org.jetbrains.plugins.gitlab.mergerequest.ui.filters.GitLabMergeRequestsFiltersValue.MergeRequestsMemberFilterValue.MergeRequestsAssigneeFilterValue&quot;,
+      &quot;username&quot;: &quot;marcomorosi.dev&quot;,
+      &quot;fullname&quot;: &quot;Marco Morosi&quot;
+    }
+  }
+}</component>
+  <component name="GitLabMergeRequestsSettings">{
+  &quot;selectedUrlAndAccountId&quot;: {
+    &quot;first&quot;: &quot;https://gitlab.com/marcomorosi.dev/WiFiAudioStreaming-Desktop.git&quot;,
+    &quot;second&quot;: &quot;50859f76-3e6b-4026-abe0-12e8cf0f1a3e&quot;
+  }
+}</component>
+  <component name="GithubPullRequestsUISettings"><![CDATA[{
+  "selectedUrlAndAccountId": {
+    "url": "https://github.com/marcomorosi06/WiFiAudioStreaming-Desktop.git",
+    "accountId": "dbb92e82-d357-4388-93c9-1df0b90229c9"
+  }
+}]]></component>
+  <component name="GradleScriptDefinitionsStorage" workingDir="$PROJECT_DIR$" gradleHome="C:\Users\marco\.gradle\wrapper\dists\gradle-8.14-bin\38aieal9i53h9rfe7vjup95b9\gradle-8.14" javaHome="C:\Program Files\Java\jdk-21" gradleVersion="8.14" />
+  <component name="ProjectColorInfo">{
+  &quot;customColor&quot;: &quot;&quot;,
+  &quot;associatedIndex&quot;: 1
+}</component>
+  <component name="ProjectId" id="3AH2zcyNWsfrBsnf33eYJmePxZX" />
+  <component name="ProjectViewState">
+    <option name="hideEmptyMiddlePackages" value="true" />
+    <option name="showLibraryContents" value="true" />
+  </component>
+  <component name="PropertiesComponent"><![CDATA[{
+  "keyToString": {
+    "Gradle.WiFiAudioStreaming-Desktop [:FFmpegTestKt.main()].executor": "Run",
+    "Gradle.WiFiAudioStreaming-Desktop [:MainKt.main()].executor": "Run",
+    "ModuleVcsDetector.initialDetectionPerformed": "true",
+    "RunOnceActivity.ShowReadmeOnStart": "true",
+    "RunOnceActivity.TerminalTabsStorage.copyFrom.TerminalArrangementManager.252": "true",
+    "RunOnceActivity.git.unshallow": "true",
+    "git-widget-placeholder": "master",
+    "kotlin-language-version-configured": "true",
+    "last_opened_file_path": "C:/Users/marco/Documents/Progettini/WifiAudioStreaming/WiFiAudioStreaming-Desktop/libs",
+    "settings.editor.selected.configurable": "org.jetbrains.plugins.gitlab.GitLabSettingsConfigurable"
+  }
+}]]></component>
+  <component name="RecentsManager">
+    <key name="CopyFile.RECENT_KEYS">
+      <recent name="C:\Users\marco\Documents\Progettini\WifiAudioStreaming\WiFiAudioStreaming-Desktop\libs" />
+    </key>
+  </component>
+  <component name="RunManager" selected="Kotlin.MainKt">
+    <configuration name="FFmpegTestKt" type="JetRunConfigurationType" temporary="true" nameIsGenerated="true">
+      <option name="MAIN_CLASS_NAME" value="FFmpegTestKt" />
+      <module name="WiFiAudioStreaming.main" />
+      <method v="2">
+        <option name="Make" enabled="true" />
+      </method>
+    </configuration>
+    <configuration name="MainKt" type="JetRunConfigurationType" temporary="true" nameIsGenerated="true">
+      <option name="MAIN_CLASS_NAME" value="MainKt" />
+      <module name="WiFiAudioStreaming.main" />
+      <method v="2">
+        <option name="Make" enabled="true" />
+      </method>
+    </configuration>
+    <configuration default="true" type="JetRunConfigurationType">
+      <module name="WiFiAudioStreaming-Desktop" />
+      <method v="2">
+        <option name="Make" enabled="true" />
+      </method>
+    </configuration>
+    <configuration default="true" type="KotlinStandaloneScriptRunConfigurationType">
+      <module name="WiFiAudioStreaming-Desktop" />
+      <option name="filePath" />
+      <method v="2" />
+    </configuration>
+    <recent_temporary>
+      <list>
+        <item itemvalue="Kotlin.MainKt" />
+        <item itemvalue="Kotlin.FFmpegTestKt" />
+        <item itemvalue="Kotlin.MainKt" />
+        <item itemvalue="Kotlin.FFmpegTestKt" />
+        <item itemvalue="Kotlin.MainKt" />
+      </list>
+    </recent_temporary>
+  </component>
+  <component name="SharedIndexes">
+    <attachedChunks>
+      <set>
+        <option value="bundled-jdk-30f59d01ecdd-26cb7f24e5b0-intellij.indexing.shared.core-IU-253.29346.240" />
+      </set>
+    </attachedChunks>
+  </component>
+  <component name="TaskManager">
+    <task active="true" id="Default" summary="Default task">
+      <changelist id="5f86ce91-f37e-4a3e-9b89-95bbba8740e8" name="Changes" comment="" />
+      <created>1772235442246</created>
+      <option name="number" value="Default" />
+      <option name="presentableId" value="Default" />
+      <updated>1772235442246</updated>
+    </task>
+    <task id="LOCAL-00001" summary="WIP: Inserito FFmpeg al posto di JavaSound">
+      <option name="closed" value="true" />
+      <created>1772302184624</created>
+      <option name="number" value="00001" />
+      <option name="presentableId" value="LOCAL-00001" />
+      <option name="project" value="LOCAL" />
+      <updated>1772302184624</updated>
+    </task>
+    <task id="LOCAL-00002" summary="WIP: Inserito FFmpeg al posto di JavaSound">
+      <option name="closed" value="true" />
+      <created>1772302457268</created>
+      <option name="number" value="00002" />
+      <option name="presentableId" value="LOCAL-00002" />
+      <option name="project" value="LOCAL" />
+      <updated>1772302457268</updated>
+    </task>
+    <task id="LOCAL-00003" summary="Ruota colori, Material You, migliore gestione di Windows.">
+      <option name="closed" value="true" />
+      <created>1772330800219</created>
+      <option name="number" value="00003" />
+      <option name="presentableId" value="LOCAL-00003" />
+      <option name="project" value="LOCAL" />
+      <updated>1772330800219</updated>
+    </task>
+    <task id="LOCAL-00004" summary="Miglior handshake client-server.">
+      <option name="closed" value="true" />
+      <created>1772362108866</created>
+      <option name="number" value="00004" />
+      <option name="presentableId" value="LOCAL-00004" />
+      <option name="project" value="LOCAL" />
+      <updated>1772362108866</updated>
+    </task>
+    <task id="LOCAL-00005" summary="Abbozzo crittografia. Latenza generale peggiorata. L'autenticazione non va a buon fine.">
+      <option name="closed" value="true" />
+      <created>1772388473235</created>
+      <option name="number" value="00005" />
+      <option name="presentableId" value="LOCAL-00005" />
+      <option name="project" value="LOCAL" />
+      <updated>1772388473235</updated>
+    </task>
+    <task id="LOCAL-00006" summary="Abbozzo crittografia. Latenza generale peggiorata. L'autenticazione non va a buon fine.">
+      <option name="closed" value="true" />
+      <created>1772396756202</created>
+      <option name="number" value="00006" />
+      <option name="presentableId" value="LOCAL-00006" />
+      <option name="project" value="LOCAL" />
+      <updated>1772396756202</updated>
+    </task>
+    <task id="LOCAL-00007" summary="Dettaglino per solo unicast con inserimento manuale ip.">
+      <option name="closed" value="true" />
+      <created>1772397275941</created>
+      <option name="number" value="00007" />
+      <option name="presentableId" value="LOCAL-00007" />
+      <option name="project" value="LOCAL" />
+      <updated>1772397275941</updated>
+    </task>
+    <task id="LOCAL-00008" summary="Dettaglino per solo unicast con inserimento manuale ip.">
+      <option name="closed" value="true" />
+      <created>1772471597447</created>
+      <option name="number" value="00008" />
+      <option name="presentableId" value="LOCAL-00008" />
+      <option name="project" value="LOCAL" />
+      <updated>1772471597447</updated>
+    </task>
+    <task id="LOCAL-00009" summary="Dettaglino per solo unicast con inserimento manuale ip.">
+      <option name="closed" value="true" />
+      <created>1772473702538</created>
+      <option name="number" value="00009" />
+      <option name="presentableId" value="LOCAL-00009" />
+      <option name="project" value="LOCAL" />
+      <updated>1772473702538</updated>
+    </task>
+    <option name="localTasksCounter" value="10" />
+    <servers />
+  </component>
+  <component name="Vcs.Log.Tabs.Properties">
+    <option name="TAB_STATES">
+      <map>
+        <entry key="MAIN">
+          <value>
+            <State />
+          </value>
+        </entry>
+      </map>
+    </option>
+  </component>
+  <component name="VcsManagerConfiguration">
+    <MESSAGE value="WIP: Inserito FFmpeg al posto di JavaSound" />
+    <MESSAGE value="Ruota colori, Material You, migliore gestione di Windows." />
+    <MESSAGE value="Miglior handshake client-server." />
+    <MESSAGE value="Abbozzo crittografia. Latenza generale peggiorata. L'autenticazione non va a buon fine." />
+    <MESSAGE value="Dettaglino per solo unicast con inserimento manuale ip." />
+    <option name="LAST_COMMIT_MESSAGE" value="Dettaglino per solo unicast con inserimento manuale ip." />
+  </component>
+</project>
