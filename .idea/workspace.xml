@@ -5,7 +5,9 @@
   </component>
   <component name="ChangeListManager">
     <list default="true" id="5f86ce91-f37e-4a3e-9b89-95bbba8740e8" name="Changes" comment="Dettaglino per solo unicast con inserimento manuale ip.">
-      <change beforePath="$PROJECT_DIR$/.github/workflows/release.yml" beforeDir="false" afterPath="$PROJECT_DIR$/.github/workflows/release.yml" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/build.gradle.kts" beforeDir="false" afterPath="$PROJECT_DIR$/build.gradle.kts" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/main/kotlin/Main.kt" beforeDir="false" afterPath="$PROJECT_DIR$/src/main/kotlin/Main.kt" afterDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />
@@ -55,12 +57,12 @@
     </option>
     <option name="RECENT_GIT_ROOT_PATH" value="$PROJECT_DIR$" />
   </component>
-  <component name="GitHubPullRequestSearchHistory"><![CDATA[{
-  "lastFilter": {
-    "state": "OPEN",
-    "assignee": "marcomorosi06"
+  <component name="GitHubPullRequestSearchHistory">{
+  &quot;lastFilter&quot;: {
+    &quot;state&quot;: &quot;OPEN&quot;,
+    &quot;assignee&quot;: &quot;marcomorosi06&quot;
   }
-}]]></component>
+}</component>
   <component name="GitLabMergeRequestFiltersHistory">{
   &quot;history&quot;: [
     {
@@ -89,7 +91,7 @@
 }</component>
   <component name="GithubPullRequestsUISettings"><![CDATA[{
   "selectedUrlAndAccountId": {
-    "url": "https://github.com/marcomorosi06/WiFiAudioStreaming-Desktop.git",
+    "url": "https://github.com/marcomorosi06/WiFiAudioStreaming-Desktop",
     "accountId": "dbb92e82-d357-4388-93c9-1df0b90229c9"
   }
 }]]></component>
@@ -103,20 +105,20 @@
     <option name="hideEmptyMiddlePackages" value="true" />
     <option name="showLibraryContents" value="true" />
   </component>
-  <component name="PropertiesComponent"><![CDATA[{
-  "keyToString": {
-    "Gradle.WiFiAudioStreaming-Desktop [:FFmpegTestKt.main()].executor": "Run",
-    "Gradle.WiFiAudioStreaming-Desktop [:MainKt.main()].executor": "Run",
-    "ModuleVcsDetector.initialDetectionPerformed": "true",
-    "RunOnceActivity.ShowReadmeOnStart": "true",
-    "RunOnceActivity.TerminalTabsStorage.copyFrom.TerminalArrangementManager.252": "true",
-    "RunOnceActivity.git.unshallow": "true",
-    "git-widget-placeholder": "master",
-    "kotlin-language-version-configured": "true",
-    "last_opened_file_path": "C:/Users/marco/Documents/Progettini/WifiAudioStreaming/WiFiAudioStreaming-Desktop/libs",
-    "settings.editor.selected.configurable": "org.jetbrains.plugins.gitlab.GitLabSettingsConfigurable"
+  <component name="PropertiesComponent">{
+  &quot;keyToString&quot;: {
+    &quot;Gradle.WiFiAudioStreaming-Desktop [:FFmpegTestKt.main()].executor&quot;: &quot;Run&quot;,
+    &quot;Gradle.WiFiAudioStreaming-Desktop [:MainKt.main()].executor&quot;: &quot;Run&quot;,
+    &quot;ModuleVcsDetector.initialDetectionPerformed&quot;: &quot;true&quot;,
+    &quot;RunOnceActivity.ShowReadmeOnStart&quot;: &quot;true&quot;,
+    &quot;RunOnceActivity.TerminalTabsStorage.copyFrom.TerminalArrangementManager.252&quot;: &quot;true&quot;,
+    &quot;RunOnceActivity.git.unshallow&quot;: &quot;true&quot;,
+    &quot;git-widget-placeholder&quot;: &quot;master&quot;,
+    &quot;kotlin-language-version-configured&quot;: &quot;true&quot;,
+    &quot;last_opened_file_path&quot;: &quot;C:/Users/marco/Documents/Progettini/WifiAudioStreaming/WiFiAudioStreaming-Desktop/libs&quot;,
+    &quot;settings.editor.selected.configurable&quot;: &quot;org.jetbrains.plugins.gitlab.GitLabSettingsConfigurable&quot;
   }
-}]]></component>
+}</component>
   <component name="RecentsManager">
     <key name="CopyFile.RECENT_KEYS">
       <recent name="C:\Users\marco\Documents\Progettini\WifiAudioStreaming\WiFiAudioStreaming-Desktop\libs" />

@@ -45,6 +45,9 @@ compose.desktop {
     application {
         mainClass = "MainKt"
 
+        // AGGIUNTA QUI: Forza lo stack IPv4 per l'eseguibile pacchettizzato nativamente
+        jvmArgs += listOf("-Djava.net.preferIPv4Stack=true")
+
         nativeDistributions {
             targetFormats(TargetFormat.Msi, TargetFormat.Dmg, TargetFormat.Deb, TargetFormat.Rpm)
 
@@ -52,7 +55,7 @@ compose.desktop {
             packageVersion = "2.0.0"
 
             buildTypes.release.proguard {
-                isEnabled.set(true)
+                isEnabled.set(false)
                 configurationFiles.from(project.file("proguard-rules.pro"))
             }
 

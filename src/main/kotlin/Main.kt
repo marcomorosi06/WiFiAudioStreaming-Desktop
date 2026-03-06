@@ -524,14 +524,24 @@ object NetworkHandler_v1 {
             val packet = DatagramPacket(buffer, buffer.size)
 
             socket = if (isMulticast) {
-                MulticastSocket(micPort).apply { joinGroup(InetAddress.getByName(MULTICAST_GROUP_IP)) }
+                MulticastSocket(micPort).apply {
+                    joinGroup(InetAddress.getByName(MULTICAST_GROUP_IP))
+                    soTimeout = 1000 // <-- AGGIUNTO: Evita il blocco infinito
+                }
             } else {
-                DatagramSocket(micPort)
+                DatagramSocket(micPort).apply {
+                    soTimeout = 1000 // <-- AGGIUNTO: Evita il blocco infinito
+                }
             }
 
             while (isActive) {
-                socket.receive(packet)
-                if (packet.length > 0) micOutputLine.write(packet.data, 0, packet.length)
+                try {
+                    socket.receive(packet)
+                    if (packet.length > 0) micOutputLine.write(packet.data, 0, packet.length)
+                } catch (e: java.net.SocketTimeoutException) {
+                    // Timeout normale, permette al while(isActive) di controllare se deve spegnersi
+                    continue
+                }
             }
         } catch (e: Exception) {
             if (e !is CancellationException) println("Mic receiving error: ${e.message}")
@@ -638,16 +648,15 @@ object NetworkHandler_v1 {
 
         streamingJob = scope.launch {
             try {
-                // =========================================================
-                // FIX 2 — FFmpeg parte subito, prima di aspettare il client.
-                // =========================================================
-                serverGrabber = buildAndStartGrabber(audioSettings)
-                if (serverGrabber == null) {
-                    onStatusUpdate("error_virtual_driver_missing", emptyArray())
-                    return@launch
-                }
-
                 if (isMulticast) {
+                    // In Multicast il server trasmette sempre a prescindere da chi ascolta,
+                    // quindi avviamo subito la cattura audio.
+                    serverGrabber = buildAndStartGrabber(audioSettings)
+                    if (serverGrabber == null) {
+                        onStatusUpdate("error_virtual_driver_missing", emptyArray())
+                        return@launch
+                    }
+
                     onStatusUpdate("Streaming Multicast on Port %d...", arrayOf(port))
 
                     MulticastSocket().use { socket ->
@@ -687,7 +696,6 @@ object NetworkHandler_v1 {
                                 }
                             }
                         } finally {
-                            // Manda BYE al gruppo: tutti i client in ascolto si disconnetteranno
                             try {
                                 val byeBytes = "BYE".toByteArray()
                                 socket.send(DatagramPacket(byeBytes, byeBytes.size, group, port))
@@ -696,8 +704,6 @@ object NetworkHandler_v1 {
                         }
                     }
                 } else { // Unicast
-                    // Loop esterno: il server rimane attivo e torna in attesa
-                    // ogni volta che un client si disconnette.
                     val localAddress = InetSocketAddress("0.0.0.0", port)
                     aSocket(SelectorManager(Dispatchers.IO)).udp().bind(localAddress) { reuseAddress = true }.use { socket ->
                         while (isActive) {
@@ -711,34 +717,12 @@ object NetworkHandler_v1 {
                             onStatusUpdate("Client Connected: %s", arrayOf(clientAddress.toString()))
                             stopAnnouncingPresence()
 
-                            // =========================================================
-                            // FIX 2 CORRETTO — Drain FFmpeg con deadline temporale.
-                            // grabSamples() è BLOCCANTE quindi non si può usare
-                            // "loop fino a null". Si usa withTimeout(100ms): se non
-                            // arriva nessun frame in 100ms il buffer è svuotato.
-                            // =========================================================
-                            serverGrabber?.let { grabber ->
-                                var staleFrames = 0
-                                val drainDeadlineMs = 100L
-                                val maxDrainMs = 2000L
-                                val overallDeadline = System.currentTimeMillis() + maxDrainMs
-                                var lastFrameTime = System.currentTimeMillis()
-
-                                withContext(Dispatchers.IO) {
-                                    while (System.currentTimeMillis() < overallDeadline) {
-                                        if (System.currentTimeMillis() - lastFrameTime > drainDeadlineMs) break
-                                        try {
-                                            withTimeout(drainDeadlineMs) {
-                                                val staleFrame = withContext(Dispatchers.IO) { grabber.grabSamples() }
-                                                if (staleFrame?.samples != null) {
-                                                    staleFrames++
-                                                    lastFrameTime = System.currentTimeMillis()
-                                                }
-                                            }
-                                        } catch (_: TimeoutCancellationException) { break }
-                                    }
-                                }
-                                println("--- Drained $staleFrames stale FFmpeg frames before streaming ---")
+                            // --- AVVIO FFMPEG SOLO DOPO LA CONNESSIONE DEL CLIENT ---
+                            // In questo modo i buffer Windows non si riempiono a vuoto nell'attesa.
+                            serverGrabber = buildAndStartGrabber(audioSettings)
+                            if (serverGrabber == null) {
+                                onStatusUpdate("error_virtual_driver_missing", emptyArray())
+                                break // Esce dal loop se manca il driver
                             }
 
                             socket.send(Datagram(buildPacket { writeText("HELLO_ACK") }, clientAddress))
@@ -750,12 +734,8 @@ object NetworkHandler_v1 {
                                 order(java.nio.ByteOrder.LITTLE_ENDIAN)
                             }
 
-                            // Flag condiviso: il pingJob lo abbassa se il client sparisce,
-                            // così il loop audio esce anche se grabSamples() è bloccante.
                             val clientAlive = java.util.concurrent.atomic.AtomicBoolean(true)
 
-                            // Job separato: manda PING ogni secondo al client.
-                            // Se il send fallisce 3 volte consecutive → client sparito.
                             val pingJob = launch {
                                 var failures = 0
                                 while (isActive && clientAlive.get()) {
@@ -776,7 +756,7 @@ object NetworkHandler_v1 {
                             try {
                                 while (isActive && clientAlive.get()) {
                                     val frame = serverGrabber?.grabSamples()
-                                    if (!clientAlive.get()) break  // controlla dopo il blocco
+                                    if (!clientAlive.get()) break
                                     if (frame != null && frame.samples != null) {
                                         val shortBuffer = frame.samples[0] as java.nio.ShortBuffer
                                         shortBuffer.position(0)
@@ -798,7 +778,6 @@ object NetworkHandler_v1 {
                                             try {
                                                 socket.send(Datagram(packet, clientAddress))
                                             } catch (_: Exception) {
-                                                // send fallito → client sparito, esci
                                                 clientAlive.set(false)
                                                 break
                                             }
@@ -807,23 +786,24 @@ object NetworkHandler_v1 {
                                 }
                             } finally {
                                 pingJob.cancel()
-                                // Manda BYE solo se il server si sta fermando volontariamente
-                                // (se clientAlive è false il client è già sparito)
                                 if (clientAlive.get()) {
                                     try {
                                         socket.send(Datagram(buildPacket { writeText("BYE") }, clientAddress))
                                         println("--- Sent BYE to $clientAddress ---")
                                     } catch (_: Exception) {}
                                 }
-                                // Il while(isActive) esterno torna automaticamente in waiting
+
+                                // --- CHIUDIAMO FFMPEG QUANDO IL CLIENT SI SCOLLEGA ---
+                                // Così se torna in "Waiting for Unicast Client", smettiamo di registrare.
+                                serverGrabber?.stop()
+                                serverGrabber?.release()
+                                serverGrabber = null
                             }
                         }
                     }
                 }
             } catch (t: Throwable) {
                 if (t !is CancellationException) {
-                    // Se serverGrabber è null significa che stopCurrentStream() ha già
-                    // fermato FFmpeg intenzionalmente — l'eccezione è attesa, non è un crash
                     if (serverGrabber != null) {
                         println("=== CRITICAL SERVER ERROR ===")
                         t.printStackTrace()
@@ -984,14 +964,15 @@ object NetworkHandler_v1 {
     suspend fun stopCurrentStream() {
         stopAnnouncingPresence()
 
-        // Ferma FFmpeg: questo sblocca grabSamples() nel job
+        // Ferma la cattura per sbloccare eventuali chiamate bloccanti di grabSamples(),
+        // ma NON chiamare release() e non settare serverGrabber a null qui!
         serverGrabber?.stop()
-        serverGrabber?.release()
-        serverGrabber = null
 
-        // Ora il job può terminare pulito
+        // Ora il job può terminare. La memoria verrà liberata dal blocco finally
+        // all'interno di launchServerInstance.
         streamingJob?.cancelAndJoin()
         micReceiverJob?.cancelAndJoin()
+
         streamingJob = null
         micReceiverJob = null
     }
