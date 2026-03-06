@@ -44,6 +44,10 @@ Turn your smartphone into a portable audio receiver or transmitter.
 <img src="https://gitlab.com/marcomorosi.dev/WiFiAudioStreaming-Desktop/-/raw/master/images/get-it-on-gitlab-badge.png" alt="Get it on GitLab" height="80">  
 </a>  
 
+<a href="https://apt.izzysoft.de/packages/com.cuscus.wifiaudiostreaming">  
+<img src="https://gitlab.com/IzzyOnDroid/repo/-/raw/master/assets/IzzyOnDroid.png" alt="Get it on IzzyOnDroidGitLab" height="80">  
+</a> 
+
 ---
 
 ## 🚀 Getting Started  
