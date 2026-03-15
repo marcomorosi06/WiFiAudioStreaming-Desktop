@@ -7,6 +7,8 @@ Turn your computer into a **wireless audio transmitter or receiver**.
 
 This application allows you to send your PC's audio to any device on the same local network, or listen to audio from another device. It is designed to work seamlessly with the [Android version](https://github.com/marcomorosi06/WiFiAudioStreaming-Android).
 
+[![ko-fi](https://ko-fi.com/img/githubbutton_sm.svg)](https://ko-fi.com/marcomorosi)
+
 ---
 
 # 📸 Overview
@@ -152,7 +154,7 @@ To compile the project you need **JDK 17 or newer** installed.
 ## 1️⃣ Clone the repository
 
 ```bash
-git clone https://github.com/marcomorosi06/WiFiAudioStreaming-Desktop.git
+git clone https://gitlab.com/marcomorosi.dev/WiFiAudioStreaming-Desktop.git
 ```
 
 ## 2️⃣ Enter the project directory
@@ -219,6 +221,14 @@ build/compose/binaries/main/app/
 - **UI Framework:** Jetpack Compose for Desktop  
 - **Networking:** Ktor (UDP sockets)  
 - **Audio Engine:** FFmpeg (via command-line/process integration)
+
+---
+
+# ☕ Support the Project
+
+This project is completely free and open-source. If it helped you as much as it helped me, consider buying me a coffee to support its ongoing development!
+
+[![ko-fi](https://ko-fi.com/img/githubbutton_sm.svg)](https://ko-fi.com/marcomorosi)
 
 ---
 
