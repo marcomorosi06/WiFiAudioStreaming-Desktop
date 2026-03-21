@@ -46,6 +46,7 @@ import androidx.compose.ui.text.input.KeyboardType
 import kotlin.math.atan2
 import kotlin.math.cos
 import kotlin.math.sin
+import kotlinx.coroutines.delay
 
 // =================================================================
 // ==                  SCHERMATA PRINCIPALE                       ==
@@ -55,6 +56,7 @@ import kotlin.math.sin
 @Composable
 fun AppContent(
     appSettings: AppSettings,
+    audioSettings: AudioSettings_V1,
     isServer: Boolean,
     isStreaming: Boolean,
     connectionStatus: String,
@@ -69,6 +71,7 @@ fun AppContent(
     selectedServerMicOutput: Mixer.Info?,
     streamingPort: String,
     localIp: String,
+    httpUrl: String?,
     serverVolume: Float,
     onServerVolumeChange: (Float) -> Unit,
     isWindowsOS: Boolean,
@@ -162,16 +165,26 @@ fun AppContent(
             }
 
             item {
-                Text(connectionStatus, style = MaterialTheme.typography.bodyLarge, textAlign = TextAlign.Center)
-                if (isServer) {
-                    Text(
-                        "Server IP: $localIp | Port: $streamingPort",
-                        style = MaterialTheme.typography.bodyMedium,
-                        fontWeight = FontWeight.Bold,
-                        color = MaterialTheme.colorScheme.primary
+                ServerStatusBar(
+                    isServer = isServer,
+                    isStreaming = isStreaming,
+                    connectionStatus = connectionStatus,
+                    localIp = localIp,
+                    streamingPort = streamingPort,
+                    httpUrl = httpUrl
+                )
+            }
+
+            if (isServer && isStreaming && appSettings.rtpEnabled) {
+                item {
+                    RtpSdpBanner(
+                        localIp = localIp,
+                        isMulticast = isMulticastMode,
+                        port = appSettings.rtpPort,
+                        sampleRate = audioSettings.sampleRate.toInt(),
+                        channels = audioSettings.channels
                     )
                 }
-                Spacer(Modifier.height(8.dp))
             }
 
             item {
@@ -210,7 +223,8 @@ fun AppContent(
                             onServerMicOutputSelected = onSelectedServerMicOutputChange,
                             isMulticast = isMulticastMode,
                             onMulticastChanged = onMulticastModeChange,
-                            virtualDriverStatus = virtualDriverStatus // Pass down for the inline hint
+                            virtualDriverStatus = virtualDriverStatus,
+                            rtpEnabled = appSettings.rtpEnabled
                         )
                     }
                 }
@@ -242,7 +256,7 @@ fun AppContent(
                                 OutlinedTextField(
                                     value = manualIp,
                                     onValueChange = { manualIp = it },
-                                    label = { Text("Manual Server IP (only Unicast)") },
+                                    label = { Text("Manual Server IP") },
                                     modifier = Modifier.weight(1f),
                                     singleLine = true
                                 )
@@ -469,7 +483,9 @@ fun SettingsScreen(
                             onPortChange = onStreamingPortChange,
                             micPort = micPort,
                             onMicPortChange = onMicPortChange,
-                            experimentalFeaturesEnabled = appSettings.experimentalFeaturesEnabled
+                            experimentalFeaturesEnabled = appSettings.experimentalFeaturesEnabled,
+                            appSettings = appSettings,
+                            onAppSettingsChange = onAppSettingsChange
                         )
                     }
                 }
@@ -511,6 +527,19 @@ fun SettingsScreen(
                             description = "Marco Morosi",
                             icon = Icons.Outlined.Person
                         )
+                        HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
+                        ClickableSetting(
+                            title = stringResource("support_kofi_title"),
+                            description = stringResource("support_kofi_desc"),
+                            icon = Icons.Outlined.LocalCafe,
+                            onClick = {
+                                try {
+                                    Desktop.getDesktop().browse(URI("https://ko-fi.com/marcomorosi"))
+                                } catch (e: Exception) {
+                                    println("Could not open link: ${e.message}")
+                                }
+                            }
+                        )
                     }
                 }
             }
@@ -532,74 +561,122 @@ fun StreamingControlCenter(
         AnimatedContent(
             targetState = isStreaming,
             transitionSpec = {
-                fadeIn(animationSpec = tween(300)) + scaleIn(initialScale = 0.9f) togetherWith
-                        fadeOut(animationSpec = tween(300)) + scaleOut(targetScale = 0.9f)
+                fadeIn(animationSpec = tween(300)) + scaleIn(initialScale = 0.95f) togetherWith
+                        fadeOut(animationSpec = tween(200)) + scaleOut(targetScale = 0.95f)
             },
-            modifier = Modifier.padding(24.dp).fillMaxWidth()
+            modifier = Modifier.fillMaxWidth()
         ) { streaming ->
-            Column(
-                horizontalAlignment = Alignment.CenterHorizontally,
-                verticalArrangement = Arrangement.spacedBy(12.dp)
-            ) {
-                if (streaming) {
-                    Icon(
-                        Icons.Filled.Podcasts, stringResource("streaming_active"),
-                        modifier = Modifier.size(48.dp), tint = MaterialTheme.colorScheme.primary
-                    )
-                    Text(
-                        stringResource("streaming_active"),
-                        style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold
-                    )
+            if (streaming) {
+                Column(modifier = Modifier.padding(24.dp), verticalArrangement = Arrangement.spacedBy(0.dp)) {
+                    // Indicatore live + pulsante stop sulla stessa riga
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                            LivePulse()
+                            Text(
+                                stringResource("streaming_active"),
+                                style = MaterialTheme.typography.titleMedium,
+                                fontWeight = FontWeight.SemiBold
+                            )
+                        }
+                        FilledTonalButton(
+                            onClick = onStop,
+                            colors = ButtonDefaults.filledTonalButtonColors(
+                                containerColor = MaterialTheme.colorScheme.errorContainer,
+                                contentColor = MaterialTheme.colorScheme.onErrorContainer
+                            )
+                        ) {
+                            Icon(Icons.Filled.Stop, contentDescription = null, modifier = Modifier.size(18.dp))
+                            Spacer(Modifier.width(6.dp))
+                            Text(stringResource("stop"))
+                        }
+                    }
+                    // Slider volume — solo in modalità server
                     if (isServer) {
-                        Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.padding(top = 16.dp)) {
-                            Text("Transmission Volume: ${(serverVolume * 100).toInt()}%", style = MaterialTheme.typography.bodyMedium)
+                        Spacer(Modifier.height(20.dp))
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(12.dp),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Icon(
+                                if (serverVolume == 0f) Icons.Outlined.VolumeOff
+                                else if (serverVolume < 1f) Icons.Outlined.VolumeDown
+                                else Icons.Outlined.VolumeUp,
+                                contentDescription = null,
+                                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.size(20.dp)
+                            )
                             Slider(
                                 value = serverVolume,
                                 onValueChange = onServerVolumeChange,
-                                valueRange = 0f..2f, // Da 0 (muto) a 200% (boost)
-                                modifier = Modifier.width(200.dp)
+                                valueRange = 0f..2f,
+                                modifier = Modifier.weight(1f)
                             )
-                        }
-                    }
-                    Button(
-                        onClick = onStop,
-                        colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error)
-                    ) {
-                        Icon(Icons.Filled.Stop, contentDescription = null)
-                        Spacer(Modifier.width(8.dp)); Text(stringResource("stop"))
-                    }
-                } else {
-                    val icon = if (isServer) Icons.Outlined.PlayCircle else Icons.Filled.Sensors
-                    val title = if (isServer) stringResource("ready_to_stream") else stringResource("waiting_for_connection")
-                    val subtitle = if (isServer) stringResource("press_start_server") else stringResource("select_server_from_list")
-
-                    Icon(icon, title, modifier = Modifier.size(48.dp), tint = MaterialTheme.colorScheme.secondary)
-                    Text(title, style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
-                    Text(subtitle, style = MaterialTheme.typography.bodyMedium, textAlign = TextAlign.Center)
-
-                    if (isServer) {
-                        Button(
-                            onClick = onStart,
-                            enabled = isServerReady,
-                            modifier = Modifier.padding(top = 8.dp)
-                        ) {
-                            Icon(Icons.Default.PlayArrow, contentDescription = null)
-                            Spacer(Modifier.width(8.dp)); Text(stringResource("start_server"))
-                        }
-                        // Show a small hint below the button when it's disabled due to missing driver
-                        if (!isServerReady) {
                             Text(
-                                text = "Install the required audio driver to enable streaming",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.error,
-                                textAlign = TextAlign.Center
+                                "${(serverVolume * 100).toInt()}%",
+                                style = MaterialTheme.typography.labelMedium,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.width(40.dp)
                             )
+                        }
+                    }
+                }
+            } else {
+                Row(
+                    modifier = Modifier.padding(horizontal = 24.dp, vertical = 20.dp).fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                        Text(
+                            if (isServer) stringResource("ready_to_stream") else stringResource("waiting_for_connection"),
+                            style = MaterialTheme.typography.titleMedium,
+                            fontWeight = FontWeight.SemiBold
+                        )
+                        Text(
+                            if (isServer) stringResource("press_start_server") else stringResource("select_server_from_list"),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        if (isServer && !isServerReady) {
+                            Text(
+                                stringResource("install_driver_hint"),
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.error
+                            )
+                        }
+                    }
+                    if (isServer) {
+                        Spacer(Modifier.width(16.dp))
+                        Button(onClick = onStart, enabled = isServerReady) {
+                            Icon(Icons.Default.PlayArrow, contentDescription = null, modifier = Modifier.size(18.dp))
+                            Spacer(Modifier.width(6.dp))
+                            Text(stringResource("start_server"))
                         }
                     }
                 }
             }
         }
     }
+}
+
+// Indicatore rosso pulsante "Live"
+@Composable
+fun LivePulse() {
+    val infiniteTransition = rememberInfiniteTransition(label = "live_pulse")
+    val alpha by infiniteTransition.animateFloat(
+        initialValue = 1f, targetValue = 0.3f, label = "alpha",
+        animationSpec = infiniteRepeatable(tween(900), RepeatMode.Reverse)
+    )
+    Box(
+        modifier = Modifier
+            .size(10.dp)
+            .background(MaterialTheme.colorScheme.error.copy(alpha = alpha), CircleShape)
+    )
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -643,51 +720,73 @@ fun ServerConfigCard(
     inputDevices: List<Mixer.Info>, selectedInputDevice: Mixer.Info?, onInputDeviceSelected: (Mixer.Info) -> Unit,
     outputDevices: List<Mixer.Info>, selectedServerMicOutput: Mixer.Info?, onServerMicOutputSelected: (Mixer.Info) -> Unit,
     isMulticast: Boolean, onMulticastChanged: (Boolean) -> Unit,
-    virtualDriverStatus: VirtualDriverStatus // NEW PARAMETER
+    virtualDriverStatus: VirtualDriverStatus,
+    rtpEnabled: Boolean
 ) {
     ElevatedCard(modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(24.dp)) {
-        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
-            Text("Server Configuration", style = MaterialTheme.typography.titleLarge)
+        Column(Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
+            Text(stringResource("server_configuration"), style = MaterialTheme.typography.titleLarge)
 
-            // Show driver status inline: OK badge or a compact "not installed" note
-            when (virtualDriverStatus) {
-                is VirtualDriverStatus.Ok -> {
-                    InfoSetting(
-                        title = "System Audio Capture",
-                        description = "Virtual audio driver detected ✓",
-                        icon = Icons.Outlined.VolumeUp
+            // Stato driver — badge compatto colorato
+            val (driverIcon, driverLabel, driverOk) = when (virtualDriverStatus) {
+                is VirtualDriverStatus.Ok ->
+                    Triple(Icons.Outlined.CheckCircle, stringResource("driver_detected"), true)
+                is VirtualDriverStatus.Missing ->
+                    Triple(Icons.Outlined.Warning, "${virtualDriverStatus.driverName} — ${stringResource("driver_not_installed", virtualDriverStatus.driverName)}", false)
+                is VirtualDriverStatus.LinuxActionRequired ->
+                    Triple(Icons.Outlined.Terminal, stringResource("linux_deps_inline"), false)
+            }
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .background(
+                        if (driverOk) MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.5f)
+                        else MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.5f),
+                        RoundedCornerShape(12.dp)
                     )
-                }
-                is VirtualDriverStatus.Missing -> {
-                    InfoSetting(
-                        title = "System Audio Capture",
-                        description = "${virtualDriverStatus.driverName} — not installed. See the warning above.",
-                        icon = Icons.Outlined.VolumeOff
-                    )
-                }
-                is VirtualDriverStatus.LinuxActionRequired -> {
-                    InfoSetting(
-                        title = "System Audio Capture",
-                        description = "Missing Linux dependencies. Check the popup.",
-                        icon = Icons.Outlined.Warning
-                    )
-                }
+                    .padding(horizontal = 14.dp, vertical = 10.dp)
+            ) {
+                Icon(
+                    driverIcon, contentDescription = null,
+                    modifier = Modifier.size(18.dp),
+                    tint = if (driverOk) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error
+                )
+                Text(
+                    driverLabel,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = if (driverOk) MaterialTheme.colorScheme.onPrimaryContainer
+                    else MaterialTheme.colorScheme.onErrorContainer
+                )
             }
 
+            // Mic output (sperimentale)
             AnimatedVisibility(experimentalFeaturesEnabled) {
-                DeviceDropdown("Mic Output (Received)", outputDevices, selectedServerMicOutput, onServerMicOutputSelected)
+                DeviceDropdown(stringResource("mic_output_received"), outputDevices, selectedServerMicOutput, onServerMicOutputSelected)
             }
 
+            // Multicast toggle
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.SpaceBetween
             ) {
+                val actualMulticast = isMulticast || rtpEnabled
+
                 Column(Modifier.weight(1f)) {
-                    Text("Multicast Mode", style = MaterialTheme.typography.bodyLarge)
-                    Text("Broadcast to multiple clients", style = MaterialTheme.typography.bodySmall)
+                    Text(stringResource("multicast_mode"), style = MaterialTheme.typography.bodyLarge)
+                    Text(
+                        if (rtpEnabled) stringResource("rtp_forces_multicast") else stringResource("multicast_description"),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
                 }
-                Switch(checked = isMulticast, onCheckedChange = onMulticastChanged)
+                Switch(
+                    checked = actualMulticast,
+                    enabled = !rtpEnabled, // Disabilita lo switch se RTP è attivo
+                    onCheckedChange = onMulticastChanged
+                )
             }
         }
     }
@@ -798,6 +897,27 @@ fun DeviceItem(hostname: String, serverInfo: ServerInfo, onClick: () -> Unit, en
             Column(modifier = Modifier.weight(1f)) {
                 Text(hostname, fontWeight = FontWeight.Bold)
                 Text("${serverInfo.ip}:${serverInfo.port} ($modeText)", style = MaterialTheme.typography.bodySmall)
+                // Badge protocolli — visibili solo se il server è v2
+                val caps = serverInfo.capabilities
+                if (caps != null && caps.protocols.size > 1) {
+                    Spacer(Modifier.height(4.dp))
+                    Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                        caps.protocols.forEach { proto ->
+                            val (label, color) = when (proto) {
+                                StreamingProtocol.WFAS -> "WFAS" to MaterialTheme.colorScheme.primaryContainer
+                                StreamingProtocol.RTP  -> "RTP"  to MaterialTheme.colorScheme.tertiaryContainer
+                                StreamingProtocol.HTTP -> "HTTP" to MaterialTheme.colorScheme.secondaryContainer
+                            }
+                            Surface(shape = RoundedCornerShape(50), color = color) {
+                                Text(
+                                    label,
+                                    style = MaterialTheme.typography.labelSmall,
+                                    modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                                )
+                            }
+                        }
+                    }
+                }
             }
             Icon(Icons.AutoMirrored.Filled.ArrowForward, contentDescription = stringResource("connect"))
         }
@@ -858,11 +978,136 @@ fun AudioSettingsContent(settings: AudioSettings_V1, onSettingsChange: (AudioSet
 }
 
 @Composable
+fun ServerStatusBar(
+    isServer: Boolean,
+    isStreaming: Boolean,
+    connectionStatus: String,
+    localIp: String,
+    streamingPort: String,
+    httpUrl: String?
+) {
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
+        // Status pill
+        Surface(
+            shape = RoundedCornerShape(50),
+            color = if (isStreaming) MaterialTheme.colorScheme.primaryContainer
+            else MaterialTheme.colorScheme.surfaceVariant,
+            modifier = Modifier.align(Alignment.CenterHorizontally)
+        ) {
+            Row(
+                modifier = Modifier.padding(horizontal = 16.dp, vertical = 6.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                if (isStreaming) LivePulse()
+                Text(
+                    connectionStatus,
+                    style = MaterialTheme.typography.labelLarge,
+                    color = if (isStreaming) MaterialTheme.colorScheme.onPrimaryContainer
+                    else MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+        }
+        // IP / porta — solo in modalità server
+        if (isServer) {
+            Text(
+                "IP $localIp · porta $streamingPort",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.align(Alignment.CenterHorizontally)
+            )
+        }
+        // Banner HTTP
+        if (httpUrl != null) {
+            HttpUrlBanner(url = httpUrl)
+        }
+    }
+}
+
+@Composable
+fun HttpUrlBanner(url: String) {
+    val clipboardManager = LocalClipboardManager.current
+    var copied by remember { mutableStateOf(false) }
+
+    ElevatedCard(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(12.dp),
+        colors = CardDefaults.elevatedCardColors(
+            containerColor = MaterialTheme.colorScheme.secondaryContainer
+        )
+    ) {
+        Row(
+            modifier = Modifier.padding(horizontal = 16.dp, vertical = 10.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            Icon(
+                Icons.Outlined.Language,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.onSecondaryContainer,
+                modifier = Modifier.size(20.dp)
+            )
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    stringResource("http_stream_active"),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSecondaryContainer
+                )
+                Text(
+                    url,
+                    style = MaterialTheme.typography.bodyMedium,
+                    fontWeight = FontWeight.Bold,
+                    color = MaterialTheme.colorScheme.onSecondaryContainer
+                )
+            }
+            IconButton(
+                onClick = {
+                    clipboardManager.setText(AnnotatedString(url))
+                    copied = true
+                },
+                modifier = Modifier.size(36.dp)
+            ) {
+                Icon(
+                    if (copied) Icons.Outlined.CheckCircle else Icons.Outlined.ContentCopy,
+                    contentDescription = stringResource("copy_url"),
+                    tint = MaterialTheme.colorScheme.onSecondaryContainer,
+                    modifier = Modifier.size(18.dp)
+                )
+            }
+            // Apri nel browser di sistema
+            IconButton(
+                onClick = {
+                    try { Desktop.getDesktop().browse(URI(url)) } catch (_: Exception) {}
+                },
+                modifier = Modifier.size(36.dp)
+            ) {
+                Icon(
+                    Icons.Outlined.OpenInBrowser,
+                    contentDescription = stringResource("open_in_browser"),
+                    tint = MaterialTheme.colorScheme.onSecondaryContainer,
+                    modifier = Modifier.size(18.dp)
+                )
+            }
+        }
+    }
+    // Resetta l'icona "copied" dopo 2s
+    if (copied) {
+        LaunchedEffect(Unit) {
+            delay(2000)
+            copied = false
+        }
+    }
+}
+
+@Composable
 fun NetworkSettingsContent(
     port: String, onPortChange: (String) -> Unit,
     micPort: String, onMicPortChange: (String) -> Unit,
-    experimentalFeaturesEnabled: Boolean
+    experimentalFeaturesEnabled: Boolean,
+    appSettings: AppSettings,
+    onAppSettingsChange: (AppSettings) -> Unit
 ) {
+    // --- Porta audio WFAS ---
     OutlinedTextField(
         port,
         { if (it.all(Char::isDigit) && it.length <= 5) onPortChange(it) },
@@ -878,6 +1123,149 @@ fun NetworkSettingsContent(
             singleLine = true,
             modifier = Modifier.fillMaxWidth()
         )
+    }
+
+    val interfaces = remember {
+        try {
+            java.net.NetworkInterface.getNetworkInterfaces().toList()
+                .filter { it.isUp && !it.isLoopback && it.inetAddresses.toList().any { addr -> addr is java.net.Inet4Address } }
+                .map { it.displayName to it.displayName }
+        } catch (e: Exception) {
+            emptyList()
+        }
+    }
+
+    val interfaceOptions = listOf("Auto" to "Auto") + interfaces
+
+    ExposedDropdown(
+        label = stringResource("network_interface"),
+        value = appSettings.networkInterface,
+        options = interfaceOptions,
+        onOptionSelected = { onAppSettingsChange(appSettings.copy(networkInterface = it)) },
+        modifier = Modifier.fillMaxWidth()
+    )
+    Text(
+        text = stringResource("network_interface_desc"),
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+        modifier = Modifier.padding(bottom = 12.dp)
+    )
+
+    HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp))
+    Text(
+        stringResource("server_protocols"),
+        style = MaterialTheme.typography.labelLarge,
+        modifier = Modifier.padding(top = 4.dp, bottom = 2.dp)
+    )
+    Text(
+        stringResource("server_protocols_desc"),
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant
+    )
+
+    // WFAS — sempre attivo, non disattivabile
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(12.dp)
+    ) {
+        Icon(Icons.Outlined.Wifi, contentDescription = null,
+            tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(20.dp))
+        Column(Modifier.weight(1f)) {
+            Text("WFAS (custom)", style = MaterialTheme.typography.bodyLarge)
+            Text(stringResource("protocol_wfas_desc"),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+        // Badge "sempre attivo" al posto dello switch
+        Surface(
+            shape = RoundedCornerShape(50),
+            color = MaterialTheme.colorScheme.primaryContainer
+        ) {
+            Text(
+                stringResource("always_on"),
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onPrimaryContainer,
+                modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+            )
+        }
+    }
+
+    // RTP toggle
+    SwitchSetting(
+        title = "RTP/PCM",
+        description = stringResource("protocol_rtp_desc"),
+        icon = Icons.Outlined.Radio,
+        checked = appSettings.rtpEnabled,
+        onCheckedChange = { onAppSettingsChange(appSettings.copy(rtpEnabled = it)) }
+    )
+    AnimatedVisibility(appSettings.rtpEnabled) {
+        OutlinedTextField(
+            appSettings.rtpPort,
+            { if (it.all(Char::isDigit) && it.length <= 5) onAppSettingsChange(appSettings.copy(rtpPort = it)) },
+            label = { Text("Porta RTP") },
+            singleLine = true,
+            modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp)
+        )
+    }
+
+    // HTTP toggle + campo porta
+    SwitchSetting(
+        title = stringResource("protocol_http_title"),
+        description = stringResource("protocol_http_desc"),
+        icon = Icons.Outlined.Language,
+        checked = appSettings.httpEnabled,
+        onCheckedChange = { onAppSettingsChange(appSettings.copy(httpEnabled = it)) }
+    )
+    AnimatedVisibility(appSettings.httpEnabled) {
+        Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            OutlinedTextField(
+                appSettings.httpPort,
+                { if (it.all(Char::isDigit) && it.length <= 5) onAppSettingsChange(appSettings.copy(httpPort = it)) },
+                label = { Text(stringResource("http_port")) },
+                singleLine = true,
+                modifier = Modifier.fillMaxWidth(),
+                supportingText = { Text(stringResource("http_port_hint")) }
+            )
+            // Scelta codec — due opzioni chiare
+            Text(stringResource("http_codec_label"), style = MaterialTheme.typography.labelLarge)
+            SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {
+                SegmentedButton(
+                    selected = !appSettings.httpSafariMode,
+                    onClick = { onAppSettingsChange(appSettings.copy(httpSafariMode = false)) },
+                    shape = SegmentedButtonDefaults.itemShape(0, 2),
+                    icon = { Icon(Icons.Outlined.Speed, null, Modifier.size(ButtonDefaults.IconSize)) }
+                ) { Text("Opus") }
+                SegmentedButton(
+                    selected = appSettings.httpSafariMode,
+                    onClick = { onAppSettingsChange(appSettings.copy(httpSafariMode = true)) },
+                    shape = SegmentedButtonDefaults.itemShape(1, 2),
+                    icon = { Icon(Icons.Outlined.PhoneIphone, null, Modifier.size(ButtonDefaults.IconSize)) }
+                ) { Text("AAC (Safari)") }
+            }
+            Text(
+                if (appSettings.httpSafariMode) stringResource("http_codec_aac_desc")
+                else stringResource("http_codec_opus_desc"),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            Row(
+                modifier = Modifier.fillMaxWidth().padding(top = 4.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                Icon(
+                    imageVector = Icons.Outlined.Info,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.size(16.dp)
+                )
+                Text(
+                    text = stringResource("http_latency_warning"),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+        }
     }
 }
 
@@ -1264,5 +1652,107 @@ fun AdvancedColorPicker(
             textStyle = LocalTextStyle.current.copy(textAlign = TextAlign.Center),
             keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Ascii)
         )
+    }
+}
+
+@Composable
+fun RtpSdpBanner(
+    localIp: String,
+    isMulticast: Boolean,
+    port: String,
+    sampleRate: Int,
+    channels: Int
+) {
+    val clipboardManager = LocalClipboardManager.current
+    var copied by remember { mutableStateOf(false) }
+
+    // Generazione dinamica del file SDP
+    val targetIp = if (isMulticast) "239.255.0.1" else localIp
+    val sdpContent = """
+        v=0
+        o=- 0 0 IN IP4 $localIp
+        s=WiFiAudioStreamer RTP
+        c=IN IP4 $targetIp
+        t=0 0
+        m=audio $port RTP/AVP 96
+        a=rtpmap:96 L16/$sampleRate/$channels
+    """.trimIndent()
+
+    ElevatedCard(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(12.dp),
+        colors = CardDefaults.elevatedCardColors(
+            containerColor = MaterialTheme.colorScheme.tertiaryContainer
+        )
+    ) {
+        Row(
+            modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            Icon(
+                Icons.Outlined.Radio,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.onTertiaryContainer,
+                modifier = Modifier.size(24.dp)
+            )
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = stringResource("rtp_active"),
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onTertiaryContainer
+                )
+                Text(
+                    text = stringResource("rtp_description"),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onTertiaryContainer.copy(alpha = 0.8f)
+                )
+            }
+
+            // Pulsante: Copia negli appunti
+            IconButton(
+                onClick = {
+                    clipboardManager.setText(AnnotatedString(sdpContent))
+                    copied = true
+                },
+                modifier = Modifier.background(MaterialTheme.colorScheme.tertiary, CircleShape).size(36.dp)
+            ) {
+                Icon(
+                    imageVector = if (copied) Icons.Outlined.Check else Icons.Outlined.ContentCopy,
+                    contentDescription = stringResource("copy_sdp"),
+                    tint = MaterialTheme.colorScheme.onTertiary,
+                    modifier = Modifier.size(18.dp)
+                )
+            }
+
+            // Pulsante: Salva su file
+            IconButton(
+                onClick = {
+                    val dialog = java.awt.FileDialog(null as java.awt.Frame?, "SDP", java.awt.FileDialog.SAVE)
+                    dialog.file = "stream.sdp"
+                    dialog.isVisible = true
+
+                    if (dialog.directory != null && dialog.file != null) {
+                        val file = java.io.File(dialog.directory, dialog.file)
+                        file.writeText(sdpContent)
+                    }
+                },
+                modifier = Modifier.background(MaterialTheme.colorScheme.tertiary, CircleShape).size(36.dp)
+            ) {
+                Icon(
+                    imageVector = Icons.Outlined.SaveAlt,
+                    contentDescription = stringResource("save_sdp"),
+                    tint = MaterialTheme.colorScheme.onTertiary,
+                    modifier = Modifier.size(18.dp)
+                )
+            }
+        }
+    }
+
+    if (copied) {
+        LaunchedEffect(Unit) {
+            kotlinx.coroutines.delay(2000)
+            copied = false
+        }
     }
 }

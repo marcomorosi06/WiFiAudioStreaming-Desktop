@@ -10,7 +10,7 @@ plugins {
 }
 
 group = "com.wifiaudiostreaming"
-version = "0.2-beta"
+version = "0.3-beta"
 
 repositories {
     google()
@@ -45,8 +45,10 @@ compose.desktop {
     application {
         mainClass = "MainKt"
 
-        // AGGIUNTA QUI: Forza lo stack IPv4 per l'eseguibile pacchettizzato nativamente
-        jvmArgs += listOf("-Djava.net.preferIPv4Stack=true")
+        jvmArgs += listOf(
+            "-Djava.net.preferIPv4Stack=true",
+            "-XX:UseAVX=2"
+        )
 
         nativeDistributions {
             targetFormats(TargetFormat.Msi, TargetFormat.Dmg, TargetFormat.Deb, TargetFormat.Rpm)
