@@ -211,12 +211,18 @@ sealed class VirtualDriverStatus {
 
 object AutostartManager {
     fun getExecutablePath(): String {
-        val appPath = System.getProperty("jpackage.app-path")
-        if (appPath != null) return appPath
+        val jpackagePath = System.getProperty("jpackage.app-path")
+        if (!jpackagePath.isNullOrEmpty()) return jpackagePath
+
+        val processPath = ProcessHandle.current().info().command().orElse("")
+        if (processPath.isNotEmpty() && !processPath.contains("java.exe") && !processPath.contains("javaw.exe")) {
+            return processPath
+        }
+
         return try {
             val uri = AutostartManager::class.java.protectionDomain.codeSource.location.toURI()
             val path = File(uri).absolutePath
-            if (path.endsWith(".jar")) "java -jar \"$path\"" else path
+            if (path.endsWith(".jar")) "javaw -jar \"$path\"" else path
         } catch (e: Exception) {
             ""
         }
@@ -225,23 +231,26 @@ object AutostartManager {
     fun toggleAutostart(enable: Boolean): String? {
         val os = System.getProperty("os.name").lowercase()
         val exePath = getExecutablePath()
-        if (exePath.isEmpty()) return "Error: unable to determine executable path."
+        if (exePath.isEmpty()) return "Error: Executable path not found."
 
-        val appName = "com.wifiaudiostreaming"
+        val appName = "WiFiAudioStreamer"
 
         return try {
             if (os.contains("win")) {
                 val regKey = "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run"
-                if (enable) {
-                    Runtime.getRuntime().exec(arrayOf("reg", "add", regKey, "/v", appName, "/t", "REG_SZ", "/d", "\"$exePath\"", "/f"))
+                val command = if (enable) {
+                    arrayOf("reg", "add", regKey, "/v", appName, "/t", "REG_SZ", "/d", "\"$exePath\"", "/f")
                 } else {
-                    Runtime.getRuntime().exec(arrayOf("reg", "delete", regKey, "/v", appName, "/f"))
+                    arrayOf("reg", "delete", regKey, "/v", appName, "/f")
                 }
-                null
+
+                val process = ProcessBuilder(*command).redirectErrorStream(true).start()
+                val output = process.inputStream.bufferedReader().readText()
+                if (process.waitFor() != 0) "Registry Error: $output" else null
             } else if (os.contains("mac")) {
-                val plist = "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">\n<plist version=\"1.0\">\n<dict>\n<key>Label</key>\n<string>$appName</string>\n<key>ProgramArguments</key>\n<array><string>$exePath</string></array>\n<key>RunAtLoad</key>\n<true/>\n</dict>\n</plist>"
+                val plist = "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">\n<plist version=\"1.0\">\n<dict>\n<key>Label</key>\n<string>com.wifiaudiostreaming</string>\n<key>ProgramArguments</key>\n<array><string>$exePath</string></array>\n<key>RunAtLoad</key>\n<true/>\n</dict>\n</plist>"
                 val dir = File(System.getProperty("user.home"), "Library/LaunchAgents")
-                val file = File(dir, "$appName.plist")
+                val file = File(dir, "com.wifiaudiostreaming.plist")
                 if (enable) {
                     dir.mkdirs()
                     file.writeText(plist)
@@ -250,20 +259,20 @@ object AutostartManager {
                 }
                 null
             } else {
-                val desktopContent = "[Desktop Entry]\nType=Application\nExec=$exePath\nHidden=false\nNoDisplay=false\nX-GNOME-Autostart-enabled=true\nName=$appName\nComment=Start $appName on login"
+                val desktopContent = "[Desktop Entry]\nType=Application\nExec=$exePath\nHidden=false\nNoDisplay=false\nX-GNOME-Autostart-enabled=true\nName=WiFi Audio Streamer\nComment=Start WiFi Audio Streamer on login"
                 val dir = File(System.getProperty("user.home"), ".config/autostart")
-                val file = File(dir, "$appName.desktop")
+                val file = File(dir, "wifiaudiostreaming.desktop")
                 if (enable) {
                     dir.mkdirs()
                     file.writeText(desktopContent)
-                    "Autostart ENABLED.\n\nFile created at:\n${file.absolutePath}\n\nFile content:\n$desktopContent"
+                    "Autostart ENABLED (Linux)."
                 } else {
                     if (file.exists()) file.delete()
-                    "Autostart DISABLED.\n\nFile deleted:\n${file.absolutePath}"
+                    "Autostart DISABLED (Linux)."
                 }
             }
         } catch (e: Exception) {
-            "Error configuring autostart: ${e.message}"
+            "Exception: ${e.message}"
         }
     }
 }
