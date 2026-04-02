@@ -32,9 +32,11 @@ import kotlin.math.roundToInt
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.border
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.ui.geometry.Offset
@@ -42,6 +44,7 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.input.KeyboardType
 import kotlin.math.atan2
 import kotlin.math.cos
@@ -90,6 +93,7 @@ fun AppContent(
     onSelectedInputDeviceChange: (Mixer.Info) -> Unit,
     onSelectedClientMicChange: (Mixer.Info) -> Unit,
     onSelectedServerMicOutputChange: (Mixer.Info) -> Unit,
+    onAppSettingsChange: (AppSettings) -> Unit,
     onOpenSettings: () -> Unit
 ) {
     Scaffold(
@@ -272,7 +276,17 @@ fun AppContent(
                                 devices = discoveredDevices,
                                 onConnect = onConnectToServer,
                                 onRefresh = onRefreshDevices,
-                                enabled = selectedOutputDevice != null && (!sendMicrophone || selectedClientMic != null)
+                                enabled = selectedOutputDevice != null && (!sendMicrophone || selectedClientMic != null),
+                                autoConnectIps = appSettings.autoConnectIps,
+                                onToggleAutoConnectIp = { ip ->
+                                    val newList = appSettings.autoConnectIps.toMutableList()
+                                    if (newList.contains(ip)) {
+                                        newList.remove(ip)
+                                    } else {
+                                        newList.add(ip)
+                                    }
+                                    onAppSettingsChange(appSettings.copy(autoConnectIps = newList))
+                                }
                             )
                         }
                     }
@@ -384,6 +398,47 @@ fun SettingsScreen(
             }
         )
     }
+    var linuxAutostartInfo by remember { mutableStateOf<String?>(null) }
+
+    if (linuxAutostartInfo != null) {
+        AlertDialog(
+            onDismissRequest = { linuxAutostartInfo = null },
+            icon = { Icon(Icons.Default.Info, contentDescription = null) },
+            title = { Text(stringResource("linux_autostart_title")) },
+            text = {
+                OutlinedTextField(
+                    value = linuxAutostartInfo!!,
+                    onValueChange = {},
+                    readOnly = true,
+                    modifier = Modifier.fillMaxWidth().heightIn(min = 150.dp, max = 300.dp)
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = { linuxAutostartInfo = null }) { Text(stringResource("ok")) }
+            }
+        )
+    }
+
+    var showEasterEgg by remember { mutableStateOf(false) }
+    val isLinux = remember { System.getProperty("os.name").lowercase().contains("linux") }
+
+    if (showEasterEgg) {
+        AlertDialog(
+            onDismissRequest = { showEasterEgg = false },
+            confirmButton = {
+                TextButton(onClick = { showEasterEgg = false }) {
+                    Text(stringResource("close"))
+                }
+            },
+            text = {
+                Image(
+                    painter = painterResource(if (isLinux) "derFWithTux.png" else "derF.jpeg"),
+                    contentDescription = null,
+                    modifier = Modifier.fillMaxWidth().heightIn(max = 300.dp)
+                )
+            }
+        )
+    }
 
     AnimatedVisibility(
         visible = visible,
@@ -393,7 +448,17 @@ fun SettingsScreen(
         Scaffold(
             topBar = {
                 TopAppBar(
-                    title = { Text(stringResource("settings")) },
+                    title = {
+                        Text(
+                            text = stringResource("settings"),
+                            modifier = Modifier.clickable(
+                                interactionSource = remember { MutableInteractionSource() },
+                                indication = null
+                            ) {
+                                showEasterEgg = true
+                            }
+                        )
+                    },
                     navigationIcon = {
                         IconButton(onClick = onClose) {
                             Icon(Icons.AutoMirrored.Filled.ArrowBack, stringResource("close"))
@@ -491,6 +556,112 @@ fun SettingsScreen(
                 }
                 item {
                     SettingsGroup(title = stringResource("advanced"), icon = Icons.Outlined.Science) {
+                        // Switch Avvio con OS
+                        SwitchSetting(
+                            title = stringResource("launch_at_startup"),
+                            description = stringResource("launch_at_startup_desc"),
+                            icon = Icons.Outlined.PowerSettingsNew,
+                            checked = appSettings.launchAtStartup,
+                            onCheckedChange = { isEnabled ->
+                                onAppSettingsChange(appSettings.copy(launchAtStartup = isEnabled))
+                                val result = AutostartManager.toggleAutostart(isEnabled)
+                                if (result != null && System.getProperty("os.name").lowercase().contains("linux")) {
+                                    linuxAutostartInfo = result
+                                }
+                            }
+                        )
+
+                        HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp))
+
+                        // NUOVO: Switch Auto-start Server
+                        SwitchSetting(
+                            title = stringResource("auto_start_server"),
+                            description = stringResource("auto_start_server_desc"),
+                            icon = Icons.Outlined.PlayCircleOutline,
+                            checked = appSettings.autoStartServer,
+                            onCheckedChange = { onAppSettingsChange(appSettings.copy(autoStartServer = it)) }
+                        )
+
+                        // Selettore modalità (appare solo se auto-start è attivo)
+                        AnimatedVisibility(visible = appSettings.autoStartServer) {
+                            Column(modifier = Modifier.padding(start = 48.dp, top = 8.dp)) {
+                                Text(stringResource("auto_start_mode"), style = MaterialTheme.typography.labelLarge)
+                                Spacer(Modifier.height(8.dp))
+                                SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {
+                                    SegmentedButton(
+                                        selected = appSettings.autoStartMulticast,
+                                        onClick = { onAppSettingsChange(appSettings.copy(autoStartMulticast = true)) },
+                                        shape = SegmentedButtonDefaults.itemShape(0, 2)
+                                    ) { Text(stringResource("multicast")) }
+                                    SegmentedButton(
+                                        selected = !appSettings.autoStartMulticast,
+                                        onClick = { onAppSettingsChange(appSettings.copy(autoStartMulticast = false)) },
+                                        shape = SegmentedButtonDefaults.itemShape(1, 2)
+                                    ) { Text(stringResource("unicast")) }
+                                }
+                            }
+                        }
+                        HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp))
+                        SwitchSetting(
+                            title = stringResource("auto_connect_client_title"),
+                            description = stringResource("auto_connect_client_desc"),
+                            icon = Icons.Outlined.Sensors,
+                            checked = appSettings.autoConnectClientEnabled,
+                            onCheckedChange = { onAppSettingsChange(appSettings.copy(autoConnectClientEnabled = it)) }
+                        )
+
+                        AnimatedVisibility(visible = appSettings.autoConnectClientEnabled) {
+                            Column(modifier = Modifier.padding(start = 48.dp, top = 8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                                Text(stringResource("priority_ips"), style = MaterialTheme.typography.labelLarge)
+                                appSettings.autoConnectIps.forEachIndexed { index, ip ->
+                                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                        var textValue by remember(ip) { mutableStateOf(ip) }
+                                        OutlinedTextField(
+                                            value = textValue,
+                                            onValueChange = {
+                                                textValue = it
+                                                val newList = appSettings.autoConnectIps.toMutableList()
+                                                newList[index] = it
+                                                onAppSettingsChange(appSettings.copy(autoConnectIps = newList))
+                                            },
+                                            modifier = Modifier.weight(1f),
+                                            singleLine = true
+                                        )
+                                        IconButton(onClick = {
+                                            if (index > 0) {
+                                                val newList = appSettings.autoConnectIps.toMutableList()
+                                                val temp = newList[index]
+                                                newList[index] = newList[index - 1]
+                                                newList[index - 1] = temp
+                                                onAppSettingsChange(appSettings.copy(autoConnectIps = newList))
+                                            }
+                                        }, enabled = index > 0) { Icon(Icons.Default.KeyboardArrowUp, null) }
+                                        IconButton(onClick = {
+                                            if (index < appSettings.autoConnectIps.size - 1) {
+                                                val newList = appSettings.autoConnectIps.toMutableList()
+                                                val temp = newList[index]
+                                                newList[index] = newList[index + 1]
+                                                newList[index + 1] = temp
+                                                onAppSettingsChange(appSettings.copy(autoConnectIps = newList))
+                                            }
+                                        }, enabled = index < appSettings.autoConnectIps.size - 1) { Icon(Icons.Default.KeyboardArrowDown, null) }
+                                        IconButton(onClick = {
+                                            val newList = appSettings.autoConnectIps.toMutableList()
+                                            newList.removeAt(index)
+                                            onAppSettingsChange(appSettings.copy(autoConnectIps = newList))
+                                        }) { Icon(Icons.Default.Delete, null, tint = MaterialTheme.colorScheme.error) }
+                                    }
+                                }
+                                OutlinedButton(onClick = {
+                                    val newList = appSettings.autoConnectIps.toMutableList()
+                                    newList.add("")
+                                    onAppSettingsChange(appSettings.copy(autoConnectIps = newList))
+                                }) {
+                                    Text(stringResource("add_ip"))
+                                }
+                            }
+                        }
+                        HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp))
                         SwitchSetting(
                             title = stringResource("experimental_features"),
                             description = stringResource("experimental_features_description"),
@@ -825,7 +996,12 @@ fun ClientConfigCard(
 
 @Composable
 fun DeviceDiscoveryList(
-    devices: Map<String, ServerInfo>, onConnect: (ServerInfo) -> Unit, onRefresh: () -> Unit, enabled: Boolean
+    devices: Map<String, ServerInfo>,
+    onConnect: (ServerInfo) -> Unit,
+    onRefresh: () -> Unit,
+    enabled: Boolean,
+    autoConnectIps: List<String>,
+    onToggleAutoConnectIp: (String) -> Unit
 ) {
     ElevatedCard(modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(24.dp)) {
         Column(Modifier.padding(16.dp)) {
@@ -869,7 +1045,9 @@ fun DeviceDiscoveryList(
                             hostname = hostname,
                             serverInfo = serverInfo,
                             onClick = { onConnect(serverInfo) },
-                            enabled = enabled
+                            enabled = enabled,
+                            isStarred = autoConnectIps.contains(serverInfo.ip),
+                            onStarClick = { onToggleAutoConnectIp(serverInfo.ip) }
                         )
                     }
                 }
@@ -880,7 +1058,14 @@ fun DeviceDiscoveryList(
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun DeviceItem(hostname: String, serverInfo: ServerInfo, onClick: () -> Unit, enabled: Boolean) {
+fun DeviceItem(
+    hostname: String,
+    serverInfo: ServerInfo,
+    onClick: () -> Unit,
+    enabled: Boolean,
+    isStarred: Boolean,
+    onStarClick: () -> Unit
+) {
     val modeText = if (serverInfo.isMulticast) stringResource("multicast") else stringResource("unicast")
     Card(onClick = onClick, enabled = enabled, modifier = Modifier.fillMaxWidth()) {
         Row(
@@ -897,7 +1082,6 @@ fun DeviceItem(hostname: String, serverInfo: ServerInfo, onClick: () -> Unit, en
             Column(modifier = Modifier.weight(1f)) {
                 Text(hostname, fontWeight = FontWeight.Bold)
                 Text("${serverInfo.ip}:${serverInfo.port} ($modeText)", style = MaterialTheme.typography.bodySmall)
-                // Badge protocolli — visibili solo se il server è v2
                 val caps = serverInfo.capabilities
                 if (caps != null && caps.protocols.size > 1) {
                     Spacer(Modifier.height(4.dp))
@@ -918,6 +1102,13 @@ fun DeviceItem(hostname: String, serverInfo: ServerInfo, onClick: () -> Unit, en
                         }
                     }
                 }
+            }
+            IconButton(onClick = onStarClick) {
+                Icon(
+                    imageVector = if (isStarred) Icons.Filled.Star else Icons.Outlined.StarOutline,
+                    contentDescription = null,
+                    tint = if (isStarred) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
+                )
             }
             Icon(Icons.AutoMirrored.Filled.ArrowForward, contentDescription = stringResource("connect"))
         }

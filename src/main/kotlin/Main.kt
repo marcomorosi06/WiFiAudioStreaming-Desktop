@@ -182,22 +182,6 @@ data class ServerCapabilities(
     val safariMode: Boolean = false
 )
 
-data class AppSettings(
-    val theme: Theme = Theme.System,
-    val experimentalFeaturesEnabled: Boolean = false,
-    val hideWindowsPrivacyBanner: Boolean = false,
-    val hideWindowsRoutingBanner: Boolean = false,
-    val customThemeColor: Long? = null,
-    val rtpEnabled: Boolean = false,
-    val httpEnabled: Boolean = false,
-    val httpPort: String = "8080",
-    // true  → AAC-LC via chunked HTTP
-    // false → Opus via WebSocket
-    val httpSafariMode: Boolean = false,
-    val networkInterface: String = "Auto",
-    val rtpPort: String = "9094",
-)
-
 /**
  * Informazioni di un server scoperto via discovery.
  * [capabilities] è null per server legacy che supportano solo WFAS.
@@ -206,7 +190,8 @@ data class ServerInfo(
     val ip: String,
     val isMulticast: Boolean,
     val port: Int,
-    val capabilities: ServerCapabilities? = null
+    val capabilities: ServerCapabilities? = null,
+    val lastSeen: Long = System.currentTimeMillis()
 )
 
 data class AudioSettings_V1(
@@ -222,6 +207,65 @@ sealed class VirtualDriverStatus {
     object Ok : VirtualDriverStatus()
     data class Missing(val driverName: String, val downloadUrl: String) : VirtualDriverStatus()
     data class LinuxActionRequired(val message: String, val commands: String) : VirtualDriverStatus()
+}
+
+object AutostartManager {
+    fun getExecutablePath(): String {
+        val appPath = System.getProperty("jpackage.app-path")
+        if (appPath != null) return appPath
+        return try {
+            val uri = AutostartManager::class.java.protectionDomain.codeSource.location.toURI()
+            val path = File(uri).absolutePath
+            if (path.endsWith(".jar")) "java -jar \"$path\"" else path
+        } catch (e: Exception) {
+            ""
+        }
+    }
+
+    fun toggleAutostart(enable: Boolean): String? {
+        val os = System.getProperty("os.name").lowercase()
+        val exePath = getExecutablePath()
+        if (exePath.isEmpty()) return "Error: unable to determine executable path."
+
+        val appName = "com.wifiaudiostreaming"
+
+        return try {
+            if (os.contains("win")) {
+                val regKey = "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run"
+                if (enable) {
+                    Runtime.getRuntime().exec(arrayOf("reg", "add", regKey, "/v", appName, "/t", "REG_SZ", "/d", "\"$exePath\"", "/f"))
+                } else {
+                    Runtime.getRuntime().exec(arrayOf("reg", "delete", regKey, "/v", appName, "/f"))
+                }
+                null
+            } else if (os.contains("mac")) {
+                val plist = "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">\n<plist version=\"1.0\">\n<dict>\n<key>Label</key>\n<string>$appName</string>\n<key>ProgramArguments</key>\n<array><string>$exePath</string></array>\n<key>RunAtLoad</key>\n<true/>\n</dict>\n</plist>"
+                val dir = File(System.getProperty("user.home"), "Library/LaunchAgents")
+                val file = File(dir, "$appName.plist")
+                if (enable) {
+                    dir.mkdirs()
+                    file.writeText(plist)
+                } else {
+                    if (file.exists()) file.delete()
+                }
+                null
+            } else {
+                val desktopContent = "[Desktop Entry]\nType=Application\nExec=$exePath\nHidden=false\nNoDisplay=false\nX-GNOME-Autostart-enabled=true\nName=$appName\nComment=Start $appName on login"
+                val dir = File(System.getProperty("user.home"), ".config/autostart")
+                val file = File(dir, "$appName.desktop")
+                if (enable) {
+                    dir.mkdirs()
+                    file.writeText(desktopContent)
+                    "Autostart ENABLED.\n\nFile created at:\n${file.absolutePath}\n\nFile content:\n$desktopContent"
+                } else {
+                    if (file.exists()) file.delete()
+                    "Autostart DISABLED.\n\nFile deleted:\n${file.absolutePath}"
+                }
+            }
+        } catch (e: Exception) {
+            "Error configuring autostart: ${e.message}"
+        }
+    }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -267,7 +311,7 @@ object NetworkHandler_v1 {
     suspend fun probeIsMulticast(ip: String, port: Int): Boolean {
         return try {
             var isUnicast = false
-            withTimeout(1000) { // Aspetta massimo 1 secondo
+            withTimeout(1000) {
                 aSocket(SelectorManager(Dispatchers.IO)).udp().bind().use { sock ->
                     val remoteAddress = InetSocketAddress(ip, port)
                     // Bussa alla porta con una richiesta speciale
@@ -281,6 +325,25 @@ object NetworkHandler_v1 {
             !isUnicast
         } catch (e: Exception) {
             true // Se va in timeout, il server non ascolta in unicast -> è in Multicast
+        }
+    }
+
+    suspend fun pingServerUnicast(ip: String, port: Int): Boolean {
+        return try {
+            var online = false
+            withTimeout(1000) {
+                aSocket(SelectorManager(Dispatchers.IO)).udp().bind().use { sock ->
+                    val remoteAddress = InetSocketAddress(ip, port)
+                    sock.send(Datagram(buildPacket { writeText("MODE_PROBE") }, remoteAddress))
+                    val ack = sock.receive()
+                    if (ack.packet.readText().trim() == "UNICAST") {
+                        online = true
+                    }
+                }
+            }
+            online
+        } catch (e: Exception) {
+            false
         }
     }
 
@@ -448,11 +511,20 @@ object NetworkHandler_v1 {
                         socket.receive(packet)
                         val remoteIp = packet.address.hostAddress
                         val message  = String(packet.data, 0, packet.length).trim()
+
                         if (remoteIp in localIps || !message.startsWith(DISCOVERY_MESSAGE)) continue
 
                         val parts = message.split(";")
                         if (parts.size < 4) continue
-                        val hostname    = parts[1]
+                        val hostname = parts[1]
+
+                        if (message.contains("BYE")) {
+                            // Se riceve BYE, notifica la rimozione (passando null o gestendo la mappa)
+                            // Nota: per semplicità passiamo un segnale al chiamante
+                            onDeviceFound(hostname, ServerInfo("", false, 0, null, 0L))
+                            continue
+                        }
+
                         val isMulticast = parts[2].equals("MULTICAST", ignoreCase = true)
                         val port        = parts[3].toIntOrNull() ?: continue
 
@@ -468,7 +540,7 @@ object NetworkHandler_v1 {
                         } else {
                             ServerCapabilities(setOf(StreamingProtocol.WFAS), null)
                         }
-                        onDeviceFound(hostname, ServerInfo(remoteIp, isMulticast, port, capabilities))
+                        onDeviceFound(hostname, ServerInfo(remoteIp, isMulticast, port, capabilities, System.currentTimeMillis()))
                     } catch (_: java.net.SocketTimeoutException) { continue }
                 }
             } catch (e: Exception) {
@@ -505,7 +577,21 @@ object NetworkHandler_v1 {
         }
     }
 
-    fun stopAnnouncingPresence() { broadcastingJob?.cancel() }
+    fun stopAnnouncingPresence() {
+        val job = broadcastingJob
+        broadcastingJob = null
+        scope.launch {
+            job?.cancelAndJoin()
+            // Invia un ultimo pacchetto di discovery con flag BYE
+            val hostname = runCatching { InetAddress.getLocalHost().hostName }.getOrDefault("Desktop-PC")
+            val message = "$DISCOVERY_MESSAGE;$hostname;BYE;0"
+            val groupAddress = InetAddress.getByName(MULTICAST_GROUP_IP)
+            MulticastSocket().use { socket ->
+                val bytes = message.toByteArray()
+                socket.send(DatagramPacket(bytes, bytes.size, groupAddress, DISCOVERY_PORT))
+            }
+        }
+    }
 
     // ── Microphone receiver (server side) ─────────────────────────────────────
     private fun CoroutineScope.launchMicReceiver(
@@ -1670,6 +1756,7 @@ fun main() = application {
     }
 
     val windowState = rememberWindowState(size = DpSize(600.dp, 800.dp))
+    var lastDisconnectTime by remember { mutableStateOf(0L) }
 
     Window(
         onCloseRequest = {
@@ -1690,6 +1777,94 @@ fun main() = application {
 
         MaterialTheme(colorScheme = currentColorScheme) {
             Surface(modifier = Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
+                LaunchedEffect(Unit) {
+                    if (appSettings.autoStartServer && isServer) {
+                        isStreaming = true
+                        connectionStatus = "Auto-starting Server..."
+                        val port = streamingPort.toIntOrNull() ?: 9090
+                        val mic = micPort.toIntOrNull() ?: 9092
+                        val rtp = appSettings.rtpPort.toIntOrNull() ?: 9094
+
+                        isMulticastMode = appSettings.autoStartMulticast
+
+                        NetworkHandler_v1.launchServerInstance(
+                            audioSettings, port, isMulticastMode, serverCapabilities,
+                            selectedServerMicOutput, mic, rtp
+                        ) { key, args ->
+                            if (key == "error_virtual_driver_missing") {
+                                isStreaming = false
+                                virtualDriverStatus = NetworkHandler_v1.checkVirtualDriverStatus()
+                                connectionStatus = Strings.get("status_inactive")
+                            } else {
+                                connectionStatus = if (args.isEmpty()) key else String.format(key, *args)
+                            }
+                        }
+                    }
+                }
+
+                LaunchedEffect(Unit) {
+                    if (appSettings.autoConnectClientEnabled) {
+                        isServer = false
+                        discoveredDevices.clear()
+                        NetworkHandler_v1.beginDeviceDiscovery { hostname, serverInfo ->
+                            discoveredDevices[hostname] = serverInfo
+                        }
+                    }
+                }
+
+                LaunchedEffect(isStreaming) {
+                    if (!isStreaming) {
+                        lastDisconnectTime = System.currentTimeMillis()
+                    }
+                }
+
+                LaunchedEffect(isServer, appSettings.autoConnectClientEnabled, appSettings.autoConnectIps, selectedOutputDevice) {
+                    if (isServer || !appSettings.autoConnectClientEnabled || appSettings.autoConnectIps.isEmpty() || selectedOutputDevice == null) return@LaunchedEffect
+
+                    val port = streamingPort.toIntOrNull() ?: 9090
+                    val mic = micPort.toIntOrNull() ?: 9092
+
+                    while (isActive) {
+                        val currentTime = System.currentTimeMillis()
+                        val canReconnect = (currentTime - lastDisconnectTime) >= 10000L
+
+                        if (!isStreaming && canReconnect) {
+                            for (ip in appSettings.autoConnectIps) {
+                                if (ip.isBlank() || isStreaming) continue
+
+                                val knownServer = discoveredDevices.values.find { it.ip == ip }
+                                val isOnline = knownServer != null || NetworkHandler_v1.pingServerUnicast(ip, port)
+
+                                if (isOnline) {
+                                    val targetServer = knownServer ?: ServerInfo(ip, false, port, null)
+                                    isStreaming = true
+                                    connectionStatus = "Auto-connecting to ${targetServer.ip}..."
+
+                                    NetworkHandler_v1.endDeviceDiscovery()
+                                    NetworkHandler_v1.launchClientInstance(
+                                        audioSettings, targetServer, selectedOutputDevice!!,
+                                        sendMicrophone, selectedClientMic, mic
+                                    ) { key, args ->
+                                        connectionStatus = if (args.isEmpty()) key else String.format(key, *args)
+                                    }
+                                    break
+                                }
+                            }
+                        }
+                        delay(5000)
+                    }
+                }
+                LaunchedEffect(Unit) {
+                    while (isActive) {
+                        val now = System.currentTimeMillis()
+                        // Rimuove i server che non si sentono da più di 12 secondi
+                        val toRemove = discoveredDevices.filter { now - it.value.lastSeen > 12000L || it.value.lastSeen == 0L }.keys
+                        if (toRemove.isNotEmpty()) {
+                            toRemove.forEach { discoveredDevices.remove(it) }
+                        }
+                        delay(5000)
+                    }
+                }
                 Column(Modifier.fillMaxSize()) {
                     CustomTitleBar(
                         windowState = windowState,
@@ -1750,17 +1925,21 @@ fun main() = application {
                             },
                             onModeChange = { isSrv ->
                                 isServer = isSrv
+                                isStreaming = false
+                                connectionStatus = Strings.get("status_inactive")
+                                discoveredDevices.clear() // Svuota SEMPRE al cambio modalità
+
                                 if (!isSrv) {
                                     scope.launch { NetworkHandler_v1.stopCurrentStream() }
-                                    isStreaming      = false
-                                    connectionStatus = Strings.get("status_inactive")
-                                    discoveredDevices.clear()
                                     NetworkHandler_v1.beginDeviceDiscovery { hostname, serverInfo ->
-                                        discoveredDevices[hostname] = serverInfo
+                                        if (serverInfo.lastSeen == 0L) {
+                                            discoveredDevices.remove(hostname)
+                                        } else {
+                                            discoveredDevices[hostname] = serverInfo
+                                        }
                                     }
                                 } else {
                                     NetworkHandler_v1.endDeviceDiscovery()
-                                    discoveredDevices.clear()
                                 }
                             },
                             onStartStreaming = {
@@ -1812,7 +1991,8 @@ fun main() = application {
                             onSelectedInputDeviceChange       = { selectedInputDevice  = it },
                             onSelectedClientMicChange         = { selectedClientMic    = it },
                             onSelectedServerMicOutputChange   = { selectedServerMicOutput = it },
-                            onOpenSettings = { showSettings = true }
+                            onAppSettingsChange               = { appSettings = it },
+                            onOpenSettings                    = { showSettings = true }
                         )
 
                         SettingsScreen(

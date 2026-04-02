@@ -1,16 +1,13 @@
 import org.jetbrains.compose.desktop.application.dsl.TargetFormat
 
 plugins {
-    // Aggiornato a Kotlin 2.x
     kotlin("jvm") version "2.1.0"
-    // Plugin ufficiale di Compose Multiplatform
     id("org.jetbrains.compose") version "1.7.3"
-    // NOVITÀ KOTLIN 2: Il compilatore Compose è ora un plugin di Kotlin
     id("org.jetbrains.kotlin.plugin.compose") version "2.1.0"
 }
 
 group = "com.wifiaudiostreaming"
-version = "0.3-beta"
+version = "0.4.0-beta"
 
 repositories {
     google()
@@ -18,27 +15,35 @@ repositories {
     maven("https://maven.pkg.jetbrains.space/public/p/compose/dev")
 }
 
+// Helper per determinare la piattaforma senza importare Loader direttamente
+val osName = System.getProperty("os.name").lowercase()
+val osArch = System.getProperty("os.arch").lowercase()
+val targetPlatform = when {
+    osName.contains("win") -> if (osArch.contains("64")) "windows-x86_64" else "windows-x86"
+    osName.contains("mac") -> if (osArch.contains("aarch64") || osArch.contains("arm64")) "macosx-arm64" else "macosx-x86_64"
+    else -> "linux-x86_64"
+}
+
 dependencies {
-    // Dipendenze UI Compose
     implementation(compose.desktop.currentOs)
     implementation(compose.material3)
     implementation(compose.materialIconsExtended)
 
-    // Aggiornato a Ktor 3.x
     val ktorVersion = "3.0.3"
     implementation("io.ktor:ktor-network:$ktorVersion")
     implementation("io.ktor:ktor-network-tls:$ktorVersion")
 
-    // Aggiornato Coroutines
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.9.0")
 
-    // Aggiornato BouncyCastle (jdk15on è obsoleto, si usa jdk18on per Java 17+)
     val bcVersion = "1.78.1"
     implementation("org.bouncycastle:bcprov-jdk18on:$bcVersion")
     implementation("org.bouncycastle:bctls-jdk18on:$bcVersion")
     implementation("org.bouncycastle:bcpkix-jdk18on:$bcVersion")
+
     val javacvVersion = "1.5.10"
-    implementation("org.bytedeco:javacv-platform:$javacvVersion")
+    implementation("org.bytedeco:javacv:$javacvVersion")
+    implementation("org.bytedeco:ffmpeg:$javacvVersion:$targetPlatform")
+    implementation("org.bytedeco:javacpp:$javacvVersion:$targetPlatform")
 }
 
 compose.desktop {
@@ -54,7 +59,18 @@ compose.desktop {
             targetFormats(TargetFormat.Msi, TargetFormat.Dmg, TargetFormat.Deb, TargetFormat.Rpm)
 
             packageName = "WiFi Audio Streaming"
-            packageVersion = "3.0.0"
+            packageVersion = "4.0.0"
+
+            modules(
+                "java.desktop",
+                "java.instrument",
+                "java.scripting",
+                "java.naming",
+                "java.sql",
+                "java.xml",
+                "jdk.unsupported",
+                "java.net.http"
+            )
 
             buildTypes.release.proguard {
                 isEnabled.set(false)

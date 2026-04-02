@@ -1,7 +1,6 @@
 import java.util.prefs.BackingStoreException
 import java.util.prefs.Preferences
 
-// A new container for all settings that need to be saved
 data class AllSettings(
     val app: AppSettings,
     val audio: AudioSettings_V1,
@@ -9,32 +8,50 @@ data class AllSettings(
     val micPort: String
 )
 
-// --- The Repository for Saving/Loading ---
+data class AppSettings(
+    val theme: Theme = Theme.System,
+    val experimentalFeaturesEnabled: Boolean = false,
+    val hideWindowsPrivacyBanner: Boolean = false,
+    val hideWindowsRoutingBanner: Boolean = false,
+    val customThemeColor: Long? = null,
+    val rtpEnabled: Boolean = false,
+    val httpEnabled: Boolean = false,
+    val httpPort: String = "8080",
+    val httpSafariMode: Boolean = false,
+    val networkInterface: String = "Auto",
+    val rtpPort: String = "9094",
+    val launchAtStartup: Boolean = false,
+    val autoStartServer: Boolean = false,
+    val autoStartMulticast: Boolean = true,
+    val autoConnectClientEnabled: Boolean = false,
+    val autoConnectIps: List<String> = emptyList()
+)
 
 object SettingsRepository {
     private val prefs = Preferences.userRoot().node("com/mavco/wifiaudiostreamer")
 
-    // --- Preference Keys ---
     private const val THEME_KEY = "app_theme"
     private const val EXPERIMENTAL_KEY = "experimental_features"
     private const val HIDE_PRIVACY_KEY = "hide_windows_privacy"
     private const val HIDE_ROUTING_KEY = "hide_windows_routing"
     private const val CUSTOM_COLOR_KEY = "custom_theme_color"
-    // Protocolli server
     private const val RTP_ENABLED_KEY = "server_rtp_enabled"
     private const val HTTP_ENABLED_KEY = "server_http_enabled"
     private const val HTTP_PORT_KEY = "server_http_port"
     private const val HTTP_SAFARI_MODE_KEY = "server_http_safari_mode"
-    // Audio
     private const val SAMPLE_RATE_KEY = "audio_sample_rate"
     private const val BIT_DEPTH_KEY = "audio_bit_depth"
     private const val CHANNELS_KEY = "audio_channels"
     private const val BUFFER_SIZE_KEY = "audio_buffer_size"
-    // Rete
     private const val STREAMING_PORT_KEY = "net_streaming_port"
     private const val MIC_PORT_KEY = "net_mic_port"
     private const val NETWORK_INTERFACE_KEY = "net_interface"
     private const val RTP_PORT_KEY = "server_rtp_port"
+    private const val LAUNCH_AT_STARTUP_KEY = "launch_at_startup"
+    private const val AUTO_START_SERVER_KEY = "auto_start_server"
+    private const val AUTO_START_MULTICAST_KEY = "auto_start_multicast"
+    private const val AUTO_CONNECT_CLIENT_KEY = "auto_connect_client"
+    private const val AUTO_CONNECT_IPS_KEY = "auto_connect_ips"
 
     fun saveSettings(settings: AllSettings) {
         try {
@@ -53,7 +70,6 @@ object SettingsRepository {
             prefs.putBoolean(HTTP_ENABLED_KEY, settings.app.httpEnabled)
             prefs.put(HTTP_PORT_KEY, settings.app.httpPort)
             prefs.putBoolean(HTTP_SAFARI_MODE_KEY, settings.app.httpSafariMode)
-
             prefs.putFloat(SAMPLE_RATE_KEY, settings.audio.sampleRate)
             prefs.putInt(BIT_DEPTH_KEY, settings.audio.bitDepth)
             prefs.putInt(CHANNELS_KEY, settings.audio.channels)
@@ -62,11 +78,13 @@ object SettingsRepository {
             prefs.put(MIC_PORT_KEY, settings.micPort)
             prefs.put(NETWORK_INTERFACE_KEY, settings.app.networkInterface)
             prefs.put(RTP_PORT_KEY, settings.app.rtpPort)
-
+            prefs.putBoolean(LAUNCH_AT_STARTUP_KEY, settings.app.launchAtStartup)
+            prefs.putBoolean(AUTO_START_SERVER_KEY, settings.app.autoStartServer)
+            prefs.putBoolean(AUTO_START_MULTICAST_KEY, settings.app.autoStartMulticast)
+            prefs.putBoolean(AUTO_CONNECT_CLIENT_KEY, settings.app.autoConnectClientEnabled)
+            prefs.put(AUTO_CONNECT_IPS_KEY, settings.app.autoConnectIps.joinToString(","))
             prefs.flush()
-        } catch (e: BackingStoreException) {
-            println("Error saving settings: ${e.message}")
-        }
+        } catch (e: BackingStoreException) {}
     }
 
     fun loadSettings(): AllSettings {
@@ -75,31 +93,34 @@ object SettingsRepository {
         val experimental = prefs.getBoolean(EXPERIMENTAL_KEY, false)
         val hidePrivacy = prefs.getBoolean(HIDE_PRIVACY_KEY, false)
         val hideRouting = prefs.getBoolean(HIDE_ROUTING_KEY, false)
-
         val colorString = prefs.get(CUSTOM_COLOR_KEY, null)
         val customColor = colorString?.toLongOrNull()
-
-        val rtpEnabled    = prefs.getBoolean(RTP_ENABLED_KEY, false)
-        val httpEnabled   = prefs.getBoolean(HTTP_ENABLED_KEY, false)
-        val httpPort      = prefs.get(HTTP_PORT_KEY, "8080")
+        val rtpEnabled = prefs.getBoolean(RTP_ENABLED_KEY, false)
+        val httpEnabled = prefs.getBoolean(HTTP_ENABLED_KEY, false)
+        val httpPort = prefs.get(HTTP_PORT_KEY, "8080")
         val httpSafariMode = prefs.getBoolean(HTTP_SAFARI_MODE_KEY, false)
-
-        val sampleRate  = prefs.getFloat(SAMPLE_RATE_KEY, 48000f)
-        val bitDepth    = prefs.getInt(BIT_DEPTH_KEY, 16)
-        val channels    = prefs.getInt(CHANNELS_KEY, 2)
-        val bufferSize  = prefs.getInt(BUFFER_SIZE_KEY, 6400)
+        val sampleRate = prefs.getFloat(SAMPLE_RATE_KEY, 48000f)
+        val bitDepth = prefs.getInt(BIT_DEPTH_KEY, 16)
+        val channels = prefs.getInt(CHANNELS_KEY, 2)
+        val bufferSize = prefs.getInt(BUFFER_SIZE_KEY, 6400)
         val audioSettings = AudioSettings_V1(sampleRate, bitDepth, channels, bufferSize)
-
         val streamingPort = prefs.get(STREAMING_PORT_KEY, "9090")
-        val micPort       = prefs.get(MIC_PORT_KEY, "9092")
+        val micPort = prefs.get(MIC_PORT_KEY, "9092")
         val netInterface = prefs.get(NETWORK_INTERFACE_KEY, "Auto")
         val rtpPort = prefs.get(RTP_PORT_KEY, "9094")
+        val launchAtStartup = prefs.getBoolean(LAUNCH_AT_STARTUP_KEY, false)
+        val autoStartServer = prefs.getBoolean(AUTO_START_SERVER_KEY, false)
+        val autoStartMulticast = prefs.getBoolean(AUTO_START_MULTICAST_KEY, true)
+        val autoConnectClientEnabled = prefs.getBoolean(AUTO_CONNECT_CLIENT_KEY, false)
+        val ipsString = prefs.get(AUTO_CONNECT_IPS_KEY, "")
+        val autoConnectIps = if (ipsString.isNotEmpty()) ipsString.split(",") else emptyList()
 
         val appSettings = AppSettings(
             theme, experimental, hidePrivacy, hideRouting, customColor,
-            rtpEnabled, httpEnabled, httpPort, httpSafariMode, netInterface, rtpPort
+            rtpEnabled, httpEnabled, httpPort, httpSafariMode, netInterface,
+            rtpPort, launchAtStartup, autoStartServer, autoStartMulticast,
+            autoConnectClientEnabled, autoConnectIps
         )
-
         return AllSettings(appSettings, audioSettings, streamingPort, micPort)
     }
 }
