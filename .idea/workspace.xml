@@ -4,16 +4,8 @@
     <option name="autoReloadType" value="SELECTIVE" />
   </component>
   <component name="ChangeListManager">
-    <list default="true" id="5f86ce91-f37e-4a3e-9b89-95bbba8740e8" name="Changes" comment="Aggiunta compatibilità con protocolli RTP/PCM, HTTP Web Stream, aggiunta la network interface e aggiunta la possibilità di connettersi manualmente a un ip sia in unicast che in multicast.">
-      <change afterPath="$PROJECT_DIR$/src/main/resources/derF.jpeg" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/src/main/resources/derFWithTux.png" afterDir="false" />
+    <list default="true" id="5f86ce91-f37e-4a3e-9b89-95bbba8740e8" name="Changes" comment="Pesante ottimizzazione per la compilazione, aggiunta di avvio automatico dell'app all'avvio, priorità client automatico e avvio server automatico. Bug fix server fantasma nella discovery">
       <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/build.gradle.kts" beforeDir="false" afterPath="$PROJECT_DIR$/build.gradle.kts" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/main/kotlin/DesktopUI.kt" beforeDir="false" afterPath="$PROJECT_DIR$/src/main/kotlin/DesktopUI.kt" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/main/kotlin/Main.kt" beforeDir="false" afterPath="$PROJECT_DIR$/src/main/kotlin/Main.kt" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/main/kotlin/SettingsManager.kt" beforeDir="false" afterPath="$PROJECT_DIR$/src/main/kotlin/SettingsManager.kt" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/main/resources/strings.properties" beforeDir="false" afterPath="$PROJECT_DIR$/src/main/resources/strings.properties" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/main/resources/strings_it.properties" beforeDir="false" afterPath="$PROJECT_DIR$/src/main/resources/strings_it.properties" afterDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />
@@ -95,6 +87,9 @@
     &quot;second&quot;: &quot;50859f76-3e6b-4026-abe0-12e8cf0f1a3e&quot;
   }
 }</component>
+  <component name="GithubDefaultAccount">
+    <option name="defaultAccountId" value="dbb92e82-d357-4388-93c9-1df0b90229c9" />
+  </component>
   <component name="GithubPullRequestsUISettings">{
   &quot;selectedUrlAndAccountId&quot;: {
     &quot;url&quot;: &quot;https://github.com/marcomorosi06/WiFiAudioStreaming-Desktop&quot;,
@@ -272,7 +267,15 @@
       <option name="project" value="LOCAL" />
       <updated>1774117185845</updated>
     </task>
-    <option name="localTasksCounter" value="12" />
+    <task id="LOCAL-00012" summary="Pesante ottimizzazione per la compilazione, aggiunta di avvio automatico dell'app all'avvio, priorità client automatico e avvio server automatico. Bug fix server fantasma nella discovery">
+      <option name="closed" value="true" />
+      <created>1775158148915</created>
+      <option name="number" value="00012" />
+      <option name="presentableId" value="LOCAL-00012" />
+      <option name="project" value="LOCAL" />
+      <updated>1775158148915</updated>
+    </task>
+    <option name="localTasksCounter" value="13" />
     <servers />
   </component>
   <component name="Vcs.Log.Tabs.Properties">
@@ -293,6 +296,7 @@
     <MESSAGE value="Abbozzo crittografia. Latenza generale peggiorata. L'autenticazione non va a buon fine." />
     <MESSAGE value="Dettaglino per solo unicast con inserimento manuale ip." />
     <MESSAGE value="Aggiunta compatibilità con protocolli RTP/PCM, HTTP Web Stream, aggiunta la network interface e aggiunta la possibilità di connettersi manualmente a un ip sia in unicast che in multicast." />
-    <option name="LAST_COMMIT_MESSAGE" value="Aggiunta compatibilità con protocolli RTP/PCM, HTTP Web Stream, aggiunta la network interface e aggiunta la possibilità di connettersi manualmente a un ip sia in unicast che in multicast." />
+    <MESSAGE value="Pesante ottimizzazione per la compilazione, aggiunta di avvio automatico dell'app all'avvio, priorità client automatico e avvio server automatico. Bug fix server fantasma nella discovery" />
+    <option name="LAST_COMMIT_MESSAGE" value="Pesante ottimizzazione per la compilazione, aggiunta di avvio automatico dell'app all'avvio, priorità client automatico e avvio server automatico. Bug fix server fantasma nella discovery" />
   </component>
 </project>
