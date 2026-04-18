@@ -110,7 +110,7 @@ fun AppContent(
     ) { paddingValues ->
         // --- INIZIO DIALOG LINUX ---
         val clipboardManager = LocalClipboardManager.current
-        if (isServer && virtualDriverStatus is VirtualDriverStatus.LinuxActionRequired) {
+        if (isServer && !appSettings.useNativeEngine && virtualDriverStatus is VirtualDriverStatus.LinuxActionRequired) {
             var showLinuxDialog by remember { mutableStateOf(true) }
             if (showLinuxDialog) {
                 AlertDialog(
@@ -148,8 +148,8 @@ fun AppContent(
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
             // --- Virtual Driver Warning Banner ---
-            // Only shown in server mode when the required virtual audio driver is missing.
-            if (isServer) {
+            // Only shown in server mode (ffmpeg) when the required virtual audio driver is missing.
+            if (isServer && !appSettings.useNativeEngine) {
                 val driverStatus = virtualDriverStatus
                 if (driverStatus is VirtualDriverStatus.Missing) {
                     item {
@@ -159,7 +159,7 @@ fun AppContent(
             }
 
             // --- BANNER WINDOWS (Instradamento e Privacy) ---
-            if (isWindowsOS && isServer && !isStreaming) {
+            if (isWindowsOS && isServer && !isStreaming && !appSettings.useNativeEngine) {
                 if (!appSettings.hideWindowsRoutingBanner) {
                     item { WindowsRoutingBanner(onDismiss = onDismissRoutingBanner) }
                 }
@@ -195,7 +195,7 @@ fun AppContent(
                 StreamingControlCenter(
                     isStreaming = isStreaming,
                     isServer = isServer,
-                    isServerReady = if (isServer && virtualDriverStatus is VirtualDriverStatus.Missing) false
+                    isServerReady = if (isServer && !appSettings.useNativeEngine && virtualDriverStatus is VirtualDriverStatus.Missing) false
                     else (!appSettings.experimentalFeaturesEnabled || selectedServerMicOutput != null),
                     serverVolume = serverVolume,
                     onServerVolumeChange = onServerVolumeChange,
@@ -228,7 +228,8 @@ fun AppContent(
                             isMulticast = isMulticastMode,
                             onMulticastChanged = onMulticastModeChange,
                             virtualDriverStatus = virtualDriverStatus,
-                            rtpEnabled = appSettings.rtpEnabled
+                            rtpEnabled = appSettings.rtpEnabled,
+                            useNativeEngine = appSettings.useNativeEngine
                         )
                     }
                 }
@@ -922,44 +923,47 @@ fun ServerConfigCard(
     outputDevices: List<Mixer.Info>, selectedServerMicOutput: Mixer.Info?, onServerMicOutputSelected: (Mixer.Info) -> Unit,
     isMulticast: Boolean, onMulticastChanged: (Boolean) -> Unit,
     virtualDriverStatus: VirtualDriverStatus,
-    rtpEnabled: Boolean
+    rtpEnabled: Boolean,
+    useNativeEngine: Boolean
 ) {
     ElevatedCard(modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(24.dp)) {
         Column(Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
             Text(stringResource("server_configuration"), style = MaterialTheme.typography.titleLarge)
 
-            // Stato driver — badge compatto colorato
-            val (driverIcon, driverLabel, driverOk) = when (virtualDriverStatus) {
-                is VirtualDriverStatus.Ok ->
-                    Triple(Icons.Outlined.CheckCircle, stringResource("driver_detected"), true)
-                is VirtualDriverStatus.Missing ->
-                    Triple(Icons.Outlined.Warning, "${virtualDriverStatus.driverName} — ${stringResource("driver_not_installed", virtualDriverStatus.driverName)}", false)
-                is VirtualDriverStatus.LinuxActionRequired ->
-                    Triple(Icons.Outlined.Terminal, stringResource("linux_deps_inline"), false)
-            }
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(10.dp),
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .background(
-                        if (driverOk) MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.5f)
-                        else MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.5f),
-                        RoundedCornerShape(12.dp)
+            // Stato driver — badge compatto colorato (solo in modalità ffmpeg/legacy)
+            if (!useNativeEngine) {
+                val (driverIcon, driverLabel, driverOk) = when (virtualDriverStatus) {
+                    is VirtualDriverStatus.Ok ->
+                        Triple(Icons.Outlined.CheckCircle, stringResource("driver_detected"), true)
+                    is VirtualDriverStatus.Missing ->
+                        Triple(Icons.Outlined.Warning, "${virtualDriverStatus.driverName} — ${stringResource("driver_not_installed", virtualDriverStatus.driverName)}", false)
+                    is VirtualDriverStatus.LinuxActionRequired ->
+                        Triple(Icons.Outlined.Terminal, stringResource("linux_deps_inline"), false)
+                }
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(10.dp),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .background(
+                            if (driverOk) MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.5f)
+                            else MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.5f),
+                            RoundedCornerShape(12.dp)
+                        )
+                        .padding(horizontal = 14.dp, vertical = 10.dp)
+                ) {
+                    Icon(
+                        driverIcon, contentDescription = null,
+                        modifier = Modifier.size(18.dp),
+                        tint = if (driverOk) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error
                     )
-                    .padding(horizontal = 14.dp, vertical = 10.dp)
-            ) {
-                Icon(
-                    driverIcon, contentDescription = null,
-                    modifier = Modifier.size(18.dp),
-                    tint = if (driverOk) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error
-                )
-                Text(
-                    driverLabel,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = if (driverOk) MaterialTheme.colorScheme.onPrimaryContainer
-                    else MaterialTheme.colorScheme.onErrorContainer
-                )
+                    Text(
+                        driverLabel,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = if (driverOk) MaterialTheme.colorScheme.onPrimaryContainer
+                        else MaterialTheme.colorScheme.onErrorContainer
+                    )
+                }
             }
 
             // Mic output (sperimentale)
