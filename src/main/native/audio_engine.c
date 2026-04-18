@@ -45,6 +45,7 @@ static void set_error(const char *fmt, ...) {
 #include <windows.h>
 #include <mmdeviceapi.h>
 #include <audioclient.h>
+#include <endpointvolume.h>
 #include <mmreg.h>
 #include <ksmedia.h>
 #include <propidl.h>
@@ -59,6 +60,8 @@ static const IID IID_IAudioClient_local =
     {0x1CB9AD4C,0xDBFA,0x4c32,{0xB1,0x78,0xC2,0xF5,0x68,0xA7,0x03,0xB2}};
 static const IID IID_IAudioCaptureClient_local =
     {0xC8ADBD64,0xE71E,0x48a0,{0xA4,0xDE,0x18,0x5C,0x39,0x5C,0xD3,0x17}};
+static const IID IID_IAudioEndpointVolume_local =
+    {0x5CDF2C82,0x841E,0x4546,{0x97,0x22,0x0C,0xF7,0x40,0x78,0x22,0x9A}};
 
 static IMMDeviceEnumerator  *g_enumerator    = NULL;
 static IMMDevice            *g_device        = NULL;
@@ -84,6 +87,13 @@ static double                g_resample_pos  = 0.0;
 static int16_t*              g_src_accum = NULL;
 static int                   g_src_accum_cap = 0;
 static int                   g_src_accum_len = 0;
+
+static IAudioEndpointVolume *g_endpoint_volume = NULL;
+static BOOL                  g_prev_mute_state = FALSE;
+static int                   g_had_prev_mute_state = 0;
+static int                   g_did_mute_endpoint = 0;
+static volatile LONG         g_atexit_registered = 0;
+static volatile LONG         g_safety_net_ran = 0;
 
 static int16_t float_to_s16(float f) {
     int32_t v = (int32_t)(f * 32768.0f);
@@ -187,6 +197,108 @@ static IMMDevice *pick_best_render_device(IMMDeviceEnumerator *enumerator) {
     return default_dev;
 }
 
+static void safety_net_restore_mute(void) {
+    if (InterlockedCompareExchange(&g_safety_net_ran, 1, 0) != 0) return;
+
+    IAudioEndpointVolume *epv = g_endpoint_volume;
+    if (!epv) return;
+
+    if (g_did_mute_endpoint) {
+        BOOL target = g_had_prev_mute_state ? g_prev_mute_state : FALSE;
+        HRESULT hr = IAudioEndpointVolume_SetMute(epv, target, NULL);
+        if (SUCCEEDED(hr)) {
+            fprintf(stderr, "[AudioEngine] Safety-net restored endpoint mute to %s.\n",
+                    target ? "muted" : "unmuted");
+        } else {
+            fprintf(stderr, "[AudioEngine] Safety-net SetMute failed: 0x%08lX\n", hr);
+        }
+    }
+}
+
+static void atexit_safety_handler(void) {
+    safety_net_restore_mute();
+    if (g_endpoint_volume) {
+        IUnknown_Release((IUnknown *)g_endpoint_volume);
+        g_endpoint_volume = NULL;
+    }
+}
+
+static void mute_render_endpoint(IMMDevice *device) {
+    if (!device) return;
+
+    HRESULT hr = IMMDevice_Activate(
+        device,
+        &IID_IAudioEndpointVolume_local,
+        CLSCTX_ALL,
+        NULL,
+        (void **)&g_endpoint_volume);
+
+    if (FAILED(hr) || !g_endpoint_volume) {
+        fprintf(stderr, "[AudioEngine] Cannot activate IAudioEndpointVolume: 0x%08lX\n", hr);
+        g_endpoint_volume = NULL;
+        return;
+    }
+
+    BOOL prev = FALSE;
+    hr = IAudioEndpointVolume_GetMute(g_endpoint_volume, &prev);
+    if (SUCCEEDED(hr)) {
+        g_prev_mute_state = prev;
+        g_had_prev_mute_state = 1;
+    } else {
+        g_had_prev_mute_state = 0;
+    }
+
+    if (g_had_prev_mute_state && prev) {
+        fprintf(stderr, "[AudioEngine] Endpoint already muted, leaving as-is.\n");
+        g_did_mute_endpoint = 0;
+        return;
+    }
+
+    hr = IAudioEndpointVolume_SetMute(g_endpoint_volume, TRUE, NULL);
+    if (SUCCEEDED(hr)) {
+        g_did_mute_endpoint = 1;
+        g_safety_net_ran = 0;
+        fprintf(stderr, "[AudioEngine] Render endpoint muted to avoid double playback.\n");
+
+        if (InterlockedCompareExchange(&g_atexit_registered, 1, 0) == 0) {
+            atexit(atexit_safety_handler);
+        }
+    } else {
+        fprintf(stderr, "[AudioEngine] SetMute(TRUE) failed: 0x%08lX\n", hr);
+        g_did_mute_endpoint = 0;
+    }
+}
+
+static void restore_render_endpoint_mute(void) {
+    if (!g_endpoint_volume) return;
+
+    if (g_did_mute_endpoint && g_had_prev_mute_state) {
+        HRESULT hr = IAudioEndpointVolume_SetMute(g_endpoint_volume, g_prev_mute_state, NULL);
+        if (SUCCEEDED(hr)) {
+            fprintf(stderr, "[AudioEngine] Endpoint mute restored to %s.\n",
+                    g_prev_mute_state ? "muted" : "unmuted");
+        } else {
+            fprintf(stderr, "[AudioEngine] SetMute restore failed: 0x%08lX\n", hr);
+        }
+    }
+
+    InterlockedExchange(&g_safety_net_ran, 1);
+
+    IUnknown_Release((IUnknown *)g_endpoint_volume);
+    g_endpoint_volume = NULL;
+    g_did_mute_endpoint = 0;
+    g_had_prev_mute_state = 0;
+}
+
+BOOL WINAPI DllMain(HINSTANCE hinst, DWORD reason, LPVOID reserved) {
+    (void)hinst;
+    (void)reserved;
+    if (reason == DLL_PROCESS_DETACH) {
+        safety_net_restore_mute();
+    }
+    return TRUE;
+}
+
 static jboolean wasapi_start(int sample_rate, int channels) {
     if (g_initialized) {
         wasapi_stop();
@@ -204,6 +316,8 @@ static jboolean wasapi_start(int sample_rate, int channels) {
 
     g_device = pick_best_render_device(g_enumerator);
     if (!g_device) { set_error("No render device found"); return JNI_FALSE; }
+
+    mute_render_endpoint(g_device);
 
     hr = IMMDevice_Activate(g_device, &IID_IAudioClient_local, CLSCTX_ALL, NULL, (void **)&g_audio_client);
     if (FAILED(hr)) { set_error("IMMDevice_Activate failed: 0x%08lX", hr); return JNI_FALSE; }
@@ -398,6 +512,7 @@ static void wasapi_stop(void) {
     if (cap) IUnknown_Release((IUnknown *)cap);
     if (g_mix_format)     { CoTaskMemFree(g_mix_format); g_mix_format = NULL; }
     if (g_audio_client)   { IUnknown_Release((IUnknown *)g_audio_client); g_audio_client = NULL; }
+    restore_render_endpoint_mute();
     if (g_device)         { IUnknown_Release((IUnknown *)g_device); g_device = NULL; }
     if (g_enumerator)     { IUnknown_Release((IUnknown *)g_enumerator); g_enumerator = NULL; }
     CoUninitialize();
