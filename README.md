@@ -234,17 +234,19 @@ This project is completely free and open-source. If it helped you as much as it 
 
 # 📄 License
 
-This project is released under the **MIT License**.
+This project is licensed under the **European Union Public Licence v1.2 (EUPL v1.2)**.
 
 You are free to:
 
-- use  
-- modify  
-- distribute  
-- and even use the software commercially  
+- **Use**: use the software in any circumstances and for all usage types.
+- **Modify**: adapt, transform, or modify the software.
+- **Distribute**: distribute, lend, or communicate the software to the public.
+- **Commercial use**: use the software for commercial purposes.
 
-as long as the original copyright and license notice are included.
+**Key Obligations:**
 
-The software is provided **"as is"**, without warranty of any kind.
+- **Copyleft**: If you modify and distribute the software, you must release it under the same EUPL license.
+- **Attribution**: You must retain all copyright, patent, and trademark notices.
+- **No Warranty**: The software is provided **"as is"**, without any warranties.
 
-For the full legal text, see the `LICENSE.md` file included in this repository.
+For the full legal text, see the `LICENSE.md` file included in this repository or visit the [official EUPL website](https://joinup.ec.europa.eu/collection/eupl/eupl-text-eupl-12).
