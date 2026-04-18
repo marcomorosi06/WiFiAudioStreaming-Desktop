@@ -662,6 +662,36 @@ fun SettingsScreen(
                             }
                         }
                         HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp))
+
+                        SwitchSetting(
+                            title = stringResource("native_engine_title"),
+                            description = stringResource("native_engine_desc"),
+                            icon = Icons.Outlined.Memory,
+                            checked = appSettings.useNativeEngine,
+                            onCheckedChange = { onAppSettingsChange(appSettings.copy(useNativeEngine = it)) }
+                        )
+
+                        HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp))
+
+                        SwitchSetting(
+                            title = stringResource("connection_sound_title"),
+                            description = stringResource("connection_sound_desc"),
+                            icon = Icons.Outlined.VolumeUp,
+                            checked = appSettings.connectionSoundEnabled,
+                            onCheckedChange = { onAppSettingsChange(appSettings.copy(connectionSoundEnabled = it)) }
+                        )
+
+                        HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp))
+
+                        SwitchSetting(
+                            title = stringResource("disconnection_sound_title"),
+                            description = stringResource("disconnection_sound_desc"),
+                            icon = Icons.Outlined.VolumeOff,
+                            checked = appSettings.disconnectionSoundEnabled,
+                            onCheckedChange = { onAppSettingsChange(appSettings.copy(disconnectionSoundEnabled = it)) }
+                        )
+
+                        HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp))
                         SwitchSetting(
                             title = stringResource("experimental_features"),
                             description = stringResource("experimental_features_description"),

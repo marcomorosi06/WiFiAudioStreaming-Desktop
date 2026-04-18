@@ -24,7 +24,10 @@ data class AppSettings(
     val autoStartServer: Boolean = false,
     val autoStartMulticast: Boolean = true,
     val autoConnectClientEnabled: Boolean = false,
-    val autoConnectIps: List<String> = emptyList()
+    val autoConnectIps: List<String> = emptyList(),
+    val connectionSoundEnabled: Boolean = true,
+    val disconnectionSoundEnabled: Boolean = true,
+    val useNativeEngine: Boolean = true
 )
 
 object SettingsRepository {
@@ -52,6 +55,9 @@ object SettingsRepository {
     private const val AUTO_START_MULTICAST_KEY = "auto_start_multicast"
     private const val AUTO_CONNECT_CLIENT_KEY = "auto_connect_client"
     private const val AUTO_CONNECT_IPS_KEY = "auto_connect_ips"
+    private const val CONNECTION_SOUND_KEY = "connection_sound_enabled"
+    private const val DISCONNECTION_SOUND_KEY = "disconnection_sound_enabled"
+    private const val USE_NATIVE_ENGINE_KEY = "use_native_engine"
 
     fun saveSettings(settings: AllSettings) {
         try {
@@ -83,6 +89,9 @@ object SettingsRepository {
             prefs.putBoolean(AUTO_START_MULTICAST_KEY, settings.app.autoStartMulticast)
             prefs.putBoolean(AUTO_CONNECT_CLIENT_KEY, settings.app.autoConnectClientEnabled)
             prefs.put(AUTO_CONNECT_IPS_KEY, settings.app.autoConnectIps.joinToString(","))
+            prefs.putBoolean(CONNECTION_SOUND_KEY, settings.app.connectionSoundEnabled)
+            prefs.putBoolean(DISCONNECTION_SOUND_KEY, settings.app.disconnectionSoundEnabled)
+            prefs.putBoolean(USE_NATIVE_ENGINE_KEY, settings.app.useNativeEngine)
             prefs.flush()
         } catch (e: BackingStoreException) {}
     }
@@ -114,12 +123,17 @@ object SettingsRepository {
         val autoConnectClientEnabled = prefs.getBoolean(AUTO_CONNECT_CLIENT_KEY, false)
         val ipsString = prefs.get(AUTO_CONNECT_IPS_KEY, "")
         val autoConnectIps = if (ipsString.isNotEmpty()) ipsString.split(",") else emptyList()
+        val connectionSoundEnabled = prefs.getBoolean(CONNECTION_SOUND_KEY, true)
+        val disconnectionSoundEnabled = prefs.getBoolean(DISCONNECTION_SOUND_KEY, true)
+        val useNativeEngine = prefs.getBoolean(USE_NATIVE_ENGINE_KEY, true)
 
         val appSettings = AppSettings(
             theme, experimental, hidePrivacy, hideRouting, customColor,
             rtpEnabled, httpEnabled, httpPort, httpSafariMode, netInterface,
             rtpPort, launchAtStartup, autoStartServer, autoStartMulticast,
-            autoConnectClientEnabled, autoConnectIps
+            autoConnectClientEnabled, autoConnectIps,
+            connectionSoundEnabled, disconnectionSoundEnabled,
+            useNativeEngine
         )
         return AllSettings(appSettings, audioSettings, streamingPort, micPort)
     }
