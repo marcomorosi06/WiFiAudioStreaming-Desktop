@@ -991,28 +991,53 @@ static int        g_pa_initialized = 0;
  * Se passiamo NULL come device, PulseAudio/PipeWire scelgono
  * automaticamente il monitor del sink di default — più robusto.
  */
+static char* get_default_monitor(void) {
+    static char monitor_name[256];
+    FILE *fp = popen("pactl get-default-sink 2>/dev/null", "r");
+
+    if (!fp) return NULL;
+
+    char sink[128] = {0};
+    if (fgets(sink, sizeof(sink), fp)) {
+        sink[strcspn(sink, "\r\n")] = 0;
+        if (strlen(sink) > 0) {
+            snprintf(monitor_name, sizeof(monitor_name), "%s.monitor", sink);
+            pclose(fp);
+            return monitor_name;
+        }
+    }
+    pclose(fp);
+    return NULL;
+}
+
 static jboolean pulse_start(int sample_rate, int channels) {
     pa_sample_spec ss;
     ss.format   = PA_SAMPLE_S16LE;
     ss.rate     = (uint32_t)sample_rate;
     ss.channels = (uint8_t)channels;
 
+    uint32_t bytes_per_sec = sample_rate * channels * 2;
+    uint32_t target_latency_bytes = (bytes_per_sec * 10) / 1000;
+
+    pa_buffer_attr attr;
+    attr.maxlength = target_latency_bytes * 4;
+    attr.tlength   = (uint32_t)-1;
+    attr.prebuf    = (uint32_t)-1;
+    attr.minreq    = (uint32_t)-1;
+    attr.fragsize  = target_latency_bytes;
+
     int error = 0;
-    /*
-     * Passiamo NULL come device_name: PulseAudio (e PipeWire in modalità
-     * compat) interpreterà questo come "usa il monitor del sink di default".
-     * Se l'utente ha rinominato il suo sink, possiamo forzare un nome
-     * specifico aggiungendo un parametro, ma il default funziona nel 99% dei casi.
-     */
+    char *device = get_default_monitor();
+
     g_pa_stream = pa_simple_new(
-        NULL,               /* server  — NULL = locale */
+        NULL,
         "WiFi Audio Streaming",
         PA_STREAM_RECORD,
-        NULL,               /* device  — NULL = monitor del sink di default */
+        device,
         "Loopback Monitor",
         &ss,
-        NULL,               /* channel map — default */
-        NULL,               /* buffer attr — default */
+        NULL,
+        &attr,
         &error
     );
 
@@ -1022,8 +1047,8 @@ static jboolean pulse_start(int sample_rate, int channels) {
     }
 
     g_pa_initialized = 1;
-    printf("[AudioEngine/PulseAudio] Started. %d ch, %d Hz, S16LE\n",
-           channels, sample_rate);
+    printf("[AudioEngine/PulseAudio] Started. %d ch, %d Hz, S16LE, device: %s\n",
+           channels, sample_rate, device ? device : "default");
     return JNI_TRUE;
 }
 
