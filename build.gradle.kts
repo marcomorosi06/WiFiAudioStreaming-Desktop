@@ -1,4 +1,5 @@
 import org.jetbrains.compose.desktop.application.dsl.TargetFormat
+import java.io.ByteArrayOutputStream
 
 plugins {
     kotlin("jvm") version "2.1.0"
@@ -15,15 +16,193 @@ repositories {
     maven("https://maven.pkg.jetbrains.space/public/p/compose/dev")
 }
 
-// Helper per determinare la piattaforma senza importare Loader direttamente
+// ─── Rilevamento piattaforma ──────────────────────────────────────────────────
 val osName = System.getProperty("os.name").lowercase()
 val osArch = System.getProperty("os.arch").lowercase()
-val targetPlatform = when {
-    osName.contains("win") -> if (osArch.contains("64")) "windows-x86_64" else "windows-x86"
-    osName.contains("mac") -> if (osArch.contains("aarch64") || osArch.contains("arm64")) "macosx-arm64" else "macosx-x86_64"
-    else -> "linux-x86_64"
+
+val isWindows = osName.contains("win")
+val isMac     = osName.contains("mac")
+val isLinux   = !isWindows && !isMac
+
+val nativeOsDir = when {
+    isWindows -> "windows"
+    isMac     -> "macos"
+    else      -> "linux"
+}
+val nativeArchDir = when {
+    osArch.contains("aarch64") || osArch.contains("arm64") -> "arm64"
+    else -> "x86_64"
 }
 
+// ─── Ricerca di cmake.exe su Windows ─────────────────────────────────────────
+// Gradle eredita un PATH ristretto che spesso non include CMake anche quando
+// è installato tramite Visual Studio, Scoop, o Chocolatey.
+// Questa funzione cerca cmake nei percorsi noti e restituisce il path assoluto.
+fun findCmakeExecutable(): String {
+    if (!isWindows) return "cmake"
+
+    // 1. Già nel PATH del processo corrente?
+    try {
+        val check = ProcessBuilder("cmake", "--version")
+            .redirectErrorStream(true).start()
+        if (check.waitFor() == 0) return "cmake"
+    } catch (_: Exception) {}
+
+    // 2. Percorsi standard di installazione su Windows
+    val candidates = mutableListOf<String>()
+
+    // Visual Studio 2022 / 2019 (tutte le edizioni: Community, Professional, Enterprise)
+    val programFiles = listOf(
+        System.getenv("ProgramFiles") ?: "C:\\Program Files",
+        System.getenv("ProgramFiles(x86)") ?: "C:\\Program Files (x86)"
+    )
+    for (pf in programFiles) {
+        for (vsYear in listOf("2022", "2019", "2017")) {
+            for (edition in listOf("Community", "Professional", "Enterprise", "BuildTools")) {
+                candidates += "$pf\\Microsoft Visual Studio\\$vsYear\\$edition\\Common7\\IDE\\CommonExtensions\\Microsoft\\CMake\\CMake\\bin\\cmake.exe"
+            }
+        }
+    }
+
+    // CLion bundled cmake
+    val localAppData = System.getenv("LOCALAPPDATA") ?: ""
+    if (localAppData.isNotEmpty()) {
+        candidates += "$localAppData\\Programs\\CLion\\bin\\cmake\\win\\x64\\bin\\cmake.exe"
+        candidates += "$localAppData\\Programs\\CLion\\bin\\cmake\\win\\bin\\cmake.exe"
+    }
+
+    // CMake standalone installer
+    candidates += "C:\\Program Files\\CMake\\bin\\cmake.exe"
+    candidates += "C:\\Program Files (x86)\\CMake\\bin\\cmake.exe"
+
+    // Scoop
+    val userProfile = System.getenv("USERPROFILE") ?: ""
+    if (userProfile.isNotEmpty()) {
+        candidates += "$userProfile\\scoop\\apps\\cmake\\current\\bin\\cmake.exe"
+        candidates += "$userProfile\\scoop\\shims\\cmake.exe"
+    }
+
+    // Chocolatey
+    candidates += "C:\\ProgramData\\chocolatey\\bin\\cmake.exe"
+    candidates += "C:\\tools\\cmake\\bin\\cmake.exe"
+
+    // winget default
+    candidates += "C:\\Program Files\\CMake\\bin\\cmake.exe"
+
+    for (path in candidates) {
+        if (file(path).exists()) {
+            println("[NativeBuild] CMake trovato: $path")
+            return path
+        }
+    }
+
+    throw GradleException(
+        "cmake.exe non trovato sul sistema.\n" +
+        "Installalo con uno di questi metodi:\n" +
+        "  • winget install Kitware.CMake\n" +
+        "  • scoop install cmake\n" +
+        "  • choco install cmake\n" +
+        "  • Visual Studio Installer → Singoli componenti → 'Strumenti CMake C++ per Windows'\n" +
+        "Poi riavvia Android Studio / IntelliJ IDEA per aggiornare il PATH."
+    )
+}
+
+fun findWindowsGenerator(cmakePath: String): List<String> {
+    return listOf(
+        "-G", "Visual Studio 17 2022",
+        "-A", "x64"
+    )
+}
+
+fun programFilesCandidatesForNinja(): List<String> {
+    val pf = System.getenv("ProgramFiles") ?: "C:\\Program Files"
+    return listOf("2022", "2019", "2017").flatMap { year ->
+        listOf("Community", "Professional", "Enterprise", "BuildTools").map { ed ->
+            "$pf\\Microsoft Visual Studio\\$year\\$ed\\Common7\\IDE\\CommonExtensions\\Microsoft\\CMake\\Ninja\\ninja.exe"
+        }
+    }
+}
+
+// ─── Directory per la libreria nativa compilata ───────────────────────────────
+val nativeSrcDir    = file("src/main/native")
+val nativeBuildDir  = file("${layout.buildDirectory.get()}/native-build")
+val nativeOutputDir = file("${layout.buildDirectory.get()}/native-build/output")
+val nativeResDir    = file("src/main/resources/native/$nativeOsDir/$nativeArchDir")
+
+// ─── Task: configura il progetto CMake ───────────────────────────────────────
+val compileNative by tasks.registering(Exec::class) {
+    description = "Configura il progetto CMake per audio_engine"
+    group       = "build"
+
+    doFirst {
+        nativeBuildDir.mkdirs()
+        nativeResDir.mkdirs()
+    }
+
+    val javaHome = System.getProperty("java.home")?.replace("\\", "/")
+        ?: throw GradleException("java.home non trovato. Assicurati di usare JDK 17.")
+
+    val cmakePath = findCmakeExecutable()
+
+    workingDir = nativeBuildDir
+
+    val cmakeArgs = mutableListOf(
+        cmakePath,
+        nativeSrcDir.absolutePath,
+        "-DJAVA_HOME=$javaHome",
+        "-DCMAKE_BUILD_TYPE=Release"
+    )
+
+    if (isWindows) {
+        cmakeArgs += findWindowsGenerator(cmakePath)
+    } else {
+        cmakeArgs += listOf("-G", "Unix Makefiles")
+    }
+
+    commandLine(cmakeArgs)
+}
+
+// ─── Task: compila con cmake --build ─────────────────────────────────────────
+val buildNative by tasks.registering(Exec::class) {
+    description = "Compila audio_engine tramite cmake --build"
+    group       = "build"
+    dependsOn(compileNative)
+
+    val cmakePath = findCmakeExecutable()
+    workingDir = nativeBuildDir
+    commandLine(cmakePath, "--build", ".", "--config", "Release", "--parallel")
+}
+
+// ─── Task: copia la .so/.dll/.dylib in resources/native/ ─────────────────────
+val copyNativeLib by tasks.registering(Copy::class) {
+    description = "Copia la libreria nativa in src/main/resources/native/"
+    group       = "build"
+    dependsOn(buildNative)
+
+    // Aggiungiamo "**/" per fargli cercare anche dentro le sottocartelle (es. Release/)
+    from(nativeOutputDir) {
+        include("**/*.so", "**/*.dll", "**/*.dylib")
+    }
+    into(nativeResDir)
+
+    // Appiattisce la struttura: estrae il file dalla cartella "Release"
+    // e lo mette direttamente in "x86_64"
+    eachFile {
+        path = name
+    }
+    includeEmptyDirs = false
+}
+
+// La compilazione Kotlin dipende dalla libreria nativa
+tasks.named("compileKotlin") {
+    dependsOn(copyNativeLib)
+}
+
+tasks.named<ProcessResources>("processResources") {
+    dependsOn(copyNativeLib)
+}
+
+// ─── Dipendenze ───────────────────────────────────────────────────────────────
 dependencies {
     implementation(compose.desktop.currentOs)
     implementation(compose.material3)
@@ -40,12 +219,20 @@ dependencies {
     implementation("org.bouncycastle:bctls-jdk18on:$bcVersion")
     implementation("org.bouncycastle:bcpkix-jdk18on:$bcVersion")
 
+    // JavaCV rimane per gli encoder AAC e Opus (HTTP server) —
+    // NON viene più usato per la cattura audio (sostituita da AudioEngine JNI).
     val javacvVersion = "1.5.10"
+    val targetPlatform = when {
+        isWindows -> if (osArch.contains("64")) "windows-x86_64" else "windows-x86"
+        isMac     -> if (osArch.contains("aarch64") || osArch.contains("arm64")) "macosx-arm64" else "macosx-x86_64"
+        else      -> "linux-x86_64"
+    }
     implementation("org.bytedeco:javacv:$javacvVersion")
     implementation("org.bytedeco:ffmpeg:$javacvVersion:$targetPlatform")
     implementation("org.bytedeco:javacpp:$javacvVersion:$targetPlatform")
 }
 
+// ─── Packaging Compose Desktop ────────────────────────────────────────────────
 compose.desktop {
     application {
         mainClass = "MainKt"
