@@ -230,6 +230,8 @@ dependencies {
     implementation("org.bytedeco:javacv:$javacvVersion")
     implementation("org.bytedeco:ffmpeg:$javacvVersion:$targetPlatform")
     implementation("org.bytedeco:javacpp:$javacvVersion:$targetPlatform")
+    implementation("com.dorkbox:SystemTray:4.4")
+    implementation("org.slf4j:slf4j-nop:2.0.9")
 }
 
 // ─── Packaging Compose Desktop ────────────────────────────────────────────────

@@ -2598,26 +2598,73 @@ fun main() = application {
         windowState.isMinimized = false
     }
 
-    Tray(
-        icon = trayIcon,
-        state = trayState,
-        tooltip = "WiFi Audio Streamer",
-        onAction = showAndRaise,
-        menu = {
-            Item(
-                text = if (isWindowVisible) Strings.get("tray_hide_window") else Strings.get("tray_show_window"),
-                onClick = {
-                    if (isWindowVisible) isWindowVisible = false
-                    else showAndRaise()
+    val isLinux = System.getProperty("os.name").lowercase().contains("linux")
+
+    if (!isLinux) {
+        // --- Windows e macOS: Usiamo il Tray nativo di Compose ---
+        Tray(
+            icon = trayIcon,
+            state = trayState,
+            tooltip = "WiFi Audio Streamer",
+            onAction = showAndRaise,
+            menu = {
+                Item(
+                    text = if (isWindowVisible) Strings.get("tray_hide_window") else Strings.get("tray_show_window"),
+                    onClick = {
+                        if (isWindowVisible) isWindowVisible = false
+                        else showAndRaise()
+                    }
+                )
+                Separator()
+                Item(
+                    text = Strings.get("tray_quit"),
+                    onClick = performQuit
+                )
+            }
+        )
+    } else {
+        LaunchedEffect(Unit) {
+            dorkbox.systemTray.SystemTray.FORCE_GTK2 = false
+
+            val linuxTray = dorkbox.systemTray.SystemTray.get()
+
+            if (linuxTray != null) {
+                val iconUrl = Thread.currentThread().contextClassLoader?.getResource("app_icon.png")
+                    ?: ClassLoader.getSystemResource("app_icon.png")
+                    ?: object {}.javaClass.getResource("/app_icon.png")
+
+                if (iconUrl != null) {
+                    linuxTray.setImage(iconUrl)
                 }
-            )
-            Separator()
-            Item(
-                text = Strings.get("tray_quit"),
-                onClick = performQuit
-            )
+
+                linuxTray.setTooltip("WiFi Audio Streamer")
+
+                val toggleItem = dorkbox.systemTray.MenuItem(Strings.get("tray_show_window"))
+
+                toggleItem.setCallback {
+                    isWindowVisible = !isWindowVisible
+                    if (isWindowVisible) {
+                        windowState.isMinimized = false
+                        toggleItem.text = Strings.get("tray_hide_window")
+                    } else {
+                        toggleItem.text = Strings.get("tray_show_window")
+                    }
+                }
+
+                val quitItem = dorkbox.systemTray.MenuItem(Strings.get("tray_quit")) {
+                    linuxTray.shutdown()
+                    performQuit()
+                }
+
+                linuxTray.menu.add(toggleItem)
+                linuxTray.menu.add(dorkbox.systemTray.Separator())
+                linuxTray.menu.add(quitItem)
+
+            } else {
+                println("Attenzione: Dorkbox SystemTray non è supportato su questo sistema/DE.")
+            }
         }
-    )
+    }
 
     Window(
         onCloseRequest = hideOrQuit,
