@@ -4,12 +4,21 @@
     <option name="autoReloadType" value="SELECTIVE" />
   </component>
   <component name="ChangeListManager">
-    <list default="true" id="5f86ce91-f37e-4a3e-9b89-95bbba8740e8" name="Changes" comment="Pesante ottimizzazione per la compilazione, aggiunta di avvio automatico dell'app all'avvio, priorità client automatico e avvio server automatico. Bug fix server fantasma nella discovery">
+    <list default="true" id="5f86ce91-f37e-4a3e-9b89-95bbba8740e8" name="Changes" comment="Pulizia da vb-cable">
+      <change afterPath="$PROJECT_DIR$/src/main/resources/raw/connection_sound.wav" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/src/main/resources/raw/disconnection_sound.wav" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/src/main/resources/wfas_protocol.png" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/.idea/misc.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/misc.xml" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/build.gradle.kts" beforeDir="false" afterPath="$PROJECT_DIR$/build.gradle.kts" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/gradlew" beforeDir="false" afterPath="$PROJECT_DIR$/gradlew" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/main/kotlin/AudioEngine.kt" beforeDir="false" afterPath="$PROJECT_DIR$/src/main/kotlin/AudioEngine.kt" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/src/main/kotlin/DesktopUI.kt" beforeDir="false" afterPath="$PROJECT_DIR$/src/main/kotlin/DesktopUI.kt" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/src/main/kotlin/Main.kt" beforeDir="false" afterPath="$PROJECT_DIR$/src/main/kotlin/Main.kt" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/src/main/kotlin/SettingsManager.kt" beforeDir="false" afterPath="$PROJECT_DIR$/src/main/kotlin/SettingsManager.kt" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/main/kotlin/strings.kt" beforeDir="false" afterPath="$PROJECT_DIR$/src/main/kotlin/strings.kt" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/main/native/CMakeLists.txt" beforeDir="false" afterPath="$PROJECT_DIR$/src/main/native/CMakeLists.txt" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/main/native/audio_engine.c" beforeDir="false" afterPath="$PROJECT_DIR$/src/main/native/audio_engine.c" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/main/native/audio_engine_mac.m" beforeDir="false" afterPath="$PROJECT_DIR$/src/main/native/audio_engine_mac.m" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/src/main/resources/strings.properties" beforeDir="false" afterPath="$PROJECT_DIR$/src/main/resources/strings.properties" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/src/main/resources/strings_it.properties" beforeDir="false" afterPath="$PROJECT_DIR$/src/main/resources/strings_it.properties" afterDir="false" />
     </list>
@@ -128,15 +137,20 @@
     &quot;ModuleVcsDetector.initialDetectionPerformed&quot;: &quot;true&quot;,
     &quot;RunOnceActivity.ShowReadmeOnStart&quot;: &quot;true&quot;,
     &quot;RunOnceActivity.TerminalTabsStorage.copyFrom.TerminalArrangementManager.252&quot;: &quot;true&quot;,
+    &quot;RunOnceActivity.cidr.known.project.marker&quot;: &quot;true&quot;,
     &quot;RunOnceActivity.git.unshallow&quot;: &quot;true&quot;,
+    &quot;RunOnceActivity.readMode.enableVisualFormatting&quot;: &quot;true&quot;,
+    &quot;cidr.known.project.marker&quot;: &quot;true&quot;,
     &quot;git-widget-placeholder&quot;: &quot;master&quot;,
     &quot;kotlin-language-version-configured&quot;: &quot;true&quot;,
-    &quot;last_opened_file_path&quot;: &quot;C:/Users/marco/Documents/Progettini/WifiAudioStreaming/WiFiAudioStreaming-Desktop/libs&quot;,
+    &quot;last_opened_file_path&quot;: &quot;C:/Users/marco/Documents/Progettini/WifiAudioStreaming/WiFiAudioStreaming-Desktop/src/main/resources&quot;,
     &quot;settings.editor.selected.configurable&quot;: &quot;org.jetbrains.plugins.github.ui.GithubSettingsConfigurable&quot;
   }
 }</component>
   <component name="RecentsManager">
     <key name="CopyFile.RECENT_KEYS">
+      <recent name="C:\Users\marco\Documents\Progettini\WifiAudioStreaming\WiFiAudioStreaming-Desktop\src\main\resources" />
+      <recent name="C:\Users\marco\Documents\Progettini\WifiAudioStreaming\WiFiAudioStreaming-Desktop\src\main\resources\raw" />
       <recent name="C:\Users\marco\Documents\Progettini\WifiAudioStreaming\WiFiAudioStreaming-Desktop\libs" />
     </key>
     <key name="MoveFile.RECENT_KEYS">
@@ -315,7 +329,47 @@
       <option name="project" value="LOCAL" />
       <updated>1775158148915</updated>
     </task>
-    <option name="localTasksCounter" value="13" />
+    <task id="LOCAL-00013" summary="new audio grabber engine in C">
+      <option name="closed" value="true" />
+      <created>1776502149671</created>
+      <option name="number" value="00013" />
+      <option name="presentableId" value="LOCAL-00013" />
+      <option name="project" value="LOCAL" />
+      <updated>1776502149671</updated>
+    </task>
+    <task id="LOCAL-00014" summary="changed LICENSE.md from MIT to EUPL">
+      <option name="closed" value="true" />
+      <created>1776502450751</created>
+      <option name="number" value="00014" />
+      <option name="presentableId" value="LOCAL-00014" />
+      <option name="project" value="LOCAL" />
+      <updated>1776502450751</updated>
+    </task>
+    <task id="LOCAL-00015" summary="changed LICENSE.md from MIT to EUPL">
+      <option name="closed" value="true" />
+      <created>1776502687218</created>
+      <option name="number" value="00015" />
+      <option name="presentableId" value="LOCAL-00015" />
+      <option name="project" value="LOCAL" />
+      <updated>1776502687218</updated>
+    </task>
+    <task id="LOCAL-00016" summary="muta dispositivo in stream con engine in C">
+      <option name="closed" value="true" />
+      <created>1776503124587</created>
+      <option name="number" value="00016" />
+      <option name="presentableId" value="LOCAL-00016" />
+      <option name="project" value="LOCAL" />
+      <updated>1776503124587</updated>
+    </task>
+    <task id="LOCAL-00017" summary="Pulizia da vb-cable">
+      <option name="closed" value="true" />
+      <created>1776503653657</created>
+      <option name="number" value="00017" />
+      <option name="presentableId" value="LOCAL-00017" />
+      <option name="project" value="LOCAL" />
+      <updated>1776503653657</updated>
+    </task>
+    <option name="localTasksCounter" value="18" />
     <servers />
   </component>
   <component name="Vcs.Log.Tabs.Properties">
@@ -337,6 +391,10 @@
     <MESSAGE value="Dettaglino per solo unicast con inserimento manuale ip." />
     <MESSAGE value="Aggiunta compatibilità con protocolli RTP/PCM, HTTP Web Stream, aggiunta la network interface e aggiunta la possibilità di connettersi manualmente a un ip sia in unicast che in multicast." />
     <MESSAGE value="Pesante ottimizzazione per la compilazione, aggiunta di avvio automatico dell'app all'avvio, priorità client automatico e avvio server automatico. Bug fix server fantasma nella discovery" />
-    <option name="LAST_COMMIT_MESSAGE" value="Pesante ottimizzazione per la compilazione, aggiunta di avvio automatico dell'app all'avvio, priorità client automatico e avvio server automatico. Bug fix server fantasma nella discovery" />
+    <MESSAGE value="new audio grabber engine in C" />
+    <MESSAGE value="changed LICENSE.md from MIT to EUPL" />
+    <MESSAGE value="muta dispositivo in stream con engine in C" />
+    <MESSAGE value="Pulizia da vb-cable" />
+    <option name="LAST_COMMIT_MESSAGE" value="Pulizia da vb-cable" />
   </component>
 </project>

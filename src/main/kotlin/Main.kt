@@ -1,3 +1,20 @@
+/*
+ * Copyright (c) 2026 Marco Morosi
+ *
+ * Licensed under the EUPL, Version 1.2 or – as soon they will be approved by
+ * the European Commission - subsequent versions of the EUPL (the "Licence");
+ * You may not use this work except in compliance with the Licence.
+ * You may obtain a copy of the Licence at:
+ *
+ * https://joinup.ec.europa.eu/software/page/eupl
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the Licence is distributed on an "AS IS" basis,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the Licence for the specific language governing permissions and
+ * limitations under the Licence.
+ */
+
 import androidx.compose.desktop.ui.tooling.preview.Preview
 import androidx.compose.foundation.background
 import androidx.compose.foundation.isSystemInDarkTheme
@@ -20,12 +37,22 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.DpSize
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Window
+import androidx.compose.ui.window.Tray
+import androidx.compose.ui.window.rememberTrayState
+import androidx.compose.ui.window.Notification
 import androidx.compose.ui.window.application
 import androidx.compose.ui.window.rememberWindowState
+import androidx.compose.ui.graphics.painter.BitmapPainter
+import androidx.compose.ui.graphics.toComposeImageBitmap
+import androidx.compose.ui.graphics.painter.Painter
 import io.ktor.network.selector.*
 import io.ktor.network.sockets.*
 import io.ktor.utils.io.core.*
 import kotlinx.coroutines.*
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
+import androidx.compose.runtime.collectAsState
 import java.net.DatagramPacket
 import java.net.DatagramSocket
 import java.net.InetAddress
@@ -361,12 +388,18 @@ object NetworkHandler_v1 {
 
     private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
 
+    val isMicMuted = MutableStateFlow(false)
+
     private var streamingJob:    Job? = null
     private var listeningJob:    Job? = null
     private var broadcastingJob: Job? = null
     private var micReceiverJob:  Job? = null
+    private var localMicMixJob:  Job? = null
     private var httpServerJob:   Job? = null
     private var rtpJob:          Job? = null
+
+    private val lifecycleMutex = Mutex()
+    private val lifecycleGeneration = java.util.concurrent.atomic.AtomicLong(0)
 
     // ── AudioEngine (motore nativo JNI) ───────────────────────────────────────
     @Volatile private var serverEngine: AudioEngine? = null
@@ -647,47 +680,354 @@ object NetworkHandler_v1 {
     private fun CoroutineScope.launchMicReceiver(
         audioSettings: AudioSettings_V1,
         isMulticast: Boolean,
-        micOutputMixerInfo: Mixer.Info,
-        micPort: Int
+        routingMode: MicRoutingMode,
+        micOutputMixerInfo: Mixer.Info?,
+        micPort: Int,
+        micMixInputInfo: Mixer.Info? = null
     ) = launch {
-        val mixer = try {
-            AudioSystem.getMixer(micOutputMixerInfo)
-        } catch (e: IllegalArgumentException) {
-            return@launch
-        }
+        if (routingMode == MicRoutingMode.OFF) return@launch
 
-        val format   = audioSettings.toAudioFormat()
-        val lineInfo = DataLine.Info(SourceDataLine::class.java, format)
-        if (!mixer.isLineSupported(lineInfo)) return@launch
+        val osName = System.getProperty("os.name").lowercase()
+        val isLinux   = osName.contains("linux")
+        val isWindows = osName.contains("win")
 
-        val line = (mixer.getLine(lineInfo) as SourceDataLine).also {
-            it.open(format, audioSettings.bufferSize * 4)
-            it.start()
-        }
-        var socket: DatagramSocket? = null
+        var line: SourceDataLine? = null
+        var nativeVirtualSinkActive = false
+        var wasapiSinkEngine: AudioEngine? = null
+        var mixActive = false
+        var muteCollectorJob: Job? = null
+
         try {
-            val buf    = ByteArray(audioSettings.bufferSize * 2)
-            val packet = DatagramPacket(buf, buf.size)
-            socket = if (isMulticast) {
-                MulticastSocket(micPort).apply {
-                    joinGroup(InetAddress.getByName(MULTICAST_GROUP_IP))
-                    soTimeout = 1000
+            when (routingMode) {
+                MicRoutingMode.VIRTUAL_MIC -> {
+                    if (isLinux) {
+                        val engine = AudioEngine(
+                            sampleRate = audioSettings.sampleRate.toInt(),
+                            channels   = audioSettings.channels,
+                            bufferFrames = audioSettings.bufferSize / (audioSettings.channels * 2)
+                        )
+                        val created = engine.createVirtualSink(
+                            audioSettings.sampleRate.toInt(),
+                            audioSettings.channels
+                        )
+                        if (!created) {
+                            println("[MicReceiver] createVirtualSink fallita: ${engine.lastError}")
+                            return@launch
+                        }
+                        activeVirtualSinkEngine = engine
+                        nativeVirtualSinkActive = true
+                        println("[MicReceiver] Virtual sink attivo: ${engine.virtualSinkName()}")
+                    } else if (isWindows) {
+                        val engine = AudioEngine(
+                            sampleRate   = audioSettings.sampleRate.toInt(),
+                            channels     = audioSettings.channels,
+                            bufferFrames = audioSettings.bufferSize / (audioSettings.channels * 2)
+                        )
+                        val hint = micOutputMixerInfo?.name
+                        val opened = engine.micSinkOpen(hint, audioSettings.sampleRate.toInt(), audioSettings.channels)
+                        if (!opened) {
+                            println("[MicReceiver] WASAPI micSinkOpen fallita: ${engine.lastError}")
+                            val outputs = runCatching { findAvailableOutputMixers() }.getOrDefault(emptyList())
+                            val fallback = micOutputMixerInfo
+                                ?: VirtualMicAutodetect.detectManualCable(outputs)?.mixerInfo
+                                ?: run {
+                                    println("[MicReceiver] Nessun cable selezionato/rilevato.")
+                                    return@launch
+                                }
+                            val mixer = runCatching { AudioSystem.getMixer(fallback) }.getOrNull() ?: return@launch
+                            val format   = audioSettings.toAudioFormat()
+                            val lineInfo = DataLine.Info(SourceDataLine::class.java, format)
+                            if (!mixer.isLineSupported(lineInfo)) return@launch
+                            line = (mixer.getLine(lineInfo) as SourceDataLine).also {
+                                it.open(format, audioSettings.bufferSize * 8)
+                                it.start()
+                            }
+                            println("[MicReceiver] Fallback SourceDataLine su '${fallback.name}'")
+                        } else {
+                            wasapiSinkEngine = engine
+                            println("[MicReceiver] WASAPI sink attivo su '${engine.micSinkDeviceName()}'")
+                        }
+                    } else {
+                        val outputs = runCatching { findAvailableOutputMixers() }.getOrDefault(emptyList())
+                        val mixerInfo = micOutputMixerInfo
+                            ?: VirtualMicAutodetect.detectManualCable(outputs)?.mixerInfo
+                            ?: run {
+                                println("[MicReceiver] VIRTUAL_MIC su ${osName}: nessun cable selezionato/rilevato.")
+                                return@launch
+                            }
+                        println("[MicReceiver] Apertura SourceDataLine verso '${mixerInfo.name}'")
+                        val mixer = runCatching { AudioSystem.getMixer(mixerInfo) }.getOrNull() ?: run {
+                            println("[MicReceiver] getMixer() fallita per ${mixerInfo.name}")
+                            return@launch
+                        }
+                        val format   = audioSettings.toAudioFormat()
+                        val lineInfo = DataLine.Info(SourceDataLine::class.java, format)
+                        if (!mixer.isLineSupported(lineInfo)) {
+                            println("[MicReceiver] Mixer ${mixerInfo.name} non supporta il formato ${format.sampleRate}Hz/${format.channels}ch/${format.sampleSizeInBits}bit.")
+                            return@launch
+                        }
+                        line = (mixer.getLine(lineInfo) as SourceDataLine).also {
+                            it.open(format, audioSettings.bufferSize * 8)
+                            it.start()
+                        }
+                        println("[MicReceiver] SourceDataLine aperta: buffer=${line?.bufferSize} bytes, format=$format")
+                    }
                 }
-            } else {
-                DatagramSocket(micPort).apply { soTimeout = 1000 }
+                MicRoutingMode.MIX_INTO_STREAM -> {
+                    mixActive = true
+                    while (isActive && serverEngine == null) {
+                        delay(100)
+                    }
+                    serverEngine?.setMicMixEnabled(true)
+                    serverEngine?.setMicMixVolume(if (isMicMuted.value) 0f else 1.0f)
+                    muteCollectorJob = launch {
+                        isMicMuted.collect { muted ->
+                            runCatching { serverEngine?.setMicMixVolume(if (muted) 0f else 1.0f) }
+                        }
+                    }
+                }
+                MicRoutingMode.OFF -> return@launch
             }
-            while (isActive) {
-                try {
-                    socket.receive(packet)
-                    if (packet.length > 0) line.write(packet.data, 0, packet.length)
-                } catch (_: java.net.SocketTimeoutException) { continue }
+
+            var socket: DatagramSocket? = null
+            try {
+                val buf    = ByteArray(65536)
+                val packet = DatagramPacket(buf, buf.size)
+                socket = DatagramSocket(micPort).apply {
+                    soTimeout = 1000
+                    receiveBufferSize = 1 shl 20
+                }
+                println("[MicReceiver] In ascolto su porta $micPort (mode=$routingMode) rcvbuf=${socket.receiveBufferSize}")
+
+                val reusableShorts = ShortArray(buf.size / 2)
+                var totalPackets = 0L
+                var totalBytes   = 0L
+
+                while (isActive) {
+                    try {
+                        packet.setData(buf, 0, buf.size)
+                        socket.receive(packet)
+                        val len = packet.length
+                        if (len <= 0) continue
+
+                        totalPackets++
+                        totalBytes += len
+                        if (totalPackets == 1L || totalPackets % 200L == 0L) {
+                            println("[MicReceiver] pkt #$totalPackets from ${packet.address.hostAddress}:${packet.port} len=$len totalBytes=$totalBytes")
+                        }
+
+                        when (routingMode) {
+                            MicRoutingMode.VIRTUAL_MIC -> {
+                                if (nativeVirtualSinkActive) {
+                                    val engine = activeVirtualSinkEngine ?: continue
+                                    val numShorts = len / 2
+                                    val bb = java.nio.ByteBuffer.wrap(packet.data, 0, len)
+                                        .order(java.nio.ByteOrder.LITTLE_ENDIAN)
+                                    var i = 0
+                                    while (bb.remaining() >= 2 && i < reusableShorts.size) {
+                                        reusableShorts[i++] = bb.short
+                                    }
+                                    engine.writeToVirtualSink(reusableShorts, numShorts)
+                                } else if (wasapiSinkEngine != null) {
+                                    val numShorts = len / 2
+                                    val bb = java.nio.ByteBuffer.wrap(packet.data, 0, len)
+                                        .order(java.nio.ByteOrder.LITTLE_ENDIAN)
+                                    var i = 0
+                                    while (bb.remaining() >= 2 && i < reusableShorts.size) {
+                                        reusableShorts[i++] = bb.short
+                                    }
+                                    wasapiSinkEngine.micSinkWrite(reusableShorts, numShorts)
+                                } else {
+                                    val currentLine = line
+                                    if (currentLine != null) {
+                                        val evenLen = len - (len % 2)
+                                        currentLine.write(packet.data, 0, evenLen)
+                                    } else {
+                                        if (totalPackets == 1L) println("[MicReceiver] ERRORE: SourceDataLine null, mixer non selezionato")
+                                    }
+                                }
+                            }
+                            MicRoutingMode.MIX_INTO_STREAM -> {
+                                val engine = serverEngine ?: continue
+                                val numShorts = len / 2
+                                val bb = java.nio.ByteBuffer.wrap(packet.data, 0, len)
+                                    .order(java.nio.ByteOrder.LITTLE_ENDIAN)
+                                var i = 0
+                                while (bb.remaining() >= 2 && i < reusableShorts.size) {
+                                    reusableShorts[i++] = bb.short
+                                }
+                                engine.pushMicPcm(reusableShorts, numShorts)
+                            }
+                            MicRoutingMode.OFF -> break
+                        }
+                    } catch (_: java.net.SocketTimeoutException) { continue }
+                }
+            } finally {
+                socket?.close()
             }
         } catch (e: Exception) {
+            if (e !is CancellationException) println("[MicReceiver] errore: ${e.message}")
         } finally {
-            socket?.close()
-            line.drain()
-            line.stop()
-            line.close()
+            muteCollectorJob?.cancel()
+            if (mixActive && localMicMixJob?.isActive != true) {
+                serverEngine?.setMicMixEnabled(false)
+                serverEngine?.setMicMixVolume(1.0f)
+            }
+            if (nativeVirtualSinkActive) {
+                activeVirtualSinkEngine?.destroyVirtualSink()
+                activeVirtualSinkEngine = null
+            }
+            wasapiSinkEngine?.let {
+                runCatching { it.micSinkClose() }
+            }
+            line?.let {
+                runCatching { it.drain() }
+                runCatching { it.stop() }
+                runCatching { it.close() }
+            }
+        }
+    }
+
+    @Volatile private var activeVirtualSinkEngine: AudioEngine? = null
+
+    // ── Local microphone mix-into-stream capture (server side) ────────────────
+    private fun CoroutineScope.launchLocalMicMix(
+        audioSettings: AudioSettings_V1,
+        micMixInputInfo: Mixer.Info
+    ) = launch(Dispatchers.IO) {
+        var localMicLine: TargetDataLine? = null
+        var muteCollectorJob: Job? = null
+        try {
+            while (isActive && serverEngine == null) {
+                delay(100)
+            }
+            val engine = serverEngine ?: run {
+                println("[LocalMicMix] serverEngine non disponibile, mix microfono saltato")
+                return@launch
+            }
+            engine.setMicMixEnabled(true)
+            engine.setMicMixVolume(if (isMicMuted.value) 0f else 1.0f)
+
+            muteCollectorJob = launch {
+                isMicMuted.collect { muted ->
+                    runCatching { serverEngine?.setMicMixVolume(if (muted) 0f else 1.0f) }
+                }
+            }
+
+            val mixer = runCatching { AudioSystem.getMixer(micMixInputInfo) }.getOrNull() ?: run {
+                println("[LocalMicMix] Impossibile ottenere il mixer ${micMixInputInfo.name}")
+                return@launch
+            }
+            val streamSr  = audioSettings.sampleRate
+            val streamBd  = audioSettings.bitDepth
+            val streamCh  = audioSettings.channels
+
+            val candidates = mutableListOf<AudioFormat>()
+            candidates += AudioFormat(streamSr, streamBd, streamCh, true, false)
+            if (streamCh != 1) candidates += AudioFormat(streamSr, streamBd, 1, true, false)
+            for (sr in floatArrayOf(48000f, 44100f, 32000f, 16000f)) {
+                if (sr == streamSr) continue
+                candidates += AudioFormat(sr, streamBd, streamCh, true, false)
+                candidates += AudioFormat(sr, streamBd, 1, true, false)
+            }
+
+            var chosen: AudioFormat? = null
+            for (fmt in candidates) {
+                val info = DataLine.Info(TargetDataLine::class.java, fmt)
+                if (!mixer.isLineSupported(info)) continue
+                runCatching {
+                    val l = (mixer.getLine(info) as TargetDataLine).apply {
+                        open(fmt, audioSettings.bufferSize * 4)
+                        start()
+                    }
+                    localMicLine = l
+                    chosen = fmt
+                }
+                if (chosen != null) break
+            }
+            if (localMicLine == null || chosen == null) {
+                println("[LocalMicMix] Nessun formato supportato dal device ${micMixInputInfo.name}")
+                return@launch
+            }
+            println("[LocalMicMix] Capture aperta su ${micMixInputInfo.name} fmt=$chosen target=${streamSr}Hz/${streamCh}ch")
+
+            val inSr      = chosen!!.sampleRate
+            val inCh      = chosen!!.channels
+            val needsUpmix   = inCh == 1 && streamCh == 2
+            val needsDownmix = inCh == 2 && streamCh == 1
+            val needsResample = inSr != streamSr
+
+            val readBuf = ByteArray(audioSettings.bufferSize)
+
+            while (isActive) {
+                val n = localMicLine!!.read(readBuf, 0, readBuf.size)
+                if (n <= 0) continue
+                val bb = java.nio.ByteBuffer.wrap(readBuf, 0, n).order(java.nio.ByteOrder.LITTLE_ENDIAN)
+                val numInShorts = n / 2
+                val inShorts = ShortArray(numInShorts)
+                var idx = 0
+                while (bb.remaining() >= 2 && idx < numInShorts) inShorts[idx++] = bb.short
+
+                var procShorts: ShortArray = inShorts
+                var procCh = inCh
+                if (needsDownmix) {
+                    val mono = ShortArray(numInShorts / 2)
+                    var j = 0
+                    var k = 0
+                    while (k + 1 < numInShorts) {
+                        mono[j++] = ((inShorts[k].toInt() + inShorts[k + 1].toInt()) / 2).toShort()
+                        k += 2
+                    }
+                    procShorts = mono.copyOf(j)
+                    procCh = 1
+                } else if (needsUpmix) {
+                    val stereo = ShortArray(numInShorts * 2)
+                    var j = 0
+                    for (s in inShorts) {
+                        stereo[j++] = s
+                        stereo[j++] = s
+                    }
+                    procShorts = stereo
+                    procCh = 2
+                }
+
+                val outShorts: ShortArray = if (!needsResample) {
+                    procShorts
+                } else {
+                    val ratio = streamSr.toDouble() / inSr.toDouble()
+                    val inFrames = procShorts.size / procCh
+                    val approxOutFrames = (inFrames * ratio).toInt() + 2
+                    val out = ShortArray(approxOutFrames * procCh)
+                    var outPos = 0
+                    var srcFrame = 0.0
+                    while (srcFrame < inFrames - 1 && outPos + procCh <= out.size) {
+                        val base = srcFrame.toInt()
+                        val frac = (srcFrame - base).toFloat()
+                        for (c in 0 until procCh) {
+                            val a = procShorts[base * procCh + c].toInt()
+                            val b = procShorts[(base + 1) * procCh + c].toInt()
+                            val v = (a + (b - a) * frac).toInt()
+                                .coerceIn(Short.MIN_VALUE.toInt(), Short.MAX_VALUE.toInt())
+                            out[outPos++] = v.toShort()
+                        }
+                        srcFrame += 1.0 / ratio
+                    }
+                    if (outPos < out.size) out.copyOf(outPos) else out
+                }
+
+                serverEngine?.pushMicPcm(outShorts, outShorts.size)
+            }
+        } catch (_: CancellationException) {
+        } catch (e: Exception) {
+            println("[LocalMicMix] errore: ${e.message}")
+        } finally {
+            muteCollectorJob?.cancel()
+            runCatching { localMicLine?.stop() }
+            runCatching { localMicLine?.close() }
+            if (micReceiverJob?.isActive != true) {
+                runCatching { serverEngine?.setMicMixEnabled(false) }
+                runCatching { serverEngine?.setMicMixVolume(1.0f) }
+            }
         }
     }
 
@@ -713,9 +1053,13 @@ object NetworkHandler_v1 {
             val dest = if (serverInfo.isMulticast) InetAddress.getByName(MULTICAST_GROUP_IP)
             else InetAddress.getByName(serverInfo.ip)
             val buf = ByteArray(audioSettings.bufferSize)
+            val silenceBuf = ByteArray(audioSettings.bufferSize)
             while (isActive) {
                 val n = line.read(buf, 0, buf.size)
-                if (n > 0) socket.send(DatagramPacket(buf, n, dest, micPort))
+                if (n > 0) {
+                    val dataToSend = if (isMicMuted.value) silenceBuf else buf
+                    socket.send(DatagramPacket(dataToSend, n, dest, micPort))
+                }
             }
         } catch (e: Exception) {
             if (e !is CancellationException) println("Mic sender error: ${e.message}")
@@ -1475,14 +1819,50 @@ object NetworkHandler_v1 {
         port: Int,
         isMulticast: Boolean,
         capabilities: ServerCapabilities,
+        micRoutingMode: MicRoutingMode,
         micOutputMixerInfo: Mixer.Info?,
         micPort: Int,
         rtpPort: Int,
         useNativeEngine: Boolean = true,
+        micMixInputInfo: Mixer.Info? = null,
         onStatusUpdate: (key: String, args: Array<out Any>) -> Unit
     ) {
-        if (micOutputMixerInfo != null) {
-            micReceiverJob = scope.launchMicReceiver(audioSettings, isMulticast, micOutputMixerInfo, micPort)
+        val myGen = lifecycleGeneration.incrementAndGet()
+        scope.launch {
+            lifecycleMutex.withLock {
+                if (myGen < lifecycleGeneration.get()) return@withLock
+                stopCurrentStreamLocked()
+                if (myGen < lifecycleGeneration.get()) return@withLock
+                startServerInstanceLocked(
+                    audioSettings, port, isMulticast, capabilities,
+                    micRoutingMode, micOutputMixerInfo, micPort, rtpPort,
+                    useNativeEngine, micMixInputInfo, onStatusUpdate
+                )
+            }
+        }
+    }
+
+    private fun startServerInstanceLocked(
+        audioSettings: AudioSettings_V1,
+        port: Int,
+        isMulticast: Boolean,
+        capabilities: ServerCapabilities,
+        micRoutingMode: MicRoutingMode,
+        micOutputMixerInfo: Mixer.Info?,
+        micPort: Int,
+        rtpPort: Int,
+        useNativeEngine: Boolean = true,
+        micMixInputInfo: Mixer.Info? = null,
+        onStatusUpdate: (key: String, args: Array<out Any>) -> Unit
+    ) {
+        if (micRoutingMode != MicRoutingMode.OFF && !isMulticast) {
+            micReceiverJob = scope.launchMicReceiver(
+                audioSettings, false, micRoutingMode, micOutputMixerInfo, micPort, micMixInputInfo
+            )
+        }
+
+        if (micRoutingMode == MicRoutingMode.MIX_INTO_STREAM && micMixInputInfo != null) {
+            localMicMixJob = scope.launchLocalMicMix(audioSettings, micMixInputInfo)
         }
 
         startAnnouncingPresence(isMulticast, port, capabilities)
@@ -1519,7 +1899,9 @@ object NetworkHandler_v1 {
                         .apply { if (!useNativeEngine) order(java.nio.ByteOrder.LITTLE_ENDIAN) }
 
                     try {
-                        MulticastSocket().use { socket ->
+                        MulticastSocket(null as java.net.SocketAddress?).use { socket ->
+                            socket.reuseAddress = true
+                            socket.bind(java.net.InetSocketAddress(0))
                             socket.timeToLive = 4
                             getActiveNetworkInterface()?.let { socket.networkInterface = it }
                             val group = InetAddress.getByName(MULTICAST_GROUP_IP)
@@ -1723,7 +2105,7 @@ object NetworkHandler_v1 {
                                     }
                                 }
                             } finally {
-                                pingJob.cancel()
+                                runCatching { pingJob.cancelAndJoin() }
                                 if (clientAlive.get()) {
                                     runCatching {
                                         socket.send(Datagram(buildPacket { writeText("BYE") }, clientAddress))
@@ -1789,7 +2171,7 @@ object NetworkHandler_v1 {
         if (httpFallback) {
             val url = "http://${serverInfo.ip}:${caps!!.httpPort}"
             onStatusUpdate("status_opening_browser", arrayOf(url))
-            runCatching { java.awt.Desktop.getDesktop().browse(java.net.URI(url)) }
+            runCatching { openUrl(url) }
                 .onFailure { e ->
                     println("Cannot open browser: ${e.message}")
                     onStatusUpdate("status_error_client", arrayOf(e.message ?: "browser unavailable"))
@@ -1867,7 +2249,10 @@ object NetworkHandler_v1 {
                 } else { // Multicast
                     onStatusUpdate("status_joining_multicast", arrayOf(serverInfo.port))
                     val groupAddress = InetAddress.getByName(MULTICAST_GROUP_IP)
-                    MulticastSocket(serverInfo.port).use { socket ->
+                    MulticastSocket(null as java.net.SocketAddress?).use { socket ->
+                        socket.reuseAddress = true
+                        socket.bind(java.net.InetSocketAddress(serverInfo.port))
+                        getActiveNetworkInterface()?.let { socket.networkInterface = it }
                         socket.joinGroup(groupAddress)
                         sourceDataLine = prepareSourceDataLine(selectedMixerInfo, audioSettings)
                         sourceDataLine?.start()
@@ -1921,13 +2306,31 @@ object NetworkHandler_v1 {
     }
 
     // ── Stop / terminate ───────────────────────────────────────────────────────
+    fun requestStopCurrentStream(): Job {
+        val myGen = lifecycleGeneration.incrementAndGet()
+        return scope.launch {
+            lifecycleMutex.withLock {
+                if (myGen < lifecycleGeneration.get()) return@withLock
+                stopCurrentStreamLocked()
+            }
+        }
+    }
+
     suspend fun stopCurrentStream() {
+        requestStopCurrentStream().join()
+    }
+
+    private suspend fun stopCurrentStreamLocked() {
         stopAnnouncingPresence()
 
-        httpServerJob?.cancelAndJoin(); httpServerJob = null
-        rtpJob?.cancelAndJoin();        rtpJob        = null
-        streamingJob?.cancelAndJoin();  streamingJob  = null
-        micReceiverJob?.cancelAndJoin(); micReceiverJob = null
+        httpServerJob?.cancelAndJoin();  httpServerJob   = null
+        rtpJob?.cancelAndJoin();         rtpJob          = null
+        localMicMixJob?.cancelAndJoin(); localMicMixJob  = null
+        runCatching { serverEngine?.setMicMixEnabled(false) }
+        streamingJob?.cancelAndJoin();   streamingJob    = null
+        micReceiverJob?.cancelAndJoin(); micReceiverJob  = null
+        broadcastingJob?.cancelAndJoin(); broadcastingJob = null
+        isMicMuted.value = false
     }
 
     fun terminateAllServices() { scope.cancel() }
@@ -1935,17 +2338,33 @@ object NetworkHandler_v1 {
     fun playConnectionSound() {
         scope.launch(Dispatchers.IO) {
             try {
+                val stream = object {}.javaClass.getResourceAsStream("/raw/connection_sound.wav")
+                if (stream != null) {
+                    stream.use {
+                        val audioStream = AudioSystem.getAudioInputStream(it.buffered())
+                        val format = audioStream.format
+                        val info = DataLine.Info(SourceDataLine::class.java, format)
+                        val line = AudioSystem.getLine(info) as SourceDataLine
+                        line.open(format)
+                        line.start()
+                        val buf = ByteArray(4096)
+                        var n: Int
+                        while (audioStream.read(buf, 0, buf.size).also { n = it } != -1) line.write(buf, 0, n)
+                        line.drain()
+                        line.stop()
+                        line.close()
+                    }
+                    return@launch
+                }
                 val sampleRate = 44100f
                 val durationMs = 120
                 val samples = (sampleRate * durationMs / 1000).toInt()
                 val buf = ByteArray(samples * 2)
                 for (i in 0 until samples) {
                     val t = i / sampleRate
-                    val freq1 = 880.0
-                    val freq2 = 1320.0
                     val env = if (i < samples / 4) i.toDouble() / (samples / 4)
                               else 1.0 - (i - samples / 4).toDouble() / (samples * 3 / 4)
-                    val sample = ((Math.sin(2 * Math.PI * freq1 * t) * 0.5 + Math.sin(2 * Math.PI * freq2 * t) * 0.5) * env * Short.MAX_VALUE).toInt()
+                    val sample = ((Math.sin(2 * Math.PI * 880.0 * t) * 0.5 + Math.sin(2 * Math.PI * 1320.0 * t) * 0.5) * env * Short.MAX_VALUE).toInt()
                         .coerceIn(Short.MIN_VALUE.toInt(), Short.MAX_VALUE.toInt())
                     buf[i * 2] = (sample and 0xFF).toByte()
                     buf[i * 2 + 1] = (sample shr 8).toByte()
@@ -1966,17 +2385,33 @@ object NetworkHandler_v1 {
     fun playDisconnectionSound() {
         scope.launch(Dispatchers.IO) {
             try {
+                val stream = object {}.javaClass.getResourceAsStream("/raw/disconnection_sound.wav")
+                if (stream != null) {
+                    stream.use {
+                        val audioStream = AudioSystem.getAudioInputStream(it.buffered())
+                        val format = audioStream.format
+                        val info = DataLine.Info(SourceDataLine::class.java, format)
+                        val line = AudioSystem.getLine(info) as SourceDataLine
+                        line.open(format)
+                        line.start()
+                        val buf = ByteArray(4096)
+                        var n: Int
+                        while (audioStream.read(buf, 0, buf.size).also { n = it } != -1) line.write(buf, 0, n)
+                        line.drain()
+                        line.stop()
+                        line.close()
+                    }
+                    return@launch
+                }
                 val sampleRate = 44100f
                 val durationMs = 120
                 val samples = (sampleRate * durationMs / 1000).toInt()
                 val buf = ByteArray(samples * 2)
                 for (i in 0 until samples) {
                     val t = i / sampleRate
-                    val freq1 = 660.0
-                    val freq2 = 440.0
                     val env = if (i < samples / 4) i.toDouble() / (samples / 4)
                               else 1.0 - (i - samples / 4).toDouble() / (samples * 3 / 4)
-                    val sample = ((Math.sin(2 * Math.PI * freq1 * t) * 0.5 + Math.sin(2 * Math.PI * freq2 * t) * 0.5) * env * Short.MAX_VALUE).toInt()
+                    val sample = ((Math.sin(2 * Math.PI * 660.0 * t) * 0.5 + Math.sin(2 * Math.PI * 440.0 * t) * 0.5) * env * Short.MAX_VALUE).toInt()
                         .coerceIn(Short.MIN_VALUE.toInt(), Short.MAX_VALUE.toInt())
                     buf[i * 2] = (sample and 0xFF).toByte()
                     buf[i * 2 + 1] = (sample shr 8).toByte()
@@ -1999,6 +2434,32 @@ object NetworkHandler_v1 {
 // Application entry point
 // ─────────────────────────────────────────────────────────────────────────────
 
+private fun loadTrayIconPainter(): Painter {
+    val loaders = listOfNotNull(
+        Thread.currentThread().contextClassLoader,
+        Any::class.java.classLoader,
+        ClassLoader.getSystemClassLoader()
+    )
+    val candidates = listOf("app_icon.png", "/app_icon.png")
+    for (loader in loaders) {
+        for (path in candidates) {
+            val resource = if (path.startsWith("/")) Any::class.java.getResourceAsStream(path)
+                           else loader.getResourceAsStream(path)
+            if (resource != null) {
+                return runCatching {
+                    resource.use { input ->
+                        val image = ImageIO.read(input)
+                        if (image != null) BitmapPainter(image.toComposeImageBitmap())
+                        else null
+                    }
+                }.getOrNull() ?: continue
+            }
+        }
+    }
+    val blank = BufferedImage(16, 16, BufferedImage.TYPE_INT_ARGB)
+    return BitmapPainter(blank.toComposeImageBitmap())
+}
+
 fun main() = application {
     // FIX CRASH: disabilita AVX-512/AVX3 — causa EXCEPTION_ACCESS_VIOLATION in
     // StubRoutines::jlong_disjoint_arraycopy_avx3 durante la copia di buffer audio
@@ -2016,14 +2477,15 @@ fun main() = application {
     var audioSettings  by remember { mutableStateOf(loadedSettings.audio) }
     var streamingPort  by remember { mutableStateOf(loadedSettings.streamingPort) }
     var micPort        by remember { mutableStateOf(loadedSettings.micPort) }
+    var micRoutingMode by remember { mutableStateOf(MicRoutingMode.fromStringSafe(loadedSettings.micRoutingMode)) }
 
     val isWindowsOS = remember { System.getProperty("os.name").lowercase().contains("win") }
     var serverVolume by remember { mutableStateOf(1f) }
 
     LaunchedEffect(serverVolume) { NetworkHandler_v1.setServerVolume(serverVolume) }
 
-    LaunchedEffect(appSettings, audioSettings, streamingPort, micPort) {
-        SettingsRepository.saveSettings(AllSettings(appSettings, audioSettings, streamingPort, micPort))
+    LaunchedEffect(appSettings, audioSettings, streamingPort, micPort, micRoutingMode) {
+        SettingsRepository.saveSettings(AllSettings(appSettings, audioSettings, streamingPort, micPort, micRoutingMode.name))
     }
 
     var showSettings       by remember { mutableStateOf(false) }
@@ -2041,7 +2503,9 @@ fun main() = application {
     var sendMicrophone          by remember { mutableStateOf(false) }
     var selectedClientMic       by remember { mutableStateOf<Mixer.Info?>(null) }
     var selectedServerMicOutput by remember { mutableStateOf<Mixer.Info?>(null) }
-    var isMulticastMode by remember { mutableStateOf(true) }
+    var selectedMicMixInput     by remember { mutableStateOf<Mixer.Info?>(null) }
+    var isMulticastMode by remember { mutableStateOf(appSettings.lastMulticastMode) }
+    val isMicMuted by NetworkHandler_v1.isMicMuted.collectAsState()
 
     val serverCapabilities by remember(appSettings, streamingPort) {
         derivedStateOf {
@@ -2068,6 +2532,7 @@ fun main() = application {
         selectedOutputDevice     = outputDevices.value.firstOrNull()
         selectedInputDevice      = inputDevices.value.firstOrNull()
         selectedClientMic        = inputDevices.value.firstOrNull()
+        selectedMicMixInput      = inputDevices.value.firstOrNull()
         selectedServerMicOutput  = outputDevices.value
             .find { it.name.contains("CABLE Input", ignoreCase = true) }
             ?: outputDevices.value.firstOrNull()
@@ -2083,15 +2548,67 @@ fun main() = application {
     val windowState = rememberWindowState(size = DpSize(600.dp, 800.dp))
     var lastDisconnectTime by remember { mutableStateOf(0L) }
 
-    Window(
-        onCloseRequest = {
-            scope.launch {
-                NetworkHandler_v1.stopCurrentStream()
-                exitApplication()
+    var isWindowVisible by remember { mutableStateOf(!appSettings.startMinimizedToTray) }
+    val trayState = rememberTrayState()
+    val trayIcon: Painter = remember { loadTrayIconPainter() }
+
+    val performQuit: () -> Unit = {
+        scope.launch {
+            NetworkHandler_v1.stopCurrentStream()
+            exitApplication()
+        }
+        Unit
+    }
+
+    val hideOrQuit: () -> Unit = {
+        if (appSettings.closeToTray) {
+            isWindowVisible = false
+            runCatching {
+                trayState.sendNotification(
+                    Notification(
+                        title = "WiFi Audio Streamer",
+                        message = Strings.get("tray_running_in_background"),
+                        type = Notification.Type.Info
+                    )
+                )
             }
-        },
+        } else {
+            performQuit()
+        }
+    }
+
+    val showAndRaise: () -> Unit = {
+        isWindowVisible = true
+        windowState.isMinimized = false
+    }
+
+    Tray(
+        icon = trayIcon,
+        state = trayState,
+        tooltip = "WiFi Audio Streamer",
+        onAction = showAndRaise,
+        menu = {
+            Item(
+                text = if (isWindowVisible) Strings.get("tray_hide_window") else Strings.get("tray_show_window"),
+                onClick = {
+                    if (isWindowVisible) isWindowVisible = false
+                    else showAndRaise()
+                }
+            )
+            Separator()
+            Item(
+                text = Strings.get("tray_quit"),
+                onClick = performQuit
+            )
+        }
+    )
+
+    Window(
+        onCloseRequest = hideOrQuit,
         state      = windowState,
-        undecorated = true
+        visible    = isWindowVisible,
+        undecorated = true,
+        icon       = trayIcon
     ) {
         val customColor = appSettings.customThemeColor?.toULong()?.let { Color(it) }
         val currentColorScheme = if (customColor != null) {
@@ -2102,6 +2619,34 @@ fun main() = application {
 
         MaterialTheme(colorScheme = currentColorScheme) {
             Surface(modifier = Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
+                val clientDisconnectKeys = remember {
+                    setOf(
+                        "status_server_disconnected",
+                        "status_server_no_response",
+                        "status_handshake_failed"
+                    )
+                }
+
+                val clientStatusHandler: (key: String, args: Array<out Any>) -> Unit = { key, args ->
+                    connectionStatus = if (args.isEmpty()) Strings.get(key) else Strings.get(key, *args)
+                    if (key in clientDisconnectKeys) {
+                        scope.launch {
+                            NetworkHandler_v1.stopCurrentStream()
+                            isStreaming = false
+                            connectionStatus = Strings.get("status_inactive")
+                            if (!isServer) {
+                                NetworkHandler_v1.beginDeviceDiscovery { hostname, serverInfo ->
+                                    if (serverInfo.lastSeen == 0L) {
+                                        discoveredDevices.remove(hostname)
+                                    } else {
+                                        discoveredDevices[hostname] = serverInfo
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
                 LaunchedEffect(Unit) {
                     if (appSettings.autoStartServer && isServer) {
                         isStreaming = true
@@ -2114,8 +2659,8 @@ fun main() = application {
 
                         NetworkHandler_v1.launchServerInstance(
                             audioSettings, port, isMulticastMode, serverCapabilities,
-                            selectedServerMicOutput, mic, rtp,
-                            appSettings.useNativeEngine
+                            micRoutingMode, selectedServerMicOutput, mic, rtp,
+                            appSettings.useNativeEngine, selectedMicMixInput
                         ) { key, args ->
                             if (key == "error_virtual_driver_missing") {
                                 isStreaming = false
@@ -2171,10 +2716,9 @@ fun main() = application {
                                         audioSettings, targetServer, selectedOutputDevice!!,
                                         sendMicrophone, selectedClientMic, mic,
                                         appSettings.connectionSoundEnabled,
-                                        appSettings.disconnectionSoundEnabled
-                                    ) { key, args ->
-                                        connectionStatus = if (args.isEmpty()) key else String.format(key, *args)
-                                    }
+                                        appSettings.disconnectionSoundEnabled,
+                                        clientStatusHandler
+                                    )
                                     break
                                 }
                             }
@@ -2197,7 +2741,7 @@ fun main() = application {
                     CustomTitleBar(
                         windowState = windowState,
                         onMinimize  = { windowState.isMinimized = true },
-                        onClose     = ::exitApplication
+                        onClose     = hideOrQuit
                     )
                     Box(Modifier.fillMaxSize()) {
                         AppContent(
@@ -2247,10 +2791,9 @@ fun main() = application {
                                         audioSettings, manualServerInfo, selectedOutputDevice!!,
                                         sendMicrophone, selectedClientMic, mic,
                                         appSettings.connectionSoundEnabled,
-                                        appSettings.disconnectionSoundEnabled
-                                    ) { key, args ->
-                                        connectionStatus = if (args.isEmpty()) key else String.format(key, *args)
-                                    }
+                                        appSettings.disconnectionSoundEnabled,
+                                        clientStatusHandler
+                                    )
                                 }
                             },
                             onModeChange = { isSrv ->
@@ -2260,7 +2803,7 @@ fun main() = application {
                                 discoveredDevices.clear() // Svuota SEMPRE al cambio modalità
 
                                 if (!isSrv) {
-                                    scope.launch { NetworkHandler_v1.stopCurrentStream() }
+                                    NetworkHandler_v1.requestStopCurrentStream()
                                     NetworkHandler_v1.beginDeviceDiscovery { hostname, serverInfo ->
                                         if (serverInfo.lastSeen == 0L) {
                                             discoveredDevices.remove(hostname)
@@ -2281,8 +2824,8 @@ fun main() = application {
 
                                 NetworkHandler_v1.launchServerInstance(
                                     audioSettings, port, isMulticastMode, serverCapabilities,
-                                    selectedServerMicOutput, mic, rtp,
-                                    appSettings.useNativeEngine
+                                    micRoutingMode, selectedServerMicOutput, mic, rtp,
+                                    appSettings.useNativeEngine, selectedMicMixInput
                                 ) { key, args ->
                                     if (key == "error_virtual_driver_missing") {
                                         isStreaming          = false
@@ -2296,7 +2839,7 @@ fun main() = application {
                             onStopStreaming = {
                                 isStreaming      = false
                                 connectionStatus = Strings.get("status_inactive")
-                                scope.launch { NetworkHandler_v1.stopCurrentStream() }
+                                NetworkHandler_v1.requestStopCurrentStream()
                             },
                             onConnectToServer = { serverInfo ->
                                 isStreaming = true
@@ -2306,8 +2849,9 @@ fun main() = application {
                                     audioSettings, serverInfo, selectedOutputDevice!!,
                                     sendMicrophone, selectedClientMic, mic,
                                     appSettings.connectionSoundEnabled,
-                                    appSettings.disconnectionSoundEnabled
-                                ) { key, args -> connectionStatus = Strings.get(key, *args) }
+                                    appSettings.disconnectionSoundEnabled,
+                                    clientStatusHandler
+                                )
                             },
                             onRefreshDevices = {
                                 discoveredDevices.clear()
@@ -2316,16 +2860,23 @@ fun main() = application {
                                     discoveredDevices[hostname] = serverInfo
                                 }
                             },
-                            onMulticastModeChange      = { isMulticastMode = it },
-                            onSendMicrophoneChange     = { send ->
-                                sendMicrophone = if (!appSettings.experimentalFeaturesEnabled) false else send
+                            onMulticastModeChange      = {
+                                isMulticastMode = it
+                                appSettings = appSettings.copy(lastMulticastMode = it)
                             },
+                            onSendMicrophoneChange     = { send -> sendMicrophone = send },
                             onSelectedOutputDeviceChange      = { selectedOutputDevice = it },
                             onSelectedInputDeviceChange       = { selectedInputDevice  = it },
                             onSelectedClientMicChange         = { selectedClientMic    = it },
                             onSelectedServerMicOutputChange   = { selectedServerMicOutput = it },
+                            selectedMicMixInput               = selectedMicMixInput,
+                            onMicMixInputSelected             = { selectedMicMixInput = it },
                             onAppSettingsChange               = { appSettings = it },
-                            onOpenSettings                    = { showSettings = true }
+                            onOpenSettings                    = { showSettings = true },
+                            isMicMuted                        = isMicMuted,
+                            onMicMuteToggle                   = { NetworkHandler_v1.isMicMuted.value = !NetworkHandler_v1.isMicMuted.value },
+                            micRoutingMode                    = micRoutingMode,
+                            onMicRoutingModeChange            = { micRoutingMode = it }
                         )
 
                         SettingsScreen(

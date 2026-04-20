@@ -1,21 +1,37 @@
 /*
+ * Copyright (c) 2026 Marco Morosi
+ *
+ * Licensed under the EUPL, Version 1.2 or – as soon they will be approved by
+ * the European Commission - subsequent versions of the EUPL (the "Licence");
+ * You may not use this work except in compliance with the Licence.
+ * You may obtain a copy of the Licence at:
+ *
+ * https://joinup.ec.europa.eu/software/page/eupl
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the Licence is distributed on an "AS IS" basis,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the Licence for the specific language governing permissions and
+ * limitations under the Licence.
+ *
+ * --------------------------------------------------------------------------
  * audio_engine_mac.m
  *
- * Implementazione macOS del motore di cattura audio per WiFi Audio Streaming.
- * Usa ScreenCaptureKit (disponibile da macOS 12.3) per catturare l'audio di
- * sistema senza installare driver virtuali come BlackHole.
+ * macOS implementation of the audio capture engine for WiFi Audio Streaming.
+ * Uses ScreenCaptureKit (available from macOS 12.3+) to capture system audio
+ * without installing virtual drivers like BlackHole.
  *
- * ScreenCaptureKit non è disponibile come API C pura: richiede Objective-C
- * (o Swift). Questo file .m è compilato con clang come Objective-C e
- * linkato insieme a audio_engine.c nella stessa libreria condivisa.
+ * ScreenCaptureKit is not available as a pure C API: it requires Objective-C
+ * (or Swift). This .m file is compiled with clang as Objective-C and linked
+ * together with audio_engine.c into the same shared library.
  *
- * Flusso dati:
- *   SCStream → delegate callback → ring buffer lock-free → mac_engine_read()
+ * Data Flow:
+ * SCStream -> delegate callback -> lock-free ring buffer -> mac_engine_read()
  *
- * Compatibilità:
- *   - macOS 13+ (Ventura): ScreenCaptureKit stabile
- *   - macOS 12.3+: ScreenCaptureKit disponibile ma API leggermente diversa
- *   - macOS < 12.3: fallback su CoreAudio aggregate device (solo BlackHole)
+ * Compatibility:
+ * - macOS 13+ (Ventura): Stable ScreenCaptureKit
+ * - macOS 12.3+: ScreenCaptureKit available but API slightly different
+ * - macOS < 12.3: fallback to CoreAudio aggregate device (BlackHole only)
  */
 
 #import <Foundation/Foundation.h>

@@ -1,3 +1,20 @@
+/*
+ * Copyright (c) 2026 Marco Morosi
+ *
+ * Licensed under the EUPL, Version 1.2 or – as soon they will be approved by
+ * the European Commission - subsequent versions of the EUPL (the "Licence");
+ * You may not use this work except in compliance with the Licence.
+ * You may obtain a copy of the Licence at:
+ *
+ * https://joinup.ec.europa.eu/software/page/eupl
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the Licence is distributed on an "AS IS" basis,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the Licence for the specific language governing permissions and
+ * limitations under the Licence.
+ */
+
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
@@ -21,6 +38,20 @@ class AudioEngine(
     private external fun nativeRead(outBuf: ShortArray, numSamples: Int): Int
     private external fun nativeStop()
     private external fun nativeGetError(): String
+
+    private external fun nativeMicSetMixEnabled(enabled: Boolean): Boolean
+    private external fun nativeMicSetVolume(volume: Float)
+    private external fun nativeMicPushPcm(pcm: ShortArray, numSamples: Int): Int
+
+    private external fun nativeVirtualSinkCreate(sampleRate: Int, channels: Int): Boolean
+    private external fun nativeVirtualSinkDestroy()
+    private external fun nativeVirtualSinkWrite(pcm: ShortArray, numSamples: Int): Int
+    private external fun nativeVirtualSinkName(): String
+
+    private external fun nativeMicSinkOpen(deviceName: String?, sampleRate: Int, channels: Int): Boolean
+    private external fun nativeMicSinkWrite(pcm: ShortArray, numSamples: Int): Int
+    private external fun nativeMicSinkClose()
+    private external fun nativeMicSinkDeviceName(): String
 
     companion object {
         private var libraryLoaded = false
@@ -128,4 +159,116 @@ class AudioEngine(
     }
 
     val isStarted: Boolean get() = started
+
+    fun setMicMixEnabled(enabled: Boolean): Boolean {
+        if (!libraryLoaded) return false
+        return nativeMicSetMixEnabled(enabled)
+    }
+
+    fun setMicMixVolume(volume: Float) {
+        if (!libraryLoaded) return
+        nativeMicSetVolume(volume)
+    }
+
+    fun pushMicPcm(pcm: ShortArray, numSamples: Int): Int {
+        if (!libraryLoaded) return 0
+        if (numSamples <= 0) return 0
+        val n = if (numSamples > pcm.size) pcm.size else numSamples
+        return nativeMicPushPcm(pcm, n)
+    }
+
+    fun createVirtualSink(sampleRate: Int = this.sampleRate, channels: Int = this.channels): Boolean {
+        if (!libraryLoaded) {
+            lastError = loadError ?: "Libreria nativa non caricata."
+            return false
+        }
+        val ok = nativeVirtualSinkCreate(sampleRate, channels)
+        if (!ok) lastError = nativeGetError().ifEmpty { "Creazione virtual sink fallita." }
+        return ok
+    }
+
+    fun destroyVirtualSink() {
+        if (!libraryLoaded) return
+        nativeVirtualSinkDestroy()
+    }
+
+    fun writeToVirtualSink(pcm: ShortArray, numSamples: Int): Int {
+        if (!libraryLoaded) return -1
+        if (numSamples <= 0) return 0
+        val n = if (numSamples > pcm.size) pcm.size else numSamples
+        return nativeVirtualSinkWrite(pcm, n)
+    }
+
+    fun virtualSinkName(): String {
+        if (!libraryLoaded) return ""
+        return nativeVirtualSinkName()
+    }
+
+    fun micSinkOpen(deviceName: String?, sampleRate: Int = this.sampleRate, channels: Int = this.channels): Boolean {
+        if (!libraryLoaded) {
+            lastError = loadError ?: "Libreria nativa non caricata."
+            return false
+        }
+        val ok = nativeMicSinkOpen(deviceName, sampleRate, channels)
+        if (!ok) lastError = nativeGetError().ifEmpty { "Apertura MicSink fallita." }
+        return ok
+    }
+
+    fun micSinkWrite(pcm: ShortArray, numSamples: Int): Int {
+        if (!libraryLoaded) return -1
+        if (numSamples <= 0) return 0
+        val n = if (numSamples > pcm.size) pcm.size else numSamples
+        return nativeMicSinkWrite(pcm, n)
+    }
+
+    fun micSinkClose() {
+        if (!libraryLoaded) return
+        nativeMicSinkClose()
+    }
+
+    fun micSinkDeviceName(): String {
+        if (!libraryLoaded) return ""
+        return nativeMicSinkDeviceName()
+    }
+}
+
+enum class MicRoutingMode {
+    OFF,
+    VIRTUAL_MIC,
+    MIX_INTO_STREAM;
+
+    companion object {
+        fun fromStringSafe(s: String?): MicRoutingMode =
+            runCatching { valueOf(s ?: "OFF") }.getOrDefault(OFF)
+    }
+}
+
+object VirtualMicAutodetect {
+    data class Detection(
+        val mixerInfo: javax.sound.sampled.Mixer.Info?,
+        val displayName: String,
+        val nativeManaged: Boolean
+    )
+
+    private val WIN_MAC_KEYWORDS = arrayOf(
+        "CABLE Input", "CABLE-A Input", "CABLE-B Input",
+        "VB-Audio", "VoiceMeeter Input",
+        "BlackHole", "Loopback", "Soundflower"
+    )
+
+    fun isLinux(): Boolean = System.getProperty("os.name").lowercase().contains("linux")
+    fun isWindows(): Boolean = System.getProperty("os.name").lowercase().contains("win")
+    fun isMac(): Boolean = System.getProperty("os.name").lowercase().let { it.contains("mac") || it.contains("darwin") }
+
+    fun detectManualCable(outputMixers: List<javax.sound.sampled.Mixer.Info>): Detection? {
+        for (mixer in outputMixers) {
+            val fullName = (mixer.name + " " + mixer.description).lowercase()
+            for (kw in WIN_MAC_KEYWORDS) {
+                if (fullName.contains(kw.lowercase())) {
+                    return Detection(mixer, mixer.name, nativeManaged = false)
+                }
+            }
+        }
+        return null
+    }
 }

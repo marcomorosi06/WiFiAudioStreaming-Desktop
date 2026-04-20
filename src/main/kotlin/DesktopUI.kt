@@ -1,3 +1,20 @@
+/*
+ * Copyright (c) 2026 Marco Morosi
+ *
+ * Licensed under the EUPL, Version 1.2 or – as soon they will be approved by
+ * the European Commission - subsequent versions of the EUPL (the "Licence");
+ * You may not use this work except in compliance with the Licence.
+ * You may obtain a copy of the Licence at:
+ *
+ * https://joinup.ec.europa.eu/software/page/eupl
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the Licence is distributed on an "AS IS" basis,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the Licence for the specific language governing permissions and
+ * limitations under the Licence.
+ */
+
 import androidx.compose.animation.*
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.animateFloat
@@ -41,15 +58,36 @@ import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.painter.BitmapPainter
+import androidx.compose.ui.graphics.painter.ColorPainter
+import androidx.compose.ui.graphics.painter.Painter
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.res.loadImageBitmap
 import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.res.useResource
 import androidx.compose.ui.text.input.KeyboardType
 import kotlin.math.atan2
 import kotlin.math.cos
 import kotlin.math.sin
 import kotlinx.coroutines.delay
+import java.awt.image.BufferedImage
+import javax.imageio.ImageIO
+
+fun openUrl(url: String) {
+    val os = System.getProperty("os.name").lowercase()
+    try {
+        if (os.contains("linux")) {
+            ProcessBuilder("xdg-open", url).start()
+        } else if (Desktop.isDesktopSupported() && Desktop.getDesktop().isSupported(Desktop.Action.BROWSE)) {
+            Desktop.getDesktop().browse(URI(url))
+        }
+    } catch (e: Exception) {
+        println("Could not open link: ${e.message}")
+    }
+}
 
 // =================================================================
 // ==                  SCHERMATA PRINCIPALE                       ==
@@ -94,7 +132,13 @@ fun AppContent(
     onSelectedClientMicChange: (Mixer.Info) -> Unit,
     onSelectedServerMicOutputChange: (Mixer.Info) -> Unit,
     onAppSettingsChange: (AppSettings) -> Unit,
-    onOpenSettings: () -> Unit
+    onOpenSettings: () -> Unit,
+    isMicMuted: Boolean = false,
+    onMicMuteToggle: () -> Unit = {},
+    micRoutingMode: MicRoutingMode = MicRoutingMode.OFF,
+    onMicRoutingModeChange: (MicRoutingMode) -> Unit = {},
+    selectedMicMixInput: Mixer.Info? = null,
+    onMicMixInputSelected: (Mixer.Info) -> Unit = {}
 ) {
     Scaffold(
         topBar = {
@@ -195,12 +239,14 @@ fun AppContent(
                 StreamingControlCenter(
                     isStreaming = isStreaming,
                     isServer = isServer,
-                    isServerReady = if (isServer && !appSettings.useNativeEngine && virtualDriverStatus is VirtualDriverStatus.Missing) false
-                    else (!appSettings.experimentalFeaturesEnabled || selectedServerMicOutput != null),
+                    isServerReady = !(isServer && !appSettings.useNativeEngine && virtualDriverStatus is VirtualDriverStatus.Missing),
                     serverVolume = serverVolume,
                     onServerVolumeChange = onServerVolumeChange,
                     onStart = onStartStreaming,
-                    onStop = onStopStreaming
+                    onStop = onStopStreaming,
+                    showMicMute = (!isServer && sendMicrophone) || (isServer && micRoutingMode == MicRoutingMode.MIX_INTO_STREAM),
+                    isMicMuted = isMicMuted,
+                    onMicMuteToggle = onMicMuteToggle
                 )
             }
 
@@ -218,7 +264,6 @@ fun AppContent(
                         exit = fadeOut(animationSpec = tween(durationMillis = 300))
                     ) {
                         ServerConfigCard(
-                            experimentalFeaturesEnabled = appSettings.experimentalFeaturesEnabled,
                             inputDevices = inputDevices,
                             selectedInputDevice = selectedInputDevice,
                             onInputDeviceSelected = onSelectedInputDeviceChange,
@@ -229,7 +274,13 @@ fun AppContent(
                             onMulticastChanged = onMulticastModeChange,
                             virtualDriverStatus = virtualDriverStatus,
                             rtpEnabled = appSettings.rtpEnabled,
-                            useNativeEngine = appSettings.useNativeEngine
+                            useNativeEngine = appSettings.useNativeEngine,
+                            micRoutingMode = micRoutingMode,
+                            onMicRoutingModeChange = onMicRoutingModeChange,
+                            micRoutingDisabled = appSettings.rtpEnabled,
+                            virtualMicDisabled = isMulticastMode,
+                            selectedMicMixInput = selectedMicMixInput,
+                            onMicMixInputSelected = onMicMixInputSelected
                         )
                     }
                 }
@@ -241,7 +292,6 @@ fun AppContent(
                     ) {
                         Column(verticalArrangement = Arrangement.spacedBy(16.dp)) {
                             ClientConfigCard(
-                                experimentalFeaturesEnabled = appSettings.experimentalFeaturesEnabled,
                                 outputDevices = outputDevices,
                                 selectedOutputDevice = selectedOutputDevice,
                                 onOutputDeviceSelected = onSelectedOutputDeviceChange,
@@ -344,11 +394,7 @@ fun VirtualDriverBanner(status: VirtualDriverStatus.Missing) {
             }
             Button(
                 onClick = {
-                    try {
-                        Desktop.getDesktop().browse(URI(status.downloadUrl))
-                    } catch (e: Exception) {
-                        println("Could not open browser: ${e.message}")
-                    }
+                    openUrl(status.downloadUrl)
                 },
                 colors = ButtonDefaults.buttonColors(
                     containerColor = MaterialTheme.colorScheme.error,
@@ -380,25 +426,6 @@ fun SettingsScreen(
     onCustomColorChange: (Long?) -> Unit,
     onClose: () -> Unit
 ) {
-    var showExperimentalWarningDialog by remember { mutableStateOf(false) }
-
-    if (showExperimentalWarningDialog) {
-        AlertDialog(
-            onDismissRequest = { showExperimentalWarningDialog = false },
-            icon = { Icon(Icons.Default.Warning, contentDescription = stringResource("warning")) },
-            title = { Text(stringResource("experimental_features_title")) },
-            text = { Text(stringResource("experimental_features_warning_text")) },
-            confirmButton = {
-                TextButton(onClick = {
-                    onAppSettingsChange(appSettings.copy(experimentalFeaturesEnabled = true))
-                    showExperimentalWarningDialog = false
-                }) { Text(stringResource("activate_anyway")) }
-            },
-            dismissButton = {
-                TextButton(onClick = { showExperimentalWarningDialog = false }) { Text(stringResource("cancel")) }
-            }
-        )
-    }
     var linuxAutostartInfo by remember { mutableStateOf<String?>(null) }
 
     if (linuxAutostartInfo != null) {
@@ -549,7 +576,6 @@ fun SettingsScreen(
                             onPortChange = onStreamingPortChange,
                             micPort = micPort,
                             onMicPortChange = onMicPortChange,
-                            experimentalFeaturesEnabled = appSettings.experimentalFeaturesEnabled,
                             appSettings = appSettings,
                             onAppSettingsChange = onAppSettingsChange
                         )
@@ -557,7 +583,6 @@ fun SettingsScreen(
                 }
                 item {
                     SettingsGroup(title = stringResource("advanced"), icon = Icons.Outlined.Science) {
-                        // Switch Avvio con OS
                         SwitchSetting(
                             title = stringResource("launch_at_startup"),
                             description = stringResource("launch_at_startup_desc"),
@@ -570,6 +595,26 @@ fun SettingsScreen(
                                     linuxAutostartInfo = result
                                 }
                             }
+                        )
+
+                        HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp))
+
+                        SwitchSetting(
+                            title = stringResource("start_minimized_tray"),
+                            description = stringResource("start_minimized_tray_desc"),
+                            icon = Icons.Outlined.VisibilityOff,
+                            checked = appSettings.startMinimizedToTray,
+                            onCheckedChange = { onAppSettingsChange(appSettings.copy(startMinimizedToTray = it)) }
+                        )
+
+                        HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp))
+
+                        SwitchSetting(
+                            title = stringResource("close_to_tray"),
+                            description = stringResource("close_to_tray_desc"),
+                            icon = Icons.Outlined.ExitToApp,
+                            checked = appSettings.closeToTray,
+                            onCheckedChange = { onAppSettingsChange(appSettings.copy(closeToTray = it)) }
                         )
 
                         HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp))
@@ -692,20 +737,6 @@ fun SettingsScreen(
                             onCheckedChange = { onAppSettingsChange(appSettings.copy(disconnectionSoundEnabled = it)) }
                         )
 
-                        HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp))
-                        SwitchSetting(
-                            title = stringResource("experimental_features"),
-                            description = stringResource("experimental_features_description"),
-                            icon = Icons.Outlined.Mic,
-                            checked = appSettings.experimentalFeaturesEnabled,
-                            onCheckedChange = { isEnabled ->
-                                if (isEnabled) {
-                                    showExperimentalWarningDialog = true
-                                } else {
-                                    onAppSettingsChange(appSettings.copy(experimentalFeaturesEnabled = false))
-                                }
-                            }
-                        )
                     }
                 }
                 item {
@@ -715,12 +746,7 @@ fun SettingsScreen(
                             description = stringResource("source_code_github"),
                             icon = Icons.Outlined.PhoneAndroid,
                             onClick = {
-                                val url = "https://github.com/marcomorosi06/WiFiAudioStreaming-Android"
-                                try {
-                                    Desktop.getDesktop().browse(URI(url))
-                                } catch (e: Exception) {
-                                    println("Could not open link: ${e.message}")
-                                }
+                                openUrl("https://github.com/marcomorosi06/WiFiAudioStreaming-Android")
                             }
                         )
                         HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
@@ -735,11 +761,7 @@ fun SettingsScreen(
                             description = stringResource("support_kofi_desc"),
                             icon = Icons.Outlined.LocalCafe,
                             onClick = {
-                                try {
-                                    Desktop.getDesktop().browse(URI("https://ko-fi.com/marcomorosi"))
-                                } catch (e: Exception) {
-                                    println("Could not open link: ${e.message}")
-                                }
+                                openUrl("https://ko-fi.com/marcomorosi")
                             }
                         )
                     }
@@ -757,7 +779,8 @@ fun SettingsScreen(
 fun StreamingControlCenter(
     isStreaming: Boolean, isServer: Boolean, isServerReady: Boolean,
     serverVolume: Float, onServerVolumeChange: (Float) -> Unit,
-    onStart: () -> Unit, onStop: () -> Unit
+    onStart: () -> Unit, onStop: () -> Unit,
+    showMicMute: Boolean = false, isMicMuted: Boolean = false, onMicMuteToggle: () -> Unit = {}
 ) {
     ElevatedCard(modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(24.dp)) {
         AnimatedContent(
@@ -794,6 +817,25 @@ fun StreamingControlCenter(
                             Icon(Icons.Filled.Stop, contentDescription = null, modifier = Modifier.size(18.dp))
                             Spacer(Modifier.width(6.dp))
                             Text(stringResource("stop"))
+                        }
+                    }
+                    if (showMicMute) {
+                        Spacer(Modifier.height(12.dp))
+                        FilledTonalButton(
+                            onClick = onMicMuteToggle,
+                            modifier = Modifier.fillMaxWidth(),
+                            colors = if (isMicMuted) ButtonDefaults.filledTonalButtonColors(
+                                containerColor = MaterialTheme.colorScheme.errorContainer,
+                                contentColor = MaterialTheme.colorScheme.onErrorContainer
+                            ) else ButtonDefaults.filledTonalButtonColors()
+                        ) {
+                            Icon(
+                                if (isMicMuted) Icons.Filled.MicOff else Icons.Filled.Mic,
+                                contentDescription = null,
+                                modifier = Modifier.size(18.dp)
+                            )
+                            Spacer(Modifier.width(8.dp))
+                            Text(stringResource(if (isMicMuted) "mic_muted" else "mic_active"))
                         }
                     }
                     // Slider volume — solo in modalità server
@@ -918,13 +960,18 @@ fun ModeSelectorCard(isServer: Boolean, onModeChange: (Boolean) -> Unit) {
 
 @Composable
 fun ServerConfigCard(
-    experimentalFeaturesEnabled: Boolean,
     inputDevices: List<Mixer.Info>, selectedInputDevice: Mixer.Info?, onInputDeviceSelected: (Mixer.Info) -> Unit,
     outputDevices: List<Mixer.Info>, selectedServerMicOutput: Mixer.Info?, onServerMicOutputSelected: (Mixer.Info) -> Unit,
     isMulticast: Boolean, onMulticastChanged: (Boolean) -> Unit,
     virtualDriverStatus: VirtualDriverStatus,
     rtpEnabled: Boolean,
-    useNativeEngine: Boolean
+    useNativeEngine: Boolean,
+    micRoutingMode: MicRoutingMode = MicRoutingMode.OFF,
+    onMicRoutingModeChange: (MicRoutingMode) -> Unit = {},
+    micRoutingDisabled: Boolean = false,
+    virtualMicDisabled: Boolean = false,
+    selectedMicMixInput: Mixer.Info? = null,
+    onMicMixInputSelected: (Mixer.Info) -> Unit = {}
 ) {
     ElevatedCard(modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(24.dp)) {
         Column(Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
@@ -966,10 +1013,18 @@ fun ServerConfigCard(
                 }
             }
 
-            // Mic output (sperimentale)
-            AnimatedVisibility(experimentalFeaturesEnabled) {
-                DeviceDropdown(stringResource("mic_output_received"), outputDevices, selectedServerMicOutput, onServerMicOutputSelected)
-            }
+            MicRoutingSelector(
+                mode = micRoutingMode,
+                onModeChange = onMicRoutingModeChange,
+                outputDevices = outputDevices,
+                selectedServerMicOutput = selectedServerMicOutput,
+                onServerMicOutputSelected = onServerMicOutputSelected,
+                disabled = micRoutingDisabled,
+                virtualMicDisabled = virtualMicDisabled,
+                inputDevices = inputDevices,
+                selectedMicMixInput = selectedMicMixInput,
+                onMicMixInputSelected = onMicMixInputSelected
+            )
 
             // Multicast toggle
             Row(
@@ -998,8 +1053,352 @@ fun ServerConfigCard(
 }
 
 @Composable
+fun MicRoutingSelector(
+    mode: MicRoutingMode,
+    onModeChange: (MicRoutingMode) -> Unit,
+    outputDevices: List<Mixer.Info>,
+    selectedServerMicOutput: Mixer.Info?,
+    onServerMicOutputSelected: (Mixer.Info) -> Unit,
+    disabled: Boolean = false,
+    virtualMicDisabled: Boolean = false,
+    inputDevices: List<Mixer.Info> = emptyList(),
+    selectedMicMixInput: Mixer.Info? = null,
+    onMicMixInputSelected: (Mixer.Info) -> Unit = {}
+) {
+    val virtualOnlyBlocked = virtualMicDisabled && !disabled
+
+    LaunchedEffect(virtualOnlyBlocked, mode) {
+        if (virtualOnlyBlocked && mode == MicRoutingMode.VIRTUAL_MIC) {
+            onModeChange(MicRoutingMode.OFF)
+        }
+    }
+
+    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        Text(stringResource("mic_routing_title"), style = MaterialTheme.typography.titleMedium)
+        Text(
+            stringResource("mic_routing_desc"),
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+
+        if (disabled) {
+            MicRoutingInfoBanner(
+                icon = Icons.Outlined.Info,
+                text = stringResource("mic_routing_unicast_only"),
+                accent = false
+            )
+        } else if (virtualOnlyBlocked) {
+            MicRoutingInfoBanner(
+                icon = Icons.Outlined.Info,
+                text = stringResource("mic_routing_virtual_unicast_only"),
+                accent = false
+            )
+        }
+
+        val effectiveMode = if (disabled) MicRoutingMode.OFF else mode
+        val offEnabled = !disabled
+        val virtualEnabled = !disabled && !virtualOnlyBlocked
+        val mixEnabled = !disabled
+
+        MicRoutingOptionRow(
+            selected = effectiveMode == MicRoutingMode.OFF,
+            title = stringResource("mic_routing_off"),
+            subtitle = stringResource("mic_routing_off_desc"),
+            onClick = { if (offEnabled) onModeChange(MicRoutingMode.OFF) },
+            enabled = offEnabled
+        )
+        MicRoutingOptionRow(
+            selected = effectiveMode == MicRoutingMode.VIRTUAL_MIC,
+            title = stringResource("mic_routing_virtual"),
+            subtitle = stringResource("mic_routing_virtual_desc"),
+            onClick = { if (virtualEnabled) onModeChange(MicRoutingMode.VIRTUAL_MIC) },
+            enabled = virtualEnabled
+        )
+        MicRoutingOptionRow(
+            selected = effectiveMode == MicRoutingMode.MIX_INTO_STREAM,
+            title = stringResource("mic_routing_mix"),
+            subtitle = stringResource("mic_routing_mix_desc"),
+            onClick = { if (mixEnabled) onModeChange(MicRoutingMode.MIX_INTO_STREAM) },
+            enabled = mixEnabled
+        )
+
+        AnimatedVisibility(mode == MicRoutingMode.VIRTUAL_MIC && !virtualOnlyBlocked && !disabled) {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                when {
+                    VirtualMicAutodetect.isLinux() -> {
+                        MicRoutingInfoBanner(
+                            icon = Icons.Outlined.Info,
+                            text = stringResource("mic_routing_linux_auto"),
+                            accent = true
+                        )
+                    }
+                    else -> {
+                        val detected = remember(outputDevices) {
+                            VirtualMicAutodetect.detectManualCable(outputDevices)
+                        }
+                        if (detected != null) {
+                            LaunchedEffect(detected.mixerInfo) {
+                                val m = detected.mixerInfo
+                                if (m != null && selectedServerMicOutput != m) {
+                                    onServerMicOutputSelected(m)
+                                }
+                            }
+                            MicRoutingInfoBanner(
+                                icon = Icons.Outlined.CheckCircle,
+                                text = stringResource("mic_routing_vcable_detected", detected.displayName),
+                                accent = true
+                            )
+                        } else {
+                            MicRoutingInfoBanner(
+                                icon = Icons.Outlined.Warning,
+                                text = stringResource("mic_routing_vcable_missing"),
+                                accent = false
+                            )
+                        }
+                        DeviceDropdown(
+                            stringResource("mic_routing_manual_device"),
+                            outputDevices,
+                            selectedServerMicOutput,
+                            onServerMicOutputSelected
+                        )
+                    }
+                }
+                VirtualMicHelpExpander()
+            }
+        }
+
+        AnimatedVisibility(mode == MicRoutingMode.MIX_INTO_STREAM && !disabled) {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                MicRoutingInfoBanner(
+                    icon = Icons.Outlined.Info,
+                    text = stringResource("mic_routing_mix_info"),
+                    accent = true
+                )
+                DeviceDropdown(
+                    stringResource("mic_routing_mix_input_device"),
+                    inputDevices,
+                    selectedMicMixInput,
+                    onMicMixInputSelected
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun VirtualMicHelpExpander() {
+    var expanded by remember { mutableStateOf(false) }
+
+    val isLinux   = remember { VirtualMicAutodetect.isLinux() }
+    val isMac     = remember { VirtualMicAutodetect.isMac() }
+
+    val title: String
+    val steps: List<String>
+    val linkLabel: String
+    val linkUrl: String
+
+    when {
+        isLinux -> {
+            title     = stringResource("vcable_help_linux_title")
+            steps     = listOf(
+                stringResource("vcable_help_linux_1"),
+                stringResource("vcable_help_linux_2"),
+                stringResource("vcable_help_linux_3"),
+                stringResource("vcable_help_linux_4")
+            )
+            linkLabel = stringResource("vcable_help_linux_link")
+            linkUrl   = "https://apps.kde.org/pavucontrol/"
+        }
+        isMac -> {
+            title     = stringResource("vcable_help_mac_title")
+            steps     = listOf(
+                stringResource("vcable_help_mac_1"),
+                stringResource("vcable_help_mac_2"),
+                stringResource("vcable_help_mac_3"),
+                stringResource("vcable_help_mac_4"),
+                stringResource("vcable_help_mac_5")
+            )
+            linkLabel = stringResource("vcable_help_mac_link")
+            linkUrl   = "https://github.com/ExistentialAudio/BlackHole"
+        }
+        else -> {
+            title     = stringResource("vcable_help_win_title")
+            steps     = listOf(
+                stringResource("vcable_help_win_1"),
+                stringResource("vcable_help_win_2"),
+                stringResource("vcable_help_win_3"),
+                stringResource("vcable_help_win_4"),
+                stringResource("vcable_help_win_5")
+            )
+            linkLabel = stringResource("vcable_help_win_link")
+            linkUrl   = "https://vb-audio.com/Cable/"
+        }
+    }
+
+    Column {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clip(RoundedCornerShape(10.dp))
+                .clickable { expanded = !expanded }
+                .padding(horizontal = 10.dp, vertical = 8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(6.dp)
+        ) {
+            Icon(
+                Icons.Outlined.HelpOutline,
+                contentDescription = null,
+                modifier = Modifier.size(16.dp),
+                tint = MaterialTheme.colorScheme.primary
+            )
+            Text(
+                stringResource("vcable_help_button"),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.primary
+            )
+            Spacer(Modifier.weight(1f))
+            Icon(
+                if (expanded) Icons.Filled.ExpandLess else Icons.Filled.ExpandMore,
+                contentDescription = null,
+                modifier = Modifier.size(16.dp),
+                tint = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+
+        AnimatedVisibility(visible = expanded) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(12.dp))
+                    .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f))
+                    .padding(14.dp),
+                verticalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                Text(
+                    title,
+                    style = MaterialTheme.typography.titleSmall,
+                    fontWeight = FontWeight.SemiBold
+                )
+                steps.forEachIndexed { index, step ->
+                    Row(
+                        horizontalArrangement = Arrangement.spacedBy(10.dp),
+                        verticalAlignment = Alignment.Top
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .size(20.dp)
+                                .clip(CircleShape)
+                                .background(MaterialTheme.colorScheme.primary),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Text(
+                                "${index + 1}",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onPrimary,
+                                fontWeight = FontWeight.Bold
+                            )
+                        }
+                        Text(
+                            step,
+                            style = MaterialTheme.typography.bodySmall,
+                            modifier = Modifier.weight(1f)
+                        )
+                    }
+                }
+                Row(
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(8.dp))
+                        .clickable { openUrl(linkUrl) }
+                        .padding(horizontal = 8.dp, vertical = 6.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    Icon(
+                        Icons.Outlined.OpenInNew,
+                        contentDescription = null,
+                        modifier = Modifier.size(14.dp),
+                        tint = MaterialTheme.colorScheme.primary
+                    )
+                    Text(
+                        linkLabel,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.primary
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun MicRoutingOptionRow(
+    selected: Boolean,
+    title: String,
+    subtitle: String,
+    onClick: () -> Unit,
+    enabled: Boolean = true
+) {
+    val alpha = if (enabled) 1f else 0.45f
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(14.dp))
+            .background(
+                if (selected) MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.55f * alpha)
+                else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f * alpha)
+            )
+            .clickable(enabled = enabled, onClick = onClick)
+            .padding(horizontal = 12.dp, vertical = 10.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(10.dp)
+    ) {
+        RadioButton(selected = selected, onClick = onClick, enabled = enabled)
+        Column(Modifier.weight(1f)) {
+            Text(
+                title,
+                style = MaterialTheme.typography.bodyLarge,
+                fontWeight = FontWeight.Medium,
+                color = MaterialTheme.colorScheme.onSurface.copy(alpha = alpha)
+            )
+            Text(
+                subtitle,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = alpha)
+            )
+        }
+    }
+}
+
+@Composable
+private fun MicRoutingInfoBanner(icon: ImageVector, text: String, accent: Boolean) {
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(10.dp),
+        modifier = Modifier
+            .fillMaxWidth()
+            .background(
+                if (accent) MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.5f)
+                else MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.5f),
+                RoundedCornerShape(12.dp)
+            )
+            .padding(horizontal = 14.dp, vertical = 10.dp)
+    ) {
+        Icon(
+            icon, contentDescription = null,
+            modifier = Modifier.size(18.dp),
+            tint = if (accent) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error
+        )
+        Text(
+            text,
+            style = MaterialTheme.typography.bodySmall,
+            color = if (accent) MaterialTheme.colorScheme.onPrimaryContainer
+            else MaterialTheme.colorScheme.onErrorContainer
+        )
+    }
+}
+
+@Composable
 fun ClientConfigCard(
-    experimentalFeaturesEnabled: Boolean,
     outputDevices: List<Mixer.Info>, selectedOutputDevice: Mixer.Info?, onOutputDeviceSelected: (Mixer.Info) -> Unit,
     sendMicrophone: Boolean, onSendMicrophoneChanged: (Boolean) -> Unit,
     inputDevices: List<Mixer.Info>, selectedClientMic: Mixer.Info?, onClientMicSelected: (Mixer.Info) -> Unit
@@ -1009,19 +1408,24 @@ fun ClientConfigCard(
             Text(stringResource("client_configuration"), style = MaterialTheme.typography.titleLarge)
             DeviceDropdown(stringResource("audio_output_device"), outputDevices, selectedOutputDevice, onOutputDeviceSelected)
 
-            AnimatedVisibility(experimentalFeaturesEnabled) {
-                Column(verticalArrangement = Arrangement.spacedBy(16.dp)) {
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.SpaceBetween
-                    ) {
+            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Column(Modifier.weight(1f)) {
                         Text(stringResource("send_mic_to_server"), style = MaterialTheme.typography.bodyLarge)
-                        Switch(checked = sendMicrophone, onCheckedChange = onSendMicrophoneChanged)
+                        Text(
+                            stringResource("send_mic_to_server_desc"),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
                     }
-                    AnimatedVisibility(sendMicrophone) {
-                        DeviceDropdown(stringResource("select_mic_to_send"), inputDevices, selectedClientMic, onClientMicSelected)
-                    }
+                    Switch(checked = sendMicrophone, onCheckedChange = onSendMicrophoneChanged)
+                }
+                AnimatedVisibility(sendMicrophone) {
+                    DeviceDropdown(stringResource("select_mic_to_send"), inputDevices, selectedClientMic, onClientMicSelected)
                 }
             }
         }
@@ -1302,7 +1706,7 @@ fun HttpUrlBanner(url: String) {
             // Apri nel browser di sistema
             IconButton(
                 onClick = {
-                    try { Desktop.getDesktop().browse(URI(url)) } catch (_: Exception) {}
+                    openUrl(url)
                 },
                 modifier = Modifier.size(36.dp)
             ) {
@@ -1328,11 +1732,9 @@ fun HttpUrlBanner(url: String) {
 fun NetworkSettingsContent(
     port: String, onPortChange: (String) -> Unit,
     micPort: String, onMicPortChange: (String) -> Unit,
-    experimentalFeaturesEnabled: Boolean,
     appSettings: AppSettings,
     onAppSettingsChange: (AppSettings) -> Unit
 ) {
-    // --- Porta audio WFAS ---
     OutlinedTextField(
         port,
         { if (it.all(Char::isDigit) && it.length <= 5) onPortChange(it) },
@@ -1340,15 +1742,13 @@ fun NetworkSettingsContent(
         singleLine = true,
         modifier = Modifier.fillMaxWidth()
     )
-    AnimatedVisibility(experimentalFeaturesEnabled) {
-        OutlinedTextField(
-            micPort,
-            { if (it.all(Char::isDigit) && it.length <= 5) onMicPortChange(it) },
-            label = { Text(stringResource("mic_port")) },
-            singleLine = true,
-            modifier = Modifier.fillMaxWidth()
-        )
-    }
+    OutlinedTextField(
+        micPort,
+        { if (it.all(Char::isDigit) && it.length <= 5) onMicPortChange(it) },
+        label = { Text(stringResource("mic_port")) },
+        singleLine = true,
+        modifier = Modifier.fillMaxWidth()
+    )
 
     val interfaces = remember {
         try {
@@ -1394,13 +1794,22 @@ fun NetworkSettingsContent(
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(12.dp)
     ) {
-        Icon(Icons.Outlined.Wifi, contentDescription = null,
-            tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(20.dp))
+        val iconLayoutSize = 30.dp
+
+        Icon(
+            painter = painterResource("wfas_protocol.png"),
+            contentDescription = null,
+            tint = MaterialTheme.colorScheme.primary,
+            modifier = Modifier
+                .size(iconLayoutSize)
+        )
         Column(Modifier.weight(1f)) {
             Text("WFAS (custom)", style = MaterialTheme.typography.bodyLarge)
-            Text(stringResource("protocol_wfas_desc"),
+            Text(
+                text = "Descrizione",
                 style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant)
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
         }
         // Badge "sempre attivo" al posto dello switch
         Surface(
