@@ -238,18 +238,34 @@ sealed class VirtualDriverStatus {
 
 object AutostartManager {
     fun getExecutablePath(): String {
+        val os = System.getProperty("os.name").lowercase()
+
+        if (os.contains("linux")) {
+            val debPath = File("/opt/wifi-audio-streaming/bin/wifi-audio-streaming")
+            if (debPath.exists() && debPath.canExecute()) {
+                return debPath.absolutePath
+            }
+        }
+
         val jpackagePath = System.getProperty("jpackage.app-path")
         if (!jpackagePath.isNullOrEmpty()) return jpackagePath
 
         val processPath = ProcessHandle.current().info().command().orElse("")
-        if (processPath.isNotEmpty() && !processPath.contains("java.exe") && !processPath.contains("javaw.exe")) {
+        if (processPath.isNotEmpty() && !processPath.contains("java.exe") && !processPath.contains("javaw.exe") && !processPath.endsWith("java")) {
             return processPath
         }
 
         return try {
             val uri = AutostartManager::class.java.protectionDomain.codeSource.location.toURI()
             val path = File(uri).absolutePath
-            if (path.endsWith(".jar")) "javaw -jar \"$path\"" else path
+            val isWin = os.contains("win")
+
+            if (path.endsWith(".jar")) {
+                val javaCmd = if (isWin) "javaw" else "java"
+                "$javaCmd -jar \"$path\""
+            } else {
+                path
+            }
         } catch (e: Exception) {
             ""
         }
@@ -286,13 +302,13 @@ object AutostartManager {
                 }
                 null
             } else {
-                val desktopContent = "[Desktop Entry]\nType=Application\nExec=$exePath\nHidden=false\nNoDisplay=false\nX-GNOME-Autostart-enabled=true\nName=WiFi Audio Streamer\nComment=Start WiFi Audio Streamer on login"
+                val desktopContent = "[Desktop Entry]\nType=Application\nExec=\"$exePath\"\nHidden=false\nNoDisplay=false\nTerminal=false\nX-GNOME-Autostart-enabled=true\nName=WiFi Audio Streamer\nComment=Start WiFi Audio Streamer on login"
                 val dir = File(System.getProperty("user.home"), ".config/autostart")
                 val file = File(dir, "wifiaudiostreaming.desktop")
                 if (enable) {
                     dir.mkdirs()
                     file.writeText(desktopContent)
-                    "Autostart ENABLED (Linux)."
+                    "Autostart ENABLED (Linux). Path: $exePath"
                 } else {
                     if (file.exists()) file.delete()
                     "Autostart DISABLED (Linux)."
