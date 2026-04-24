@@ -63,12 +63,12 @@ static RingBuffer *g_ring = NULL;
 
 static void ring_write(const int16_t *src, size_t n_shorts) {
     if (!g_ring) return;
+    size_t cap_shorts = RING_CAPACITY / sizeof(int16_t);
+    uint64_t wp = g_ring->write_pos;
     for (size_t i = 0; i < n_shorts; i++) {
-        uint64_t wp = g_ring->write_pos;
-        size_t idx  = (size_t)(wp & (RING_CAPACITY / sizeof(int16_t) - 1));
-        g_ring->buf[idx] = src[i];
-        __atomic_store_n(&g_ring->write_pos, wp + 1, __ATOMIC_RELEASE);
+        g_ring->buf[(wp + i) & (cap_shorts - 1)] = src[i];
     }
+    __atomic_store_n(&g_ring->write_pos, wp + n_shorts, __ATOMIC_RELEASE);
 }
 
 static int ring_read(int16_t *dst, size_t n_shorts) {
@@ -79,11 +79,22 @@ static int ring_read(int16_t *dst, size_t n_shorts) {
     if (available < n_shorts) return 0;
 
     size_t cap_shorts = RING_CAPACITY / sizeof(int16_t);
+    uint64_t max_latency = (uint64_t)n_shorts * 3;
+    if (available > max_latency) {
+        rp = wp - n_shorts;
+    }
+
     for (size_t i = 0; i < n_shorts; i++) {
         dst[i] = g_ring->buf[(rp + i) & (cap_shorts - 1)];
     }
     __atomic_store_n(&g_ring->read_pos, rp + n_shorts, __ATOMIC_RELEASE);
     return 1;
+}
+
+static void ring_reset(void) {
+    if (!g_ring) return;
+    uint64_t wp = __atomic_load_n(&g_ring->write_pos, __ATOMIC_ACQUIRE);
+    __atomic_store_n(&g_ring->read_pos, wp, __ATOMIC_RELEASE);
 }
 
 /* ─────────────────────────────────────────────────────────────────────────────
