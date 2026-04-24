@@ -16,6 +16,11 @@
 cmake_minimum_required(VERSION 3.21)
 project(audio_engine C)
 
+if(UNIX AND NOT APPLE)
+    message(STATUS "Linux detected: audio_engine nativo disabilitato. Uso del backend FFmpeg.")
+    return()
+endif()
+
 # Abilita Objective-C SOLO su macOS
 if(APPLE)
     enable_language(OBJC)

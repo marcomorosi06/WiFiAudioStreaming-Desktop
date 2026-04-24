@@ -129,10 +129,10 @@ val nativeBuildDir  = file("${layout.buildDirectory.get()}/native-build")
 val nativeOutputDir = file("${layout.buildDirectory.get()}/native-build/output")
 val nativeResDir    = file("src/main/resources/native/$nativeOsDir/$nativeArchDir")
 
-// ─── Task: configura il progetto CMake ───────────────────────────────────────
 val compileNative by tasks.registering(Exec::class) {
     description = "Configura il progetto CMake per audio_engine"
     group       = "build"
+    onlyIf { !isLinux }
 
     doFirst {
         nativeBuildDir.mkdirs()
@@ -142,7 +142,7 @@ val compileNative by tasks.registering(Exec::class) {
     val javaHome = System.getProperty("java.home")?.replace("\\", "/")
         ?: throw GradleException("java.home non trovato. Assicurati di usare JDK 17.")
 
-    val cmakePath = findCmakeExecutable()
+    val cmakePath = if (isLinux) "cmake" else findCmakeExecutable()
 
     workingDir = nativeBuildDir
 
@@ -162,44 +162,42 @@ val compileNative by tasks.registering(Exec::class) {
     commandLine(cmakeArgs)
 }
 
-// ─── Task: compila con cmake --build ─────────────────────────────────────────
 val buildNative by tasks.registering(Exec::class) {
     description = "Compila audio_engine tramite cmake --build"
     group       = "build"
+    onlyIf { !isLinux }
     dependsOn(compileNative)
 
-    val cmakePath = findCmakeExecutable()
+    val cmakePath = if (isLinux) "cmake" else findCmakeExecutable()
     workingDir = nativeBuildDir
     commandLine(cmakePath, "--build", ".", "--config", "Release", "--parallel")
 }
 
-// ─── Task: copia la .so/.dll/.dylib in resources/native/ ─────────────────────
 val copyNativeLib by tasks.registering(Copy::class) {
     description = "Copia la libreria nativa in src/main/resources/native/"
     group       = "build"
+    onlyIf { !isLinux }
     dependsOn(buildNative)
 
-    // Aggiungiamo "**/" per fargli cercare anche dentro le sottocartelle (es. Release/)
     from(nativeOutputDir) {
         include("**/*.so", "**/*.dll", "**/*.dylib")
     }
     into(nativeResDir)
 
-    // Appiattisce la struttura: estrae il file dalla cartella "Release"
-    // e lo mette direttamente in "x86_64"
     eachFile {
         path = name
     }
     includeEmptyDirs = false
 }
 
-// La compilazione Kotlin dipende dalla libreria nativa
-tasks.named("compileKotlin") {
-    dependsOn(copyNativeLib)
-}
+if (!isLinux) {
+    tasks.named("compileKotlin") {
+        dependsOn(copyNativeLib)
+    }
 
-tasks.named<ProcessResources>("processResources") {
-    dependsOn(copyNativeLib)
+    tasks.named<ProcessResources>("processResources") {
+        dependsOn(copyNativeLib)
+    }
 }
 
 // ─── Dipendenze ───────────────────────────────────────────────────────────────
