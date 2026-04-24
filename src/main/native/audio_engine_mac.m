@@ -116,7 +116,7 @@ static void mac_set_error(const char *fmt, ...) {
  * Delegate di SCStream
  * ───────────────────────────────────────────────────────────────────────────*/
 
-API_AVAILABLE(macos(12.3))
+API_AVAILABLE(macos(13.0))
 @interface WFASStreamDelegate : NSObject <SCStreamOutput, SCStreamDelegate>
 @property (nonatomic, assign) int targetChannels;
 @property (nonatomic, assign) int targetSampleRate;
@@ -136,107 +136,131 @@ API_AVAILABLE(macos(12.3))
         CMAudioFormatDescriptionGetStreamBasicDescription(desc);
     if (!asbd) return;
 
-    CMBlockBufferRef blockBuf = CMSampleBufferGetDataBuffer(sampleBuffer);
-    if (!blockBuf) return;
+    CMItemCount num_frames = CMSampleBufferGetNumSamples(sampleBuffer);
+    if (num_frames <= 0) return;
 
-    size_t total_bytes = 0;
-    char  *dataPtr     = NULL;
-    OSStatus st = CMBlockBufferGetDataPointer(blockBuf, 0, NULL, &total_bytes, &dataPtr);
-    if (st != kCMBlockBufferNoErr || !dataPtr || total_bytes == 0) return;
+    int is_float   = (asbd->mFormatFlags & kAudioFormatFlagIsFloat) != 0;
+    int is_non_int = (asbd->mFormatFlags & kAudioFormatFlagIsNonInterleaved) != 0;
+    int src_ch     = (int)asbd->mChannelsPerFrame;
+    int bits       = (int)asbd->mBitsPerChannel;
+    if (src_ch <= 0) return;
 
-    /*
-     * ScreenCaptureKit consegna PCM Float32 interleaved o non-interleaved
-     * a seconda della versione di macOS. Il formato effettivo è descritto
-     * nell'ASBD del sample buffer.
-     *
-     * Convertiamo tutto in int16 stereo interleaved per il ring buffer.
-     */
+    size_t ablSize = 0;
+    CMBlockBufferRef bbRetained = NULL;
+    OSStatus st = CMSampleBufferGetAudioBufferListWithRetainedBlockBuffer(
+        sampleBuffer,
+        &ablSize, NULL, 0,
+        kCFAllocatorDefault, kCFAllocatorDefault,
+        kCMSampleBufferFlag_AudioBufferList_Assure16ByteAlignment,
+        &bbRetained);
+    if (st != noErr || ablSize == 0) {
+        if (bbRetained) CFRelease(bbRetained);
+        return;
+    }
 
-    int src_ch      = (int)asbd->mChannelsPerFrame;
-    int is_float    = (asbd->mFormatFlags & kAudioFormatFlagIsFloat) != 0;
-    int is_packed   = (asbd->mFormatFlags & kAudioFormatFlagIsPacked) != 0;
-    int is_non_int  = (asbd->mFormatFlags & kAudioFormatFlagIsNonInterleaved) != 0;
+    AudioBufferList *abl = (AudioBufferList *)malloc(ablSize);
+    if (!abl) {
+        if (bbRetained) CFRelease(bbRetained);
+        return;
+    }
 
-    uint32_t bytes_per_frame = asbd->mBytesPerFrame;
-    if (bytes_per_frame == 0) return;
+    if (bbRetained) { CFRelease(bbRetained); bbRetained = NULL; }
 
-    size_t num_frames = total_bytes / bytes_per_frame;
-    if (num_frames == 0) return;
+    st = CMSampleBufferGetAudioBufferListWithRetainedBlockBuffer(
+        sampleBuffer,
+        &ablSize, abl, ablSize,
+        kCFAllocatorDefault, kCFAllocatorDefault,
+        kCMSampleBufferFlag_AudioBufferList_Assure16ByteAlignment,
+        &bbRetained);
 
-    int16_t *tmp = (int16_t *)malloc(num_frames * 2 * sizeof(int16_t));
-    if (!tmp) return;
+    if (st != noErr || abl->mNumberBuffers == 0) {
+        free(abl);
+        if (bbRetained) CFRelease(bbRetained);
+        return;
+    }
 
-    if (is_float && !is_non_int) {
-        float *fp = (float *)dataPtr;
-        for (size_t f = 0; f < num_frames; f++) {
-            float l = fp[f * src_ch];
-            float r = (src_ch >= 2) ? fp[f * src_ch + 1] : l;
-            int32_t li = (int32_t)(l * 32768.0f);
-            int32_t ri = (int32_t)(r * 32768.0f);
-            if (li >  32767) li =  32767; if (li < -32768) li = -32768;
-            if (ri >  32767) ri =  32767; if (ri < -32768) ri = -32768;
-            tmp[f * 2]     = (int16_t)li;
-            tmp[f * 2 + 1] = (int16_t)ri;
-        }
-    } else if (!is_float && is_packed) {
-        /* PCM 16-bit packed interleaved */
-        int16_t *sp = (int16_t *)dataPtr;
-        for (size_t f = 0; f < num_frames; f++) {
-            tmp[f * 2]     = sp[f * src_ch];
-            tmp[f * 2 + 1] = (src_ch >= 2) ? sp[f * src_ch + 1] : sp[f * src_ch];
-        }
-    } else if (is_float && is_non_int) {
-        /*
-         * Non-interleaved float: ogni canale è in un AudioBuffer separato.
-         * Dobbiamo usare CMSampleBufferGetAudioBufferListWithRetainedBlockBuffer.
-         */
-        AudioBufferList *abl = NULL;
-        CMBlockBufferRef bbRetained = NULL;
-        size_t ablSize = 0;
+    int16_t *tmp = (int16_t *)malloc((size_t)num_frames * 2 * sizeof(int16_t));
+    if (!tmp) {
+        free(abl);
+        if (bbRetained) CFRelease(bbRetained);
+        return;
+    }
 
-        st = CMSampleBufferGetAudioBufferListWithRetainedBlockBuffer(
-            sampleBuffer,
-            &ablSize,
-            NULL, 0,
-            kCFAllocatorDefault, kCFAllocatorDefault,
-            kCMSampleBufferFlag_AudioBufferList_Assure16ByteAlignment,
-            &bbRetained);
+    size_t emitted = 0;
 
-        if (st == kCMBlockBufferNoErr) {
-            abl = (AudioBufferList *)malloc(ablSize);
-            st  = CMSampleBufferGetAudioBufferListWithRetainedBlockBuffer(
-                sampleBuffer,
-                &ablSize,
-                abl, ablSize,
-                kCFAllocatorDefault, kCFAllocatorDefault,
-                kCMSampleBufferFlag_AudioBufferList_Assure16ByteAlignment,
-                &bbRetained);
-        }
-
-        if (st == kCMBlockBufferNoErr && abl && abl->mNumberBuffers >= 1) {
-            float *ch0 = (float *)abl->mBuffers[0].mData;
-            float *ch1 = (abl->mNumberBuffers >= 2)
-                         ? (float *)abl->mBuffers[1].mData
-                         : ch0;
-            size_t frames_abl = abl->mBuffers[0].mDataByteSize / sizeof(float);
-            for (size_t f = 0; f < frames_abl && f < num_frames; f++) {
-                int32_t li = (int32_t)(ch0[f] * 32768.0f);
-                int32_t ri = (int32_t)(ch1[f] * 32768.0f);
+    if (is_float && is_non_int) {
+        float *ch0 = (float *)abl->mBuffers[0].mData;
+        float *ch1 = (abl->mNumberBuffers >= 2)
+                     ? (float *)abl->mBuffers[1].mData
+                     : ch0;
+        size_t ch0_bytes = abl->mBuffers[0].mDataByteSize;
+        size_t frames_abl = ch0_bytes / sizeof(float);
+        if (frames_abl > (size_t)num_frames) frames_abl = (size_t)num_frames;
+        if (ch0) {
+            for (size_t f = 0; f < frames_abl; f++) {
+                float lf = ch0[f];
+                float rf = ch1 ? ch1[f] : lf;
+                int32_t li = (int32_t)(lf * 32768.0f);
+                int32_t ri = (int32_t)(rf * 32768.0f);
                 if (li >  32767) li =  32767; if (li < -32768) li = -32768;
                 if (ri >  32767) ri =  32767; if (ri < -32768) ri = -32768;
                 tmp[f * 2]     = (int16_t)li;
                 tmp[f * 2 + 1] = (int16_t)ri;
             }
+            emitted = frames_abl;
         }
-        if (abl) free(abl);
-        if (bbRetained) CFRelease(bbRetained);
-    } else {
-        /* formato sconosciuto — silenzio */
-        memset(tmp, 0, num_frames * 2 * sizeof(int16_t));
+    } else if (is_float && !is_non_int) {
+        float *fp = (float *)abl->mBuffers[0].mData;
+        size_t bytes = abl->mBuffers[0].mDataByteSize;
+        size_t frames_abl = bytes / (sizeof(float) * (size_t)src_ch);
+        if (frames_abl > (size_t)num_frames) frames_abl = (size_t)num_frames;
+        if (fp) {
+            for (size_t f = 0; f < frames_abl; f++) {
+                float lf = fp[f * src_ch];
+                float rf = (src_ch >= 2) ? fp[f * src_ch + 1] : lf;
+                int32_t li = (int32_t)(lf * 32768.0f);
+                int32_t ri = (int32_t)(rf * 32768.0f);
+                if (li >  32767) li =  32767; if (li < -32768) li = -32768;
+                if (ri >  32767) ri =  32767; if (ri < -32768) ri = -32768;
+                tmp[f * 2]     = (int16_t)li;
+                tmp[f * 2 + 1] = (int16_t)ri;
+            }
+            emitted = frames_abl;
+        }
+    } else if (!is_float && bits == 16 && !is_non_int) {
+        int16_t *sp = (int16_t *)abl->mBuffers[0].mData;
+        size_t bytes = abl->mBuffers[0].mDataByteSize;
+        size_t frames_abl = bytes / (sizeof(int16_t) * (size_t)src_ch);
+        if (frames_abl > (size_t)num_frames) frames_abl = (size_t)num_frames;
+        if (sp) {
+            for (size_t f = 0; f < frames_abl; f++) {
+                tmp[f * 2]     = sp[f * src_ch];
+                tmp[f * 2 + 1] = (src_ch >= 2) ? sp[f * src_ch + 1] : sp[f * src_ch];
+            }
+            emitted = frames_abl;
+        }
+    } else if (!is_float && bits == 16 && is_non_int) {
+        int16_t *c0 = (int16_t *)abl->mBuffers[0].mData;
+        int16_t *c1 = (abl->mNumberBuffers >= 2)
+                      ? (int16_t *)abl->mBuffers[1].mData
+                      : c0;
+        size_t bytes = abl->mBuffers[0].mDataByteSize;
+        size_t frames_abl = bytes / sizeof(int16_t);
+        if (frames_abl > (size_t)num_frames) frames_abl = (size_t)num_frames;
+        if (c0) {
+            for (size_t f = 0; f < frames_abl; f++) {
+                tmp[f * 2]     = c0[f];
+                tmp[f * 2 + 1] = c1 ? c1[f] : c0[f];
+            }
+            emitted = frames_abl;
+        }
     }
 
-    ring_write(tmp, num_frames * 2);
+    if (emitted > 0) ring_write(tmp, emitted * 2);
+
     free(tmp);
+    free(abl);
+    if (bbRetained) CFRelease(bbRetained);
 }
 
 - (void)stream:(SCStream *)stream didStopWithError:(NSError *)error {
@@ -253,7 +277,7 @@ API_AVAILABLE(macos(12.3))
  * ───────────────────────────────────────────────────────────────────────────*/
 
 jboolean mac_engine_start(int sample_rate, int channels, int buffer_frames) {
-    if (@available(macOS 12.3, *)) {
+    if (@available(macOS 13.0, *)) {
 
         if (g_mac_initialized) mac_engine_stop();
 
@@ -372,8 +396,8 @@ jboolean mac_engine_start(int sample_rate, int channels, int buffer_frames) {
         return JNI_TRUE;
 
     } else {
-        mac_set_error("ScreenCaptureKit richiede macOS 12.3 o superiore. "
-                      "Installa BlackHole 2ch e riavvia l'app.");
+        mac_set_error("La cattura audio via ScreenCaptureKit richiede macOS 13.0 o superiore. "
+                      "Aggiorna macOS oppure disattiva il motore nativo nelle impostazioni.");
         return JNI_FALSE;
     }
 }
@@ -404,7 +428,7 @@ void mac_engine_stop(void) {
     g_mac_initialized = 0;
 
     if (g_stream) {
-        if (@available(macOS 12.3, *)) {
+        if (@available(macOS 13.0, *)) {
             [(SCStream *)g_stream stopCaptureWithCompletionHandler:^(NSError *e) {
                 if (e) fprintf(stderr, "[AudioEngine/macOS] stopCapture: %s\n",
                                [[e localizedDescription] UTF8String]);
@@ -419,9 +443,7 @@ void mac_engine_stop(void) {
         g_ring = NULL;
     }
 
-    if (g_sema) {
-        g_sema = NULL;
-    }
+    g_sema = NULL;
 
     printf("[AudioEngine/macOS] Stopped.\n");
 }

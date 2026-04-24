@@ -64,6 +64,12 @@ class AudioEngine(
             val osName = System.getProperty("os.name").lowercase()
             val osArch = System.getProperty("os.arch").lowercase()
 
+            if (!osName.contains("win") && !osName.contains("mac")) {
+                loadError = "Motore audio nativo disabilitato su Linux: viene usato il backend FFmpeg."
+                println("[AudioEngine] $loadError")
+                return false
+            }
+
             val osDir = when {
                 osName.contains("win")  -> "windows"
                 osName.contains("mac")  -> "macos"
