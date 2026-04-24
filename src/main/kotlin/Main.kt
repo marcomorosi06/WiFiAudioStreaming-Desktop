@@ -2063,6 +2063,7 @@ object NetworkHandler_v1 {
                                         val engine = serverEngine ?: break
                                         val samples = engine.readFrame() ?: break
                                         if (!clientAlive.get()) break
+                                        if (samples.isEmpty()) continue
                                         processEngineFrame(samples, chunkArray, byteBuffer, maxShortsPerPacket, audioSettings.channels) { bytesToSend ->
                                             byteBuffer.array().copyInto(packetArray, 0, 0, bytesToSend)
                                             val packet = buildPacket { writeFully(packetArray, 0, bytesToSend) }

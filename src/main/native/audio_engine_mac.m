@@ -186,10 +186,6 @@ API_AVAILABLE(macos(12.3))
             tmp[f * 2 + 1] = (src_ch >= 2) ? sp[f * src_ch + 1] : sp[f * src_ch];
         }
     } else if (is_float && is_non_int) {
-        /*
-         * Non-interleaved float: ogni canale è in un AudioBuffer separato.
-         * Dobbiamo usare CMSampleBufferGetAudioBufferListWithRetainedBlockBuffer.
-         */
         AudioBufferList *abl = NULL;
         CMBlockBufferRef bbRetained = NULL;
         size_t ablSize = 0;
@@ -219,7 +215,8 @@ API_AVAILABLE(macos(12.3))
                          ? (float *)abl->mBuffers[1].mData
                          : ch0;
             size_t frames_abl = abl->mBuffers[0].mDataByteSize / sizeof(float);
-            for (size_t f = 0; f < frames_abl && f < num_frames; f++) {
+            if (frames_abl < num_frames) num_frames = frames_abl;
+            for (size_t f = 0; f < num_frames; f++) {
                 int32_t li = (int32_t)(ch0[f] * 32768.0f);
                 int32_t ri = (int32_t)(ch1[f] * 32768.0f);
                 if (li >  32767) li =  32767; if (li < -32768) li = -32768;
@@ -227,15 +224,16 @@ API_AVAILABLE(macos(12.3))
                 tmp[f * 2]     = (int16_t)li;
                 tmp[f * 2 + 1] = (int16_t)ri;
             }
+        } else {
+            num_frames = 0;
         }
         if (abl) free(abl);
         if (bbRetained) CFRelease(bbRetained);
     } else {
-        /* formato sconosciuto — silenzio */
         memset(tmp, 0, num_frames * 2 * sizeof(int16_t));
     }
 
-    ring_write(tmp, num_frames * 2);
+    if (num_frames > 0) ring_write(tmp, num_frames * 2);
     free(tmp);
 }
 
@@ -382,22 +380,15 @@ jboolean mac_engine_start(int sample_rate, int channels, int buffer_frames) {
 jint mac_engine_read(int16_t *out_buf, int num_stereo_samples) {
     if (!g_mac_initialized || !g_ring) return 0;
 
-    /*
-     * Aspettiamo che il ring buffer abbia abbastanza dati.
-     * Tentiamo 50 volte con 1ms di sleep tra i tentativi (= 50ms max wait).
-     * Se SCStream è in silenzio, forniamo zeri per non bloccare il thread Kotlin.
-     */
     for (int attempt = 0; attempt < 50; attempt++) {
         if (ring_read(out_buf, (size_t)(num_stereo_samples * 2))) {
             return (jint)(num_stereo_samples * 2);
         }
-        struct timespec ts = {0, 1000000L}; /* 1 ms */
+        struct timespec ts = {0, 1000000L};
         nanosleep(&ts, NULL);
     }
 
-    /* silenzio — non è un errore */
-    memset(out_buf, 0, (size_t)(num_stereo_samples * 2) * sizeof(int16_t));
-    return (jint)(num_stereo_samples * 2);
+    return 0;
 }
 
 void mac_engine_stop(void) {
