@@ -429,7 +429,7 @@ jint mac_engine_read(int16_t *out_buf, int num_stereo_samples) {
 
     for (int attempt = 0; attempt < 50; attempt++) {
         if (ring_read(out_buf, (size_t)(num_stereo_samples * 2))) {
-            return (jint)(num_stereo_samples * 2);
+            return (jint)num_stereo_samples;
         }
         struct timespec ts = {0, 1000000L};
         nanosleep(&ts, NULL);
