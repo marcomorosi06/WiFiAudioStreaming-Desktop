@@ -61,18 +61,10 @@ typedef struct {
 
 static RingBuffer *g_ring = NULL;
 
-#define RING_MAX_LATENCY_SHORTS (4800 * 2)
-
 static void ring_write(const int16_t *src, size_t n_shorts) {
     if (!g_ring) return;
     size_t cap_shorts = RING_CAPACITY / sizeof(int16_t);
     uint64_t wp = g_ring->write_pos;
-    uint64_t rp = __atomic_load_n(&g_ring->read_pos, __ATOMIC_ACQUIRE);
-    uint64_t used = wp - rp;
-    if (used + n_shorts > RING_MAX_LATENCY_SHORTS) {
-        uint64_t advance = used + n_shorts - RING_MAX_LATENCY_SHORTS;
-        __atomic_store_n(&g_ring->read_pos, rp + advance, __ATOMIC_RELEASE);
-    }
     for (size_t i = 0; i < n_shorts; i++) {
         g_ring->buf[(wp + i) & (cap_shorts - 1)] = src[i];
     }
@@ -87,9 +79,9 @@ static int ring_read(int16_t *dst, size_t n_shorts) {
     if (available < n_shorts) return 0;
 
     size_t cap_shorts = RING_CAPACITY / sizeof(int16_t);
-    uint64_t max_latency = (uint64_t)n_shorts * 3;
+    uint64_t max_latency = (uint64_t)n_shorts * 10;
     if (available > max_latency) {
-        rp = wp - n_shorts;
+        rp = wp - (uint64_t)n_shorts * 2;
     }
 
     for (size_t i = 0; i < n_shorts; i++) {
