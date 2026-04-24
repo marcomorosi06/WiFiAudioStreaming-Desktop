@@ -88,7 +88,7 @@ elseif(APPLE)
         INSTALL_RPATH "@loader_path"
     )
     target_compile_options(audio_engine PRIVATE
-        -mmacosx-version-min=12.3
+            -mmacosx-version-min=13.0
     )
 
 elseif(UNIX)

@@ -237,10 +237,11 @@ compose.desktop {
     application {
         mainClass = "MainKt"
 
-        jvmArgs += listOf(
-            "-Djava.net.preferIPv4Stack=true",
-            "-XX:UseAVX=2"
-        )
+        val baseArgs = mutableListOf("-Djava.net.preferIPv4Stack=true")
+        if (isWindows) {
+            baseArgs.add("-XX:UseAVX=2")
+        }
+        jvmArgs += baseArgs
 
         nativeDistributions {
             targetFormats(TargetFormat.Msi, TargetFormat.Dmg, TargetFormat.Deb, TargetFormat.Rpm)
