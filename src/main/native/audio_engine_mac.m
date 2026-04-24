@@ -61,10 +61,18 @@ typedef struct {
 
 static RingBuffer *g_ring = NULL;
 
+#define RING_MAX_LATENCY_SHORTS (4800 * 2)
+
 static void ring_write(const int16_t *src, size_t n_shorts) {
     if (!g_ring) return;
     size_t cap_shorts = RING_CAPACITY / sizeof(int16_t);
     uint64_t wp = g_ring->write_pos;
+    uint64_t rp = __atomic_load_n(&g_ring->read_pos, __ATOMIC_ACQUIRE);
+    uint64_t used = wp - rp;
+    if (used + n_shorts > RING_MAX_LATENCY_SHORTS) {
+        uint64_t advance = used + n_shorts - RING_MAX_LATENCY_SHORTS;
+        __atomic_store_n(&g_ring->read_pos, rp + advance, __ATOMIC_RELEASE);
+    }
     for (size_t i = 0; i < n_shorts; i++) {
         g_ring->buf[(wp + i) & (cap_shorts - 1)] = src[i];
     }
@@ -169,9 +177,37 @@ API_AVAILABLE(macos(12.3))
     int is_non_int  = (asbd->mFormatFlags & kAudioFormatFlagIsNonInterleaved) != 0;
 
     uint32_t bytes_per_frame = asbd->mBytesPerFrame;
+    uint32_t bits_per_ch     = asbd->mBitsPerChannel;
+    double   src_sr          = asbd->mSampleRate;
+
+    static int s_logged_fmt = 0;
+    if (!s_logged_fmt) {
+        fprintf(stderr,
+            "[AudioEngine/macOS] ASBD: sr=%.0f ch=%d bpc=%u bpf=%u flags=0x%x float=%d packed=%d non_int=%d\n",
+            src_sr, src_ch, bits_per_ch, bytes_per_frame,
+            asbd->mFormatFlags, is_float, is_packed, is_non_int);
+        s_logged_fmt = 1;
+    }
+
+    if ((int)src_sr != g_mac_sample_rate && (int)src_sr != 0) {
+        static int s_warned_sr = 0;
+        if (!s_warned_sr) {
+            fprintf(stderr,
+                "[AudioEngine/macOS] WARNING: source sample rate %.0f != requested %d. "
+                "Audio will sound wrong (chipmunk/slow).\n",
+                src_sr, g_mac_sample_rate);
+            s_warned_sr = 1;
+        }
+    }
+
     if (bytes_per_frame == 0) return;
 
-    size_t num_frames = total_bytes / bytes_per_frame;
+    size_t num_frames;
+    if (is_non_int) {
+        num_frames = total_bytes / bytes_per_frame / (src_ch > 0 ? src_ch : 1);
+    } else {
+        num_frames = total_bytes / bytes_per_frame;
+    }
     if (num_frames == 0) return;
 
     int16_t *tmp = (int16_t *)malloc(num_frames * 2 * sizeof(int16_t));
