@@ -1921,6 +1921,7 @@ object NetworkHandler_v1 {
                             socket.reuseAddress = true
                             socket.bind(java.net.InetSocketAddress(0))
                             socket.timeToLive = 4
+                            socket.loopbackMode = true
                             getActiveNetworkInterface()?.let { socket.networkInterface = it }
                             val group = InetAddress.getByName(MULTICAST_GROUP_IP)
 
