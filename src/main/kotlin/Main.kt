@@ -1973,9 +1973,14 @@ object NetworkHandler_v1 {
                                 }
                             }
 
-                            runCatching {
-                                val bye = "BYE".toByteArray()
-                                socket.send(DatagramPacket(bye, bye.size, group, port))
+                            withContext(NonCancellable) {
+                                runCatching {
+                                    val bye = "BYE".toByteArray()
+                                    repeat(3) {
+                                        socket.send(DatagramPacket(bye, bye.size, group, port))
+                                    }
+                                    println("--- Sent BYE to multicast group ---")
+                                }
                             }
                         }
                     } finally {
@@ -2044,6 +2049,25 @@ object NetworkHandler_v1 {
                                         }
                                     }
                                 }
+                            }
+
+                            val clientByeReceiverJob = launch {
+                                try {
+                                    while (isActive && clientAlive.get()) {
+                                        val datagram = socket.receive()
+                                        val msg = datagram.packet.readText().trim()
+                                        if (msg == "CLIENT_BYE") {
+                                            println("--- Received CLIENT_BYE from $clientAddress ---")
+                                            clientAlive.set(false)
+                                            if (useNativeEngine) {
+                                                runCatching { serverEngine?.stop() }
+                                            } else {
+                                                runCatching { serverGrabber?.stop() }
+                                            }
+                                            break
+                                        }
+                                    }
+                                } catch (_: Exception) {}
                             }
 
                             try {
@@ -2122,11 +2146,14 @@ object NetworkHandler_v1 {
                                     }
                                 }
                             } finally {
-                                runCatching { pingJob.cancelAndJoin() }
+                                clientByeReceiverJob.cancel()
+                                pingJob.cancel()
                                 if (clientAlive.get()) {
-                                    runCatching {
-                                        socket.send(Datagram(buildPacket { writeText("BYE") }, clientAddress))
-                                        println("--- Sent BYE to $clientAddress ---")
+                                    withContext(NonCancellable) {
+                                        runCatching {
+                                            socket.send(Datagram(buildPacket { writeText("BYE") }, clientAddress))
+                                            println("--- Sent BYE to $clientAddress ---")
+                                        }
                                     }
                                 }
                                 if (useNativeEngine) {
@@ -2140,6 +2167,10 @@ object NetworkHandler_v1 {
                                     runCatching { grabberToStop?.stop() }
                                     runCatching { grabberToStop?.release() }
                                 }
+                            }
+                            if (!clientAlive.get() && isActive) {
+                                onStatusUpdate("status_client_disconnected", emptyArray())
+                                break
                             }
                         }
                     }
@@ -2261,6 +2292,11 @@ object NetworkHandler_v1 {
                             }
                         } finally {
                             watchdogJob.cancel()
+                            withContext(NonCancellable) {
+                                runCatching {
+                                    socket.send(Datagram(buildPacket { writeText("CLIENT_BYE") }, remoteAddress))
+                                }
+                            }
                         }
                     }
                 } else { // Multicast
@@ -2275,11 +2311,15 @@ object NetworkHandler_v1 {
                         sourceDataLine?.start()
                         onStatusUpdate("status_multicast_streaming", arrayOf(serverInfo.port))
                         if (connectionSoundEnabled) playConnectionSound()
+                        socket.soTimeout = 2000
                         val buf    = ByteArray(audioSettings.bufferSize * 2)
                         val packet = DatagramPacket(buf, buf.size)
                         while (isActive) {
-                            socket.receive(packet)
-
+                            try {
+                                socket.receive(packet)
+                            } catch (_: java.net.SocketTimeoutException) {
+                                continue
+                            }
                             if (packet.length >= AUDIO_HEADER_SIZE && packet.data[0] == AUDIO_MAGIC_0 && packet.data[1] == AUDIO_MAGIC_1) {
                                 sourceDataLine?.write(packet.data, AUDIO_HEADER_SIZE, packet.length - AUDIO_HEADER_SIZE)
                             } else if (packet.length == 3 && String(packet.data, 0, 3, Charsets.UTF_8) == "BYE") {
@@ -2344,6 +2384,8 @@ object NetworkHandler_v1 {
         rtpJob?.cancelAndJoin();         rtpJob          = null
         localMicMixJob?.cancelAndJoin(); localMicMixJob  = null
         runCatching { serverEngine?.setMicMixEnabled(false) }
+        runCatching { serverEngine?.stop() }
+        runCatching { serverGrabber?.stop() }
         streamingJob?.cancelAndJoin();   streamingJob    = null
         micReceiverJob?.cancelAndJoin(); micReceiverJob  = null
         broadcastingJob?.cancelAndJoin(); broadcastingJob = null
@@ -2730,6 +2772,12 @@ fun main() = application {
                                 isStreaming = false
                                 virtualDriverStatus = NetworkHandler_v1.checkVirtualDriverStatus(appSettings.useNativeEngine)
                                 connectionStatus = Strings.get("status_inactive")
+                            } else if (key == "status_client_disconnected") {
+                                scope.launch {
+                                    NetworkHandler_v1.stopCurrentStream()
+                                    isStreaming = false
+                                    connectionStatus = Strings.get("status_inactive")
+                                }
                             } else {
                                 connectionStatus = if (args.isEmpty()) key else String.format(key, *args)
                             }
@@ -2895,6 +2943,12 @@ fun main() = application {
                                         isStreaming          = false
                                         virtualDriverStatus  = NetworkHandler_v1.checkVirtualDriverStatus(appSettings.useNativeEngine)
                                         connectionStatus     = Strings.get("status_inactive")
+                                    } else if (key == "status_client_disconnected") {
+                                        scope.launch {
+                                            NetworkHandler_v1.stopCurrentStream()
+                                            isStreaming = false
+                                            connectionStatus = Strings.get("status_inactive")
+                                        }
                                     } else {
                                         connectionStatus = if (args.isEmpty()) key else String.format(key, *args)
                                     }

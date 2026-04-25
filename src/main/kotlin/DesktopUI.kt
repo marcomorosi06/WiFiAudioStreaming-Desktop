@@ -1808,7 +1808,7 @@ fun NetworkSettingsContent(
         Column(Modifier.weight(1f)) {
             Text("WFAS (custom)", style = MaterialTheme.typography.bodyLarge)
             Text(
-                text = "Descrizione",
+                stringResource("protocol_wfas_desc"),
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
