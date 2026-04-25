@@ -1903,16 +1903,18 @@ object NetworkHandler_v1 {
                     onStatusUpdate("Streaming Multicast on %s:%d...", arrayOf(MULTICAST_GROUP_IP, port))
 
                     val nCh               = audioSettings.channels
-                    val maxBytesPerPacket = if (useNativeEngine) {
-                        1400 - (1400 % (nCh * 2))
-                    } else {
-                        audioSettings.bufferSize
-                    }
-                    val maxShortsPerPacket = maxBytesPerPacket / 2
-                    val packetBuf          = ByteArray(maxBytesPerPacket)
+                    val safeMtuSize        = 1400
+                    var maxShortsPerPacket = (safeMtuSize - AUDIO_HEADER_SIZE) / 2
+                    maxShortsPerPacket    -= (maxShortsPerPacket % nCh)
+                    val exactPayloadBytes  = AUDIO_HEADER_SIZE + (maxShortsPerPacket * 2)
                     val chunkArray         = ShortArray(maxShortsPerPacket)
-                    val byteBuffer         = java.nio.ByteBuffer.allocate(maxBytesPerPacket)
-                        .apply { if (!useNativeEngine) order(java.nio.ByteOrder.LITTLE_ENDIAN) }
+                    val byteBuffer         = java.nio.ByteBuffer.allocate(
+                        if (useNativeEngine) exactPayloadBytes else maxShortsPerPacket * 2
+                    ).apply { if (!useNativeEngine) order(java.nio.ByteOrder.LITTLE_ENDIAN) }
+                    val packetArray        = ByteArray(exactPayloadBytes)
+                    audioSeqNum    = 0
+                    audioSamplePos = 0L
+                    var legacySeq  = 0
 
                     try {
                         MulticastSocket(null as java.net.SocketAddress?).use { socket ->
@@ -1924,37 +1926,15 @@ object NetworkHandler_v1 {
 
                             while (isActive) {
                                 if (useNativeEngine) {
-                                    val engine      = serverEngine ?: break
-                                    val ownedShorts = engine.readFrame() ?: break
-                                    if (ownedShorts.isEmpty()) continue
+                                    val engine  = serverEngine ?: break
+                                    val samples = engine.readFrame() ?: break
+                                    if (samples.isEmpty()) continue
 
-                                    val vol = currentServerVolume
-                                    if (vol != 1.0f) {
-                                        for (i in ownedShorts.indices) {
-                                            ownedShorts[i] = (ownedShorts[i] * vol).toInt()
-                                                .coerceIn(Short.MIN_VALUE.toInt(), Short.MAX_VALUE.toInt())
-                                                .toShort()
-                                        }
-                                    }
-
-                                    var offset = 0
-                                    while (offset < ownedShorts.size) {
-                                        var shortsThisPacket = minOf(ownedShorts.size - offset, maxShortsPerPacket)
-                                        shortsThisPacket -= (shortsThisPacket % nCh)
-                                        if (shortsThisPacket <= 0) break
-
-                                        var bytePos = 0
-                                        for (i in 0 until shortsThisPacket) {
-                                            val s = ownedShorts[offset + i].toInt()
-                                            packetBuf[bytePos++] = (s and 0xFF).toByte()
-                                            packetBuf[bytePos++] = ((s shr 8) and 0xFF).toByte()
-                                        }
-
-                                        val totalBytes = shortsThisPacket * 2
-                                        runCatching { socket.send(DatagramPacket(packetBuf, totalBytes, group, port)) }
+                                    processEngineFrame(samples, chunkArray, byteBuffer, maxShortsPerPacket, nCh) { bytesToSend ->
+                                        byteBuffer.array().copyInto(packetArray, 0, 0, bytesToSend)
+                                        runCatching { socket.send(DatagramPacket(packetArray, bytesToSend, group, port)) }
                                         if (aacPcmQueue != null || opusPcmQueue != null || rtpPcmQueue != null)
-                                            distributeToSidecars(packetBuf.copyOf(totalBytes))
-                                        offset += shortsThisPacket
+                                            distributeToSidecars(byteBuffer.array().copyOfRange(AUDIO_HEADER_SIZE, bytesToSend))
                                     }
                                 } else {
                                     val grabber = serverGrabber ?: break
@@ -1965,7 +1945,17 @@ object NetworkHandler_v1 {
                                     }
                                     if (frame != null) {
                                         processGrabberFrame(frame, chunkArray, byteBuffer, maxShortsPerPacket) { bytesToSend ->
-                                            socket.send(DatagramPacket(byteBuffer.array(), bytesToSend, group, port))
+                                            packetArray[0] = AUDIO_MAGIC_0
+                                            packetArray[1] = AUDIO_MAGIC_1
+                                            packetArray[2] = AUDIO_VERSION
+                                            packetArray[3] = 0x00
+                                            packetArray[4] = ((legacySeq shr 8) and 0xFF).toByte()
+                                            packetArray[5] = (legacySeq and 0xFF).toByte()
+                                            packetArray[6] = 0; packetArray[7] = 0; packetArray[8] = 0; packetArray[9] = 0
+                                            byteBuffer.array().copyInto(packetArray, AUDIO_HEADER_SIZE, 0, bytesToSend)
+                                            legacySeq = (legacySeq + 1) and 0xFFFF
+                                            val totalBytes = AUDIO_HEADER_SIZE + bytesToSend
+                                            runCatching { socket.send(DatagramPacket(packetArray, totalBytes, group, port)) }
                                             if (aacPcmQueue != null || opusPcmQueue != null || rtpPcmQueue != null)
                                                 distributeToSidecars(byteBuffer.array().copyOf(bytesToSend))
                                         }
@@ -2320,13 +2310,19 @@ object NetworkHandler_v1 {
                             } catch (_: java.net.SocketTimeoutException) {
                                 continue
                             }
+                            val frameSize = audioSettings.channels * (audioSettings.bitDepth / 8)
                             if (packet.length >= AUDIO_HEADER_SIZE && packet.data[0] == AUDIO_MAGIC_0 && packet.data[1] == AUDIO_MAGIC_1) {
-                                sourceDataLine?.write(packet.data, AUDIO_HEADER_SIZE, packet.length - AUDIO_HEADER_SIZE)
+                                val pcmLen = packet.length - AUDIO_HEADER_SIZE
+                                val aligned = pcmLen - (pcmLen % frameSize)
+                                if (aligned > 0) sourceDataLine?.write(packet.data, AUDIO_HEADER_SIZE, aligned)
                             } else if (packet.length == 3 && String(packet.data, 0, 3, Charsets.UTF_8) == "BYE") {
                                 println("--- Received BYE from multicast server ---")
                                 onStatusUpdate("status_server_disconnected", emptyArray())
                                 if (disconnectionSoundEnabled) playDisconnectionSound()
                                 break
+                            } else {
+                                val aligned = packet.length - (packet.length % frameSize)
+                                if (aligned > 0) sourceDataLine?.write(packet.data, 0, aligned)
                             }
                         }
                     }
