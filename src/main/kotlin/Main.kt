@@ -218,7 +218,8 @@ data class ServerInfo(
     val isMulticast: Boolean,
     val port: Int,
     val capabilities: ServerCapabilities? = null,
-    val lastSeen: Long = System.currentTimeMillis()
+    val lastSeen: Long = System.currentTimeMillis(),
+    val serverAudioSettings: AudioSettings_V1? = null
 )
 
 data class AudioSettings_V1(
@@ -639,7 +640,13 @@ object NetworkHandler_v1 {
                         } else {
                             ServerCapabilities(setOf(StreamingProtocol.WFAS), null)
                         }
-                        onDeviceFound(hostname, ServerInfo(remoteIp, isMulticast, port, capabilities, System.currentTimeMillis()))
+                        val discoveredSr = parts.firstOrNull { it.startsWith("sr=") }?.removePrefix("sr=")?.toFloatOrNull()
+                        val discoveredCh = parts.firstOrNull { it.startsWith("ch=") }?.removePrefix("ch=")?.toIntOrNull()
+                        val discoveredBd = parts.firstOrNull { it.startsWith("bd=") }?.removePrefix("bd=")?.toIntOrNull()
+                        val discoveredAudio = if (discoveredSr != null && discoveredCh != null && discoveredBd != null)
+                            AudioSettings_V1(discoveredSr, discoveredBd, discoveredCh, 6400)
+                        else null
+                        onDeviceFound(hostname, ServerInfo(remoteIp, isMulticast, port, capabilities, System.currentTimeMillis(), discoveredAudio))
                     } catch (_: java.net.SocketTimeoutException) { continue }
                 }
             } catch (e: Exception) {
@@ -653,14 +660,15 @@ object NetworkHandler_v1 {
 
     fun endDeviceDiscovery() { listeningJob?.cancel() }
 
-    fun startAnnouncingPresence(isMulticast: Boolean, port: Int, capabilities: ServerCapabilities) {
+    fun startAnnouncingPresence(isMulticast: Boolean, port: Int, capabilities: ServerCapabilities, audioSettings: AudioSettings_V1? = null) {
         broadcastingJob?.cancel()
         broadcastingJob = scope.launch {
             val hostname     = runCatching { InetAddress.getLocalHost().hostName }.getOrDefault("Desktop-PC")
             val mode         = if (isMulticast) "MULTICAST" else "UNICAST"
             val protocolsStr = capabilities.protocols.joinToString(",") { it.name }
             val httpPortStr  = capabilities.httpPort?.let { ";http_port=$it" } ?: ""
-            val message      = "$DISCOVERY_MESSAGE;$hostname;$mode;$port;protocols=$protocolsStr$httpPortStr"
+            val audioStr     = if (audioSettings != null) ";sr=${audioSettings.sampleRate.toInt()};ch=${audioSettings.channels};bd=${audioSettings.bitDepth}" else ""
+            val message      = "$DISCOVERY_MESSAGE;$hostname;$mode;$port;protocols=$protocolsStr$httpPortStr$audioStr"
             val groupAddress = InetAddress.getByName(MULTICAST_GROUP_IP)
             MulticastSocket().use { socket ->
                 socket.timeToLive = 4
@@ -1881,7 +1889,7 @@ object NetworkHandler_v1 {
             localMicMixJob = scope.launchLocalMicMix(audioSettings, micMixInputInfo)
         }
 
-        startAnnouncingPresence(isMulticast, port, capabilities)
+        startAnnouncingPresence(isMulticast, port, capabilities, audioSettings)
 
         streamingJob = scope.launch(Dispatchers.IO) {
             try {
@@ -1991,7 +1999,7 @@ object NetworkHandler_v1 {
                     val localAddress = InetSocketAddress("0.0.0.0", port)
                     aSocket(SelectorManager(Dispatchers.IO)).udp().bind(localAddress) { reuseAddress = true }.use { socket ->
                         while (isActive) {
-                            startAnnouncingPresence(isMulticast = false, port = port, capabilities = capabilities)
+                            startAnnouncingPresence(isMulticast = false, port = port, capabilities = capabilities, audioSettings = audioSettings)
                             onStatusUpdate("Waiting for Unicast Client on Port %d...", arrayOf(port))
 
                             val clientDatagram = socket.receive()
@@ -2298,32 +2306,30 @@ object NetworkHandler_v1 {
                         socket.bind(java.net.InetSocketAddress(serverInfo.port))
                         getActiveNetworkInterface()?.let { socket.networkInterface = it }
                         socket.joinGroup(groupAddress)
-                        sourceDataLine = prepareSourceDataLine(selectedMixerInfo, audioSettings)
+                        val effectiveAudioSettings = serverInfo.serverAudioSettings ?: audioSettings
+                        sourceDataLine = prepareSourceDataLine(selectedMixerInfo, effectiveAudioSettings)
                         sourceDataLine?.start()
                         onStatusUpdate("status_multicast_streaming", arrayOf(serverInfo.port))
                         if (connectionSoundEnabled) playConnectionSound()
                         socket.soTimeout = 2000
-                        val buf    = ByteArray(audioSettings.bufferSize * 2)
+                        val buf    = ByteArray(8192)
                         val packet = DatagramPacket(buf, buf.size)
+                        val frameSize = effectiveAudioSettings.channels * (effectiveAudioSettings.bitDepth / 8)
                         while (isActive) {
                             try {
                                 socket.receive(packet)
                             } catch (_: java.net.SocketTimeoutException) {
                                 continue
                             }
-                            val frameSize = audioSettings.channels * (audioSettings.bitDepth / 8)
                             if (packet.length >= AUDIO_HEADER_SIZE && packet.data[0] == AUDIO_MAGIC_0 && packet.data[1] == AUDIO_MAGIC_1) {
                                 val pcmLen = packet.length - AUDIO_HEADER_SIZE
                                 val aligned = pcmLen - (pcmLen % frameSize)
                                 if (aligned > 0) sourceDataLine?.write(packet.data, AUDIO_HEADER_SIZE, aligned)
-                            } else if (packet.length == 3 && String(packet.data, 0, 3, Charsets.UTF_8) == "BYE") {
+                            } else if (packet.length >= 3 && String(packet.data, 0, minOf(packet.length, 3), Charsets.UTF_8) == "BYE") {
                                 println("--- Received BYE from multicast server ---")
                                 onStatusUpdate("status_server_disconnected", emptyArray())
                                 if (disconnectionSoundEnabled) playDisconnectionSound()
                                 break
-                            } else {
-                                val aligned = packet.length - (packet.length % frameSize)
-                                if (aligned > 0) sourceDataLine?.write(packet.data, 0, aligned)
                             }
                         }
                     }
@@ -2894,7 +2900,7 @@ fun main() = application {
                                     // 2. Auto-rilevamento: se è sconosciuto, eseguiamo il ping silente
                                     val isMulti = knownServer?.isMulticast ?: NetworkHandler_v1.probeIsMulticast(ip, port)
 
-                                    val manualServerInfo = ServerInfo(ip, isMulti, port, knownServer?.capabilities)
+                                    val manualServerInfo = ServerInfo(ip, isMulti, port, knownServer?.capabilities, serverAudioSettings = knownServer?.serverAudioSettings)
                                     NetworkHandler_v1.endDeviceDiscovery()
                                     NetworkHandler_v1.launchClientInstance(
                                         audioSettings, manualServerInfo, selectedOutputDevice!!,
