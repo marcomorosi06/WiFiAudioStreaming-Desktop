@@ -348,7 +348,14 @@ object NetworkHandler_v1 {
         if (preferredName != "Auto") {
             allInterfaces.firstOrNull { it.displayName == preferredName || it.name == preferredName }
         } else {
-            allInterfaces.firstOrNull { iface ->
+            val localIp = getLocalIpAddress()
+            val matchByIp = allInterfaces.firstOrNull { iface ->
+                iface.isUp && !iface.isLoopback &&
+                        iface.inetAddresses.toList().any { addr ->
+                            addr is java.net.Inet4Address && addr.hostAddress == localIp
+                        }
+            }
+            matchByIp ?: allInterfaces.firstOrNull { iface ->
                 iface.isUp && !iface.isLoopback &&
                         !iface.displayName.contains("Virtual",  ignoreCase = true) &&
                         !iface.displayName.contains("VMware",   ignoreCase = true) &&
