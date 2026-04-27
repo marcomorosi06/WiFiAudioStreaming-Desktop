@@ -1896,6 +1896,14 @@ object NetworkHandler_v1 {
             localMicMixJob = scope.launchLocalMicMix(audioSettings, micMixInputInfo)
         }
 
+        if (StreamingProtocol.HTTP in capabilities.protocols && capabilities.httpPort != null) {
+            httpServerJob = scope.launchHttpServer(audioSettings, capabilities.httpPort, capabilities.safariMode, onStatusUpdate)
+        }
+
+        if (StreamingProtocol.RTP in capabilities.protocols) {
+            rtpJob = scope.launchRtpSidecar(audioSettings, rtpPort, isMulticast)
+        }
+
         startAnnouncingPresence(isMulticast, port, capabilities, audioSettings)
 
         streamingJob = scope.launch(Dispatchers.IO) {
@@ -2311,8 +2319,12 @@ object NetworkHandler_v1 {
                     MulticastSocket(null as java.net.SocketAddress?).use { socket ->
                         socket.reuseAddress = true
                         socket.bind(java.net.InetSocketAddress(serverInfo.port))
-                        getActiveNetworkInterface()?.let { socket.networkInterface = it }
-                        socket.joinGroup(groupAddress)
+                        val netIface = getActiveNetworkInterface()
+                        if (netIface != null) {
+                            socket.joinGroup(java.net.InetSocketAddress(groupAddress, 0), netIface)
+                        } else {
+                            socket.joinGroup(groupAddress)
+                        }
                         val effectiveAudioSettings = serverInfo.serverAudioSettings ?: audioSettings
                         sourceDataLine = prepareSourceDataLine(selectedMixerInfo, effectiveAudioSettings)
                         sourceDataLine?.start()
@@ -2771,7 +2783,7 @@ fun main() = application {
                         val mic = micPort.toIntOrNull() ?: 9092
                         val rtp = appSettings.rtpPort.toIntOrNull() ?: 9094
 
-                        isMulticastMode = appSettings.autoStartMulticast
+                        isMulticastMode = appSettings.autoStartMulticast || appSettings.rtpEnabled || appSettings.httpEnabled
 
                         NetworkHandler_v1.launchServerInstance(
                             audioSettings, port, isMulticastMode, serverCapabilities,
@@ -2943,6 +2955,8 @@ fun main() = application {
                                 val port = streamingPort.toIntOrNull() ?: 9090
                                 val mic  = micPort.toIntOrNull() ?: 9092
                                 val rtp  = appSettings.rtpPort.toIntOrNull() ?: 9094
+
+                                isMulticastMode = isMulticastMode || appSettings.rtpEnabled || appSettings.httpEnabled
 
                                 NetworkHandler_v1.launchServerInstance(
                                     audioSettings, port, isMulticastMode, serverCapabilities,
