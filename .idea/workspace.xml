@@ -4,23 +4,9 @@
     <option name="autoReloadType" value="SELECTIVE" />
   </component>
   <component name="ChangeListManager">
-    <list default="true" id="5f86ce91-f37e-4a3e-9b89-95bbba8740e8" name="Changes" comment="Pulizia da vb-cable">
-      <change afterPath="$PROJECT_DIR$/src/main/resources/raw/connection_sound.wav" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/src/main/resources/raw/disconnection_sound.wav" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/src/main/resources/wfas_protocol.png" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/.idea/misc.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/misc.xml" afterDir="false" />
+    <list default="true" id="5f86ce91-f37e-4a3e-9b89-95bbba8740e8" name="Changes" comment="fixes">
       <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/gradlew" beforeDir="false" afterPath="$PROJECT_DIR$/gradlew" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/main/kotlin/AudioEngine.kt" beforeDir="false" afterPath="$PROJECT_DIR$/src/main/kotlin/AudioEngine.kt" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/main/kotlin/DesktopUI.kt" beforeDir="false" afterPath="$PROJECT_DIR$/src/main/kotlin/DesktopUI.kt" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/main/kotlin/Main.kt" beforeDir="false" afterPath="$PROJECT_DIR$/src/main/kotlin/Main.kt" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/src/main/kotlin/SettingsManager.kt" beforeDir="false" afterPath="$PROJECT_DIR$/src/main/kotlin/SettingsManager.kt" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/main/kotlin/strings.kt" beforeDir="false" afterPath="$PROJECT_DIR$/src/main/kotlin/strings.kt" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/main/native/CMakeLists.txt" beforeDir="false" afterPath="$PROJECT_DIR$/src/main/native/CMakeLists.txt" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/main/native/audio_engine.c" beforeDir="false" afterPath="$PROJECT_DIR$/src/main/native/audio_engine.c" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/main/native/audio_engine_mac.m" beforeDir="false" afterPath="$PROJECT_DIR$/src/main/native/audio_engine_mac.m" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/main/resources/strings.properties" beforeDir="false" afterPath="$PROJECT_DIR$/src/main/resources/strings.properties" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/main/resources/strings_it.properties" beforeDir="false" afterPath="$PROJECT_DIR$/src/main/resources/strings_it.properties" afterDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />
@@ -49,6 +35,12 @@
                 <item name="" type="6a2764b6:ExternalProjectsStructure$RootNode" />
                 <item name="WiFiAudioStreaming" type="f1a62948:ProjectNode" />
                 <item name="Tasks" type="e4a08cd1:TasksNode" />
+              </path>
+              <path>
+                <item name="" type="6a2764b6:ExternalProjectsStructure$RootNode" />
+                <item name="WiFiAudioStreaming" type="f1a62948:ProjectNode" />
+                <item name="Tasks" type="e4a08cd1:TasksNode" />
+                <item name="compose desktop" type="c8890929:TasksNode$1" />
               </path>
             </expand>
             <select />
@@ -119,7 +111,14 @@
     &quot;accountId&quot;: &quot;dbb92e82-d357-4388-93c9-1df0b90229c9&quot;
   }
 }</component>
-  <component name="GradleScriptDefinitionsStorage" workingDir="$PROJECT_DIR$" gradleHome="C:\Users\marco\.gradle\wrapper\dists\gradle-8.14-bin\38aieal9i53h9rfe7vjup95b9\gradle-8.14" javaHome="C:\Program Files\Java\jdk-21" gradleVersion="8.14" />
+  <component name="GradleScriptDefinitionsStorage" workingDir="$PROJECT_DIR$" gradleHome="C:\Users\marco\.gradle\wrapper\dists\gradle-8.14-bin\38aieal9i53h9rfe7vjup95b9\gradle-8.14" javaHome="C:\Program Files\Java\jdk-21" gradleVersion="8.14">
+    <option name="jvmArguments">
+      <list>
+        <option value="-Didea.compose.hot-reload=true" />
+        <option value="-Didea.compose.hot-reload.version=2" />
+      </list>
+    </option>
+  </component>
   <component name="ProjectColorInfo">{
   &quot;customColor&quot;: &quot;&quot;,
   &quot;associatedIndex&quot;: 1
@@ -369,7 +368,119 @@
       <option name="project" value="LOCAL" />
       <updated>1776503653657</updated>
     </task>
-    <option name="localTasksCounter" value="18" />
+    <task id="LOCAL-00018" summary="Lol who cares no one is reading ts">
+      <option name="closed" value="true" />
+      <created>1776690685432</created>
+      <option name="number" value="00018" />
+      <option name="presentableId" value="LOCAL-00018" />
+      <option name="project" value="LOCAL" />
+      <updated>1776690685432</updated>
+    </task>
+    <task id="LOCAL-00019" summary="Now Linux uses old FFMPEG cuz it's better and MacOS fix (I tried I need to test it). If you're reading this, click the settings title in the app! Both Android and PC!!">
+      <option name="closed" value="true" />
+      <created>1777067884840</created>
+      <option name="number" value="00019" />
+      <option name="presentableId" value="LOCAL-00019" />
+      <option name="project" value="LOCAL" />
+      <updated>1777067884840</updated>
+    </task>
+    <task id="LOCAL-00020" summary="mac">
+      <option name="closed" value="true" />
+      <created>1777069175048</created>
+      <option name="number" value="00020" />
+      <option name="presentableId" value="LOCAL-00020" />
+      <option name="project" value="LOCAL" />
+      <updated>1777069175049</updated>
+    </task>
+    <task id="LOCAL-00021" summary="mac 2">
+      <option name="closed" value="true" />
+      <created>1777070440514</created>
+      <option name="number" value="00021" />
+      <option name="presentableId" value="LOCAL-00021" />
+      <option name="project" value="LOCAL" />
+      <updated>1777070440514</updated>
+    </task>
+    <task id="LOCAL-00022" summary="mac 3">
+      <option name="closed" value="true" />
+      <created>1777070898980</created>
+      <option name="number" value="00022" />
+      <option name="presentableId" value="LOCAL-00022" />
+      <option name="project" value="LOCAL" />
+      <updated>1777070898980</updated>
+    </task>
+    <task id="LOCAL-00023" summary="mac 4">
+      <option name="closed" value="true" />
+      <created>1777071323383</created>
+      <option name="number" value="00023" />
+      <option name="presentableId" value="LOCAL-00023" />
+      <option name="project" value="LOCAL" />
+      <updated>1777071323383</updated>
+    </task>
+    <task id="LOCAL-00024" summary="mac 5">
+      <option name="closed" value="true" />
+      <created>1777071560190</created>
+      <option name="number" value="00024" />
+      <option name="presentableId" value="LOCAL-00024" />
+      <option name="project" value="LOCAL" />
+      <updated>1777071560190</updated>
+    </task>
+    <task id="LOCAL-00025" summary="fixes">
+      <option name="closed" value="true" />
+      <created>1777115767214</created>
+      <option name="number" value="00025" />
+      <option name="presentableId" value="LOCAL-00025" />
+      <option name="project" value="LOCAL" />
+      <updated>1777115767214</updated>
+    </task>
+    <task id="LOCAL-00026" summary="fixes">
+      <option name="closed" value="true" />
+      <created>1777117257023</created>
+      <option name="number" value="00026" />
+      <option name="presentableId" value="LOCAL-00026" />
+      <option name="project" value="LOCAL" />
+      <updated>1777117257023</updated>
+    </task>
+    <task id="LOCAL-00027" summary="fixes">
+      <option name="closed" value="true" />
+      <created>1777119093030</created>
+      <option name="number" value="00027" />
+      <option name="presentableId" value="LOCAL-00027" />
+      <option name="project" value="LOCAL" />
+      <updated>1777119093030</updated>
+    </task>
+    <task id="LOCAL-00028" summary="fixes">
+      <option name="closed" value="true" />
+      <created>1777133389056</created>
+      <option name="number" value="00028" />
+      <option name="presentableId" value="LOCAL-00028" />
+      <option name="project" value="LOCAL" />
+      <updated>1777133389056</updated>
+    </task>
+    <task id="LOCAL-00029" summary="fixes">
+      <option name="closed" value="true" />
+      <created>1777134951911</created>
+      <option name="number" value="00029" />
+      <option name="presentableId" value="LOCAL-00029" />
+      <option name="project" value="LOCAL" />
+      <updated>1777134951911</updated>
+    </task>
+    <task id="LOCAL-00030" summary="fixes">
+      <option name="closed" value="true" />
+      <created>1777199548803</created>
+      <option name="number" value="00030" />
+      <option name="presentableId" value="LOCAL-00030" />
+      <option name="project" value="LOCAL" />
+      <updated>1777199548803</updated>
+    </task>
+    <task id="LOCAL-00031" summary="fixes">
+      <option name="closed" value="true" />
+      <created>1777284986506</created>
+      <option name="number" value="00031" />
+      <option name="presentableId" value="LOCAL-00031" />
+      <option name="project" value="LOCAL" />
+      <updated>1777284986507</updated>
+    </task>
+    <option name="localTasksCounter" value="32" />
     <servers />
   </component>
   <component name="Vcs.Log.Tabs.Properties">
@@ -395,6 +506,14 @@
     <MESSAGE value="changed LICENSE.md from MIT to EUPL" />
     <MESSAGE value="muta dispositivo in stream con engine in C" />
     <MESSAGE value="Pulizia da vb-cable" />
-    <option name="LAST_COMMIT_MESSAGE" value="Pulizia da vb-cable" />
+    <MESSAGE value="Lol who cares no one is reading ts" />
+    <MESSAGE value="Now Linux uses old FFMPEG cuz it's better and MacOS fix (I tried I need to test it). If you're reading this, click the settings title in the app! Both Android and PC!!" />
+    <MESSAGE value="mac" />
+    <MESSAGE value="mac 2" />
+    <MESSAGE value="mac 3" />
+    <MESSAGE value="mac 4" />
+    <MESSAGE value="mac 5" />
+    <MESSAGE value="fixes" />
+    <option name="LAST_COMMIT_MESSAGE" value="fixes" />
   </component>
 </project>

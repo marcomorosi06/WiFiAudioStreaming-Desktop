@@ -136,7 +136,7 @@ object SettingsRepository {
         val sampleRate = prefs.getFloat(SAMPLE_RATE_KEY, 48000f)
         val bitDepth = prefs.getInt(BIT_DEPTH_KEY, 16)
         val channels = prefs.getInt(CHANNELS_KEY, 2)
-        val bufferSize = prefs.getInt(BUFFER_SIZE_KEY, 6400)
+        val bufferSize = prefs.getInt(BUFFER_SIZE_KEY, 512)
         val audioSettings = AudioSettings_V1(sampleRate, bitDepth, channels, bufferSize)
         val streamingPort = prefs.get(STREAMING_PORT_KEY, "9090")
         val micPort = prefs.get(MIC_PORT_KEY, "9092")
