@@ -8,7 +8,20 @@ plugins {
 }
 
 group = "com.wifiaudiostreaming"
-version = "0.4.0-beta"
+version = "5.0"
+
+val appVersion = "5.0.0"
+
+tasks.register("generateVersionProperties") {
+    val outFile = layout.projectDirectory.file("src/main/resources/version.properties").asFile
+    outputs.file(outFile)
+    doLast {
+        outFile.writeText("app.version=$appVersion\n")
+    }
+}
+tasks.named("processResources") {
+    dependsOn("generateVersionProperties")
+}
 
 repositories {
     google()
@@ -109,8 +122,7 @@ fun findCmakeExecutable(): String {
 
 fun findWindowsGenerator(cmakePath: String): List<String> {
     return listOf(
-        "-G", "Visual Studio 17 2022",
-        "-A", "x64"
+        "-G", "MinGW Makefiles"
     )
 }
 
@@ -241,13 +253,16 @@ compose.desktop {
         if (isWindows) {
             baseArgs.add("-XX:UseAVX=2")
         }
+        if (isLinux) {
+            baseArgs.add("-Dskiko.renderApi=SOFTWARE")
+        }
         jvmArgs += baseArgs
 
         nativeDistributions {
             targetFormats(TargetFormat.Msi, TargetFormat.Dmg, TargetFormat.Deb, TargetFormat.Rpm)
 
             packageName = "WiFi Audio Streaming"
-            packageVersion = "4.0.0"
+            packageVersion = appVersion
 
             modules(
                 "java.desktop",

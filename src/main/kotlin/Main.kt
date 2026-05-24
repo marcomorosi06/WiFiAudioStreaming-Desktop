@@ -428,6 +428,8 @@ object NetworkHandler_v1 {
     // ── AudioEngine (motore nativo JNI) ───────────────────────────────────────
     @Volatile private var serverEngine: AudioEngine? = null
 
+    private val softwareMicMixer = SoftwareMicMixer()
+
     // ── FFmpeg grabber (motore legacy) ────────────────────────────────────────
     @Volatile private var serverGrabber: org.bytedeco.javacv.FFmpegFrameGrabber? = null
 
@@ -621,19 +623,20 @@ object NetworkHandler_v1 {
 
                         if (remoteIp in localIps || !message.startsWith(DISCOVERY_MESSAGE)) continue
 
+                        println("[DISCOVERY] Ricevuto da $remoteIp: $message")
                         val parts = message.split(";")
-                        if (parts.size < 4) continue
+                        if (parts.size < 4) { println("[DISCOVERY] pacchetto malformato (parti=${parts.size}): $message"); continue }
                         val hostname = parts[1]
 
                         if (message.contains("BYE")) {
-                            // Se riceve BYE, notifica la rimozione (passando null o gestendo la mappa)
-                            // Nota: per semplicità passiamo un segnale al chiamante
+                            println("[DISCOVERY] BYE da $hostname ($remoteIp), rimuovo dalla lista")
                             onDeviceFound(hostname, ServerInfo("", false, 0, null, 0L))
                             continue
                         }
 
                         val isMulticast = parts[2].equals("MULTICAST", ignoreCase = true)
                         val port        = parts[3].toIntOrNull() ?: continue
+                        println("[DISCOVERY] Server trovato: hostname=$hostname ip=$remoteIp isMulticast=$isMulticast port=$port")
 
                         val capabilities = if (parts.size >= 5) {
                             val protoStr = parts.firstOrNull { it.startsWith("protocols=") }
@@ -806,14 +809,25 @@ object NetworkHandler_v1 {
                 }
                 MicRoutingMode.MIX_INTO_STREAM -> {
                     mixActive = true
-                    while (isActive && serverEngine == null) {
-                        delay(100)
+                    softwareMicMixer.enable(true)
+                    softwareMicMixer.volume = if (isMicMuted.value) 0f else 1.0f
+                    launch {
+                        var enabledOn: AudioEngine? = null
+                        while (isActive) {
+                            val cur = serverEngine
+                            if (cur != null && cur !== enabledOn) {
+                                runCatching { cur.setMicMixEnabled(true) }
+                                runCatching { cur.setMicMixVolume(if (isMicMuted.value) 0f else 1.0f) }
+                                enabledOn = cur
+                            }
+                            delay(200)
+                        }
                     }
-                    serverEngine?.setMicMixEnabled(true)
-                    serverEngine?.setMicMixVolume(if (isMicMuted.value) 0f else 1.0f)
                     muteCollectorJob = launch {
                         isMicMuted.collect { muted ->
-                            runCatching { serverEngine?.setMicMixVolume(if (muted) 0f else 1.0f) }
+                            val v = if (muted) 0f else 1.0f
+                            runCatching { serverEngine?.setMicMixVolume(v) }
+                            softwareMicMixer.volume = v
                         }
                     }
                 }
@@ -879,7 +893,6 @@ object NetworkHandler_v1 {
                                 }
                             }
                             MicRoutingMode.MIX_INTO_STREAM -> {
-                                val engine = serverEngine ?: continue
                                 val numShorts = len / 2
                                 val bb = java.nio.ByteBuffer.wrap(packet.data, 0, len)
                                     .order(java.nio.ByteOrder.LITTLE_ENDIAN)
@@ -887,7 +900,8 @@ object NetworkHandler_v1 {
                                 while (bb.remaining() >= 2 && i < reusableShorts.size) {
                                     reusableShorts[i++] = bb.short
                                 }
-                                engine.pushMicPcm(reusableShorts, numShorts)
+                                serverEngine?.pushMicPcm(reusableShorts, numShorts)
+                                softwareMicMixer.pushPcm(reusableShorts, numShorts)
                             }
                             MicRoutingMode.OFF -> break
                         }
@@ -903,6 +917,8 @@ object NetworkHandler_v1 {
             if (mixActive && localMicMixJob?.isActive != true) {
                 serverEngine?.setMicMixEnabled(false)
                 serverEngine?.setMicMixVolume(1.0f)
+                softwareMicMixer.enable(false)
+                softwareMicMixer.volume = 1.0f
             }
             if (nativeVirtualSinkActive) {
                 activeVirtualSinkEngine?.destroyVirtualSink()
@@ -928,29 +944,57 @@ object NetworkHandler_v1 {
     ) = launch(Dispatchers.IO) {
         var localMicLine: TargetDataLine? = null
         var muteCollectorJob: Job? = null
-        try {
-            while (isActive && serverEngine == null) {
-                delay(100)
-            }
-            val engine = serverEngine ?: run {
-                println("[LocalMicMix] serverEngine non disponibile, mix microfono saltato")
-                return@launch
-            }
-            engine.setMicMixEnabled(true)
-            engine.setMicMixVolume(if (isMicMuted.value) 0f else 1.0f)
+        var engineEnableJob: Job? = null
+        var keepAliveJob: Job? = null
 
-            muteCollectorJob = launch {
-                isMicMuted.collect { muted ->
-                    runCatching { serverEngine?.setMicMixVolume(if (muted) 0f else 1.0f) }
+        try {
+            val micGain = 1.0f
+
+            softwareMicMixer.enable(true)
+            softwareMicMixer.volume = if (isMicMuted.value) 0f else micGain
+
+            engineEnableJob = launch {
+                var enabledOn: AudioEngine? = null
+                while (isActive) {
+                    val cur = serverEngine
+                    if (cur != null && cur !== enabledOn) {
+                        runCatching { cur.setMicMixEnabled(true) }
+                        runCatching { cur.setMicMixVolume(if (isMicMuted.value) 0f else micGain) }
+                        enabledOn = cur
+                    }
+                    delay(200)
                 }
             }
 
-            val mixer = runCatching { AudioSystem.getMixer(micMixInputInfo) }.getOrNull() ?: run {
-                println("[LocalMicMix] Impossibile ottenere il mixer ${micMixInputInfo.name}")
-                return@launch
+            muteCollectorJob = launch {
+                isMicMuted.collect { muted ->
+                    val v = if (muted) 0f else micGain
+                    runCatching { serverEngine?.setMicMixVolume(v) }
+                    softwareMicMixer.volume = v
+                }
             }
+
+            keepAliveJob = launch {
+                runCatching {
+                    val fmt = AudioFormat(audioSettings.sampleRate, 16, 2, true, false)
+                    val info = DataLine.Info(SourceDataLine::class.java, fmt)
+                    if (AudioSystem.isLineSupported(info)) {
+                        val line = AudioSystem.getLine(info) as SourceDataLine
+                        line.open(fmt, 4096)
+                        line.start()
+                        val zeros = ByteArray(1024)
+                        while (isActive) {
+                            line.write(zeros, 0, zeros.size)
+                        }
+                        line.stop()
+                        line.close()
+                    }
+                }
+            }
+
+            val mixer = runCatching { AudioSystem.getMixer(micMixInputInfo) }.getOrNull() ?: return@launch
             val streamSr  = audioSettings.sampleRate
-            val streamBd  = audioSettings.bitDepth
+            val streamBd  = 16
             val streamCh  = audioSettings.channels
 
             val candidates = mutableListOf<AudioFormat>()
@@ -967,8 +1011,9 @@ object NetworkHandler_v1 {
                 val info = DataLine.Info(TargetDataLine::class.java, fmt)
                 if (!mixer.isLineSupported(info)) continue
                 runCatching {
+                    val bufSize = (fmt.sampleRate * fmt.frameSize * 0.1f).toInt()
                     val l = (mixer.getLine(info) as TargetDataLine).apply {
-                        open(fmt, audioSettings.bufferSize * 4)
+                        open(fmt, bufSize)
                         start()
                     }
                     localMicLine = l
@@ -976,11 +1021,7 @@ object NetworkHandler_v1 {
                 }
                 if (chosen != null) break
             }
-            if (localMicLine == null || chosen == null) {
-                println("[LocalMicMix] Nessun formato supportato dal device ${micMixInputInfo.name}")
-                return@launch
-            }
-            println("[LocalMicMix] Capture aperta su ${micMixInputInfo.name} fmt=$chosen target=${streamSr}Hz/${streamCh}ch")
+            if (localMicLine == null || chosen == null) return@launch
 
             val inSr      = chosen!!.sampleRate
             val inCh      = chosen!!.channels
@@ -988,76 +1029,90 @@ object NetworkHandler_v1 {
             val needsDownmix = inCh == 2 && streamCh == 1
             val needsResample = inSr != streamSr
 
-            val readBuf = ByteArray(audioSettings.bufferSize)
+            val readBuf = ByteArray(16384)
+            val maxInShorts = readBuf.size / 2
+            val inShortsBuf = ShortArray(maxInShorts)
+            val procShortsBuf = ShortArray(maxInShorts * 2)
+            val ratio = streamSr.toDouble() / inSr.toDouble()
+            val outShortsBuf = ShortArray(((maxInShorts * 2) * (if (needsResample) ratio else 1.0)).toInt() + 8)
+            val byteOrder = if (chosen!!.isBigEndian) java.nio.ByteOrder.BIG_ENDIAN else java.nio.ByteOrder.LITTLE_ENDIAN
 
             while (isActive) {
                 val n = localMicLine!!.read(readBuf, 0, readBuf.size)
                 if (n <= 0) continue
-                val bb = java.nio.ByteBuffer.wrap(readBuf, 0, n).order(java.nio.ByteOrder.LITTLE_ENDIAN)
-                val numInShorts = n / 2
-                val inShorts = ShortArray(numInShorts)
-                var idx = 0
-                while (bb.remaining() >= 2 && idx < numInShorts) inShorts[idx++] = bb.short
 
-                var procShorts: ShortArray = inShorts
+                val numInShorts = n / 2
+                val bb = java.nio.ByteBuffer.wrap(readBuf, 0, n).order(byteOrder)
+                var idx = 0
+                while (bb.remaining() >= 2 && idx < numInShorts) inShortsBuf[idx++] = bb.short
+
+                var procShorts: ShortArray = inShortsBuf
+                var procLen = numInShorts
                 var procCh = inCh
                 if (needsDownmix) {
-                    val mono = ShortArray(numInShorts / 2)
                     var j = 0
                     var k = 0
                     while (k + 1 < numInShorts) {
-                        mono[j++] = ((inShorts[k].toInt() + inShorts[k + 1].toInt()) / 2).toShort()
+                        procShortsBuf[j++] = ((inShortsBuf[k].toInt() + inShortsBuf[k + 1].toInt()) / 2).toShort()
                         k += 2
                     }
-                    procShorts = mono.copyOf(j)
+                    procShorts = procShortsBuf
+                    procLen = j
                     procCh = 1
                 } else if (needsUpmix) {
-                    val stereo = ShortArray(numInShorts * 2)
                     var j = 0
-                    for (s in inShorts) {
-                        stereo[j++] = s
-                        stereo[j++] = s
+                    for (i in 0 until numInShorts) {
+                        val s = inShortsBuf[i]
+                        procShortsBuf[j++] = s
+                        procShortsBuf[j++] = s
                     }
-                    procShorts = stereo
+                    procShorts = procShortsBuf
+                    procLen = j
                     procCh = 2
                 }
 
-                val outShorts: ShortArray = if (!needsResample) {
-                    procShorts
+                val outLen: Int
+                val outShorts: ShortArray
+                if (!needsResample) {
+                    outShorts = procShorts
+                    outLen = procLen
                 } else {
-                    val ratio = streamSr.toDouble() / inSr.toDouble()
-                    val inFrames = procShorts.size / procCh
-                    val approxOutFrames = (inFrames * ratio).toInt() + 2
-                    val out = ShortArray(approxOutFrames * procCh)
+                    val inFrames = procLen / procCh
                     var outPos = 0
                     var srcFrame = 0.0
-                    while (srcFrame < inFrames - 1 && outPos + procCh <= out.size) {
+                    val cap = outShortsBuf.size
+                    while (srcFrame < inFrames - 1 && outPos + procCh <= cap) {
                         val base = srcFrame.toInt()
                         val frac = (srcFrame - base).toFloat()
                         for (c in 0 until procCh) {
                             val a = procShorts[base * procCh + c].toInt()
                             val b = procShorts[(base + 1) * procCh + c].toInt()
-                            val v = (a + (b - a) * frac).toInt()
-                                .coerceIn(Short.MIN_VALUE.toInt(), Short.MAX_VALUE.toInt())
-                            out[outPos++] = v.toShort()
+                            val v = (a + (b - a) * frac).toInt().coerceIn(Short.MIN_VALUE.toInt(), Short.MAX_VALUE.toInt())
+                            outShortsBuf[outPos++] = v.toShort()
                         }
                         srcFrame += 1.0 / ratio
                     }
-                    if (outPos < out.size) out.copyOf(outPos) else out
+                    outShorts = outShortsBuf
+                    outLen = outPos
                 }
 
-                serverEngine?.pushMicPcm(outShorts, outShorts.size)
+                serverEngine?.pushMicPcm(outShorts, outLen)
+                softwareMicMixer.pushPcm(outShorts, outLen)
             }
         } catch (_: CancellationException) {
         } catch (e: Exception) {
-            println("[LocalMicMix] errore: ${e.message}")
+            println("[LocalMicMix] error: ${e.message}")
         } finally {
             muteCollectorJob?.cancel()
+            engineEnableJob?.cancel()
+            keepAliveJob?.cancel()
             runCatching { localMicLine?.stop() }
             runCatching { localMicLine?.close() }
             if (micReceiverJob?.isActive != true) {
                 runCatching { serverEngine?.setMicMixEnabled(false) }
                 runCatching { serverEngine?.setMicMixVolume(1.0f) }
+                softwareMicMixer.enable(false)
+                softwareMicMixer.volume = 1.0f
             }
         }
     }
@@ -1163,6 +1218,7 @@ object NetworkHandler_v1 {
         while (shortBuffer.hasRemaining()) {
             val shortsToRead = minOf(shortBuffer.remaining(), maxShortsPerPacket)
             shortBuffer.get(chunkArray, 0, shortsToRead)
+            softwareMicMixer.mixInto(chunkArray, shortsToRead)
             val vol = currentServerVolume
             if (vol != 1.0f) {
                 for (i in 0 until shortsToRead) {
@@ -2246,36 +2302,49 @@ object NetworkHandler_v1 {
 
         streamingJob = scope.launch {
             var sourceDataLine: SourceDataLine? = null
+            println("[CLIENT] launchClientInstance avviato: server=${serverInfo.ip}:${serverInfo.port} isMulticast=${serverInfo.isMulticast} sendMic=$sendMicrophone mixer='${selectedMixerInfo.name}'")
             try {
                 if (!serverInfo.isMulticast) { // Unicast
                     val remoteAddress = InetSocketAddress(serverInfo.ip, serverInfo.port)
+                    println("[CLIENT][UNICAST] connessione unicast verso $remoteAddress")
                     aSocket(SelectorManager(Dispatchers.IO)).udp().bind().use { socket ->
-                        // FIX (latenza): apri la SourceDataLine PRIMA di mandare HELLO —
-                        // quando arriva l'ACK la linea è già pronta, nessuna inizializzazione on-hot-path.
                         sourceDataLine = prepareSourceDataLine(selectedMixerInfo, audioSettings)
                         sourceDataLine?.start()
+                        println("[CLIENT][UNICAST] SourceDataLine avviata, invio HELLO a $remoteAddress")
 
                         onStatusUpdate("status_contacting_server", arrayOf(remoteAddress))
                         socket.send(Datagram(buildPacket { writeText(CLIENT_HELLO_MESSAGE) }, remoteAddress))
+                        println("[CLIENT][UNICAST] HELLO inviato, attendo ACK (timeout 15s)...")
 
                         onStatusUpdate("status_waiting_ack", emptyArray())
                         val ackDatagram = withTimeout(15000) { socket.receive() }
-                        if (ackDatagram.packet.readText().trim() != "HELLO_ACK") {
+                        val ackText = ackDatagram.packet.readText().trim()
+                        println("[CLIENT][UNICAST] ACK ricevuto da ${ackDatagram.address}: '$ackText'")
+                        if (ackText != "HELLO_ACK") {
+                            println("[CLIENT][UNICAST] ERRORE handshake: risposta inattesa '$ackText'")
                             onStatusUpdate("status_handshake_failed", emptyArray())
                             return@use
                         }
+                        println("[CLIENT][UNICAST] handshake OK, streaming avviato da $remoteAddress")
                         onStatusUpdate("status_connected_streaming_from", arrayOf(remoteAddress))
                         if (connectionSoundEnabled) playConnectionSound()
 
                         var lastPingReceived = System.currentTimeMillis()
                         val pingTimeoutMs    = 3000L
                         val serverAlive      = java.util.concurrent.atomic.AtomicBoolean(true)
+                        var receivedPackets  = 0L
+                        var audioPackets     = 0L
+                        var totalAudioBytes  = 0L
+                        var pingCount        = 0L
 
                         val watchdogJob = launch {
                             while (isActive && serverAlive.get()) {
                                 delay(1000)
-                                if (System.currentTimeMillis() - lastPingReceived > pingTimeoutMs) {
+                                val elapsed = System.currentTimeMillis() - lastPingReceived
+                                println("[CLIENT][UNICAST] watchdog: ${elapsed}ms dall'ultimo PING (timeout=${pingTimeoutMs}ms) audioPkts=$audioPackets totalAudioBytes=$totalAudioBytes")
+                                if (elapsed > pingTimeoutMs) {
                                     println("--- Server timeout: no PING for ${pingTimeoutMs}ms ---")
+                                    println("[CLIENT][UNICAST] TIMEOUT: nessun PING in ${pingTimeoutMs}ms, disconnessione")
                                     onStatusUpdate("status_server_disconnected", emptyArray())
                                     if (disconnectionSoundEnabled) playDisconnectionSound()
                                     serverAlive.set(false)
@@ -2288,32 +2357,50 @@ object NetworkHandler_v1 {
                                 val datagram = socket.receive()
                                 val bytes    = ByteArray(datagram.packet.remaining.toInt())
                                 datagram.packet.readFully(bytes)
+                                receivedPackets++
 
                                 if (bytes.size >= AUDIO_HEADER_SIZE && bytes[0] == AUDIO_MAGIC_0 && bytes[1] == AUDIO_MAGIC_1) {
-                                    sourceDataLine?.write(bytes, AUDIO_HEADER_SIZE, bytes.size - AUDIO_HEADER_SIZE)
+                                    val pcmLen = bytes.size - AUDIO_HEADER_SIZE
+                                    audioPackets++
+                                    totalAudioBytes += pcmLen
+                                    if (audioPackets == 1L || audioPackets % 500L == 0L) {
+                                            println("[CLIENT][UNICAST] audioPkt #$audioPackets size=${bytes.size} pcmLen=$pcmLen totalAudioBytes=$totalAudioBytes SDL=${sourceDataLine?.isActive}")
+                                    }
+                                    sourceDataLine?.write(bytes, AUDIO_HEADER_SIZE, pcmLen)
                                 } else {
                                     val text = bytes.toString(Charsets.UTF_8).trim()
                                     when (text) {
-                                        "PING" -> lastPingReceived = System.currentTimeMillis()
+                                        "PING" -> {
+                                            lastPingReceived = System.currentTimeMillis()
+                                            pingCount++
+                                            if (pingCount == 1L || pingCount % 10L == 0L) {
+                                                println("[CLIENT][UNICAST] PING #$pingCount ricevuto da ${datagram.address}")
+                                            }
+                                        }
                                         "BYE"  -> {
                                             println("--- Received BYE from server ---")
+                                            println("[CLIENT][UNICAST] BYE ricevuto, disconnessione pulita")
                                             onStatusUpdate("status_server_disconnected", emptyArray())
                                             if (disconnectionSoundEnabled) playDisconnectionSound()
                                             serverAlive.set(false)
                                         }
+                                        else -> println("[CLIENT][UNICAST] msg sconosciuto (#$receivedPackets): '$text'")
                                     }
                                 }
                             }
                         } finally {
+                            println("[CLIENT][UNICAST] loop terminato: receivedPackets=$receivedPackets audioPackets=$audioPackets pingCount=$pingCount totalAudioBytes=$totalAudioBytes")
                             watchdogJob.cancel()
                             withContext(NonCancellable) {
                                 runCatching {
+                                    println("[CLIENT][UNICAST] invio CLIENT_BYE a $remoteAddress")
                                     socket.send(Datagram(buildPacket { writeText("CLIENT_BYE") }, remoteAddress))
                                 }
                             }
                         }
                     }
                 } else { // Multicast
+                    println("[CLIENT][MULTICAST] modalità multicast, porta=${serverInfo.port} ip=${serverInfo.ip}")
                     onStatusUpdate("status_joining_multicast", arrayOf(serverInfo.port))
                     val groupAddress = InetAddress.getByName(MULTICAST_GROUP_IP)
                     MulticastSocket(null as java.net.SocketAddress?).use { socket ->
@@ -2321,19 +2408,25 @@ object NetworkHandler_v1 {
                         socket.bind(java.net.InetSocketAddress(serverInfo.port))
                         val netIface = getActiveNetworkInterface()
                         if (netIface != null) {
+                            println("[CLIENT][MULTICAST] join group $groupAddress via iface ${netIface.name}")
                             socket.joinGroup(java.net.InetSocketAddress(groupAddress, 0), netIface)
                         } else {
+                            println("[CLIENT][MULTICAST] join group $groupAddress (nessuna iface specifica)")
                             socket.joinGroup(groupAddress)
                         }
                         val effectiveAudioSettings = serverInfo.serverAudioSettings ?: audioSettings
+                        println("[CLIENT][MULTICAST] effectiveAudioSettings: sr=${effectiveAudioSettings.sampleRate} ch=${effectiveAudioSettings.channels} bd=${effectiveAudioSettings.bitDepth}")
                         sourceDataLine = prepareSourceDataLine(selectedMixerInfo, effectiveAudioSettings)
                         sourceDataLine?.start()
+                        println("[CLIENT][MULTICAST] SourceDataLine avviata, attendo pacchetti multicast...")
                         onStatusUpdate("status_multicast_streaming", arrayOf(serverInfo.port))
                         if (connectionSoundEnabled) playConnectionSound()
                         socket.soTimeout = 2000
                         val buf    = ByteArray(8192)
                         val packet = DatagramPacket(buf, buf.size)
                         val frameSize = effectiveAudioSettings.channels * (effectiveAudioSettings.bitDepth / 8)
+                        var mcAudioPkts = 0L
+                        var mcTotalBytes = 0L
                         while (isActive) {
                             try {
                                 socket.receive(packet)
@@ -2343,9 +2436,15 @@ object NetworkHandler_v1 {
                             if (packet.length >= AUDIO_HEADER_SIZE && packet.data[0] == AUDIO_MAGIC_0 && packet.data[1] == AUDIO_MAGIC_1) {
                                 val pcmLen = packet.length - AUDIO_HEADER_SIZE
                                 val aligned = pcmLen - (pcmLen % frameSize)
+                                mcAudioPkts++
+                                mcTotalBytes += aligned
+                                if (mcAudioPkts == 1L || mcAudioPkts % 500L == 0L) {
+                                    println("[CLIENT][MULTICAST] audioPkt #$mcAudioPkts len=${packet.length} pcmLen=$pcmLen aligned=$aligned totalBytes=$mcTotalBytes")
+                                }
                                 if (aligned > 0) sourceDataLine?.write(packet.data, AUDIO_HEADER_SIZE, aligned)
                             } else if (packet.length >= 3 && String(packet.data, 0, minOf(packet.length, 3), Charsets.UTF_8) == "BYE") {
                                 println("--- Received BYE from multicast server ---")
+                                println("[CLIENT][MULTICAST] BYE ricevuto dopo $mcAudioPkts pacchetti audio ($mcTotalBytes bytes totali)")
                                 onStatusUpdate("status_server_disconnected", emptyArray())
                                 if (disconnectionSoundEnabled) playDisconnectionSound()
                                 break
@@ -2354,16 +2453,20 @@ object NetworkHandler_v1 {
                     }
                 }
             } catch (_: TimeoutCancellationException) {
+                println("[CLIENT] TIMEOUT: nessuna risposta dal server entro 15s")
                 onStatusUpdate("status_server_no_response", emptyArray())
             } catch (e: Exception) {
                 if (e !is CancellationException) {
+                    println("[CLIENT] ECCEZIONE: ${e.javaClass.simpleName}: ${e.message}")
                     e.printStackTrace()
                     onStatusUpdate("Error: %s", arrayOf(e.message ?: e.toString()))
                 }
             } finally {
+                println("[CLIENT] finally: chiusura SourceDataLine")
                 sourceDataLine?.drain()
                 sourceDataLine?.stop()
                 sourceDataLine?.close()
+                println("[CLIENT] launchClientInstance terminato")
             }
         }
     }
@@ -2373,14 +2476,56 @@ object NetworkHandler_v1 {
         val format       = audioSettings.toAudioFormat()
         val dataLineInfo = DataLine.Info(SourceDataLine::class.java, format)
 
-        if (!mixer.isLineSupported(dataLineInfo)) return null
+        println("[CLIENT] prepareSourceDataLine: mixer='${mixerInfo.name}' format=$format sr=${audioSettings.sampleRate} ch=${audioSettings.channels} bd=${audioSettings.bitDepth}")
 
-        val frameSize         = format.frameSize
-        val adjustedBufferSize = (audioSettings.bufferSize / frameSize) * frameSize
+        if (!mixer.isLineSupported(dataLineInfo)) {
+            println("[CLIENT] ERRORE: mixer '${mixerInfo.name}' NON supporta il formato $format")
+            return null
+        }
 
-        return (mixer.getLine(dataLineInfo) as SourceDataLine).also {
+        val frameSize = format.frameSize
+        val targetLatencyMs = 80
+        val targetBytes = ((audioSettings.sampleRate.toInt() * targetLatencyMs / 1000) * frameSize)
+            .let { it - (it % frameSize) }
+            .coerceAtLeast(frameSize * 256)
 
-            it.open(format, adjustedBufferSize * 4)
+        println("[CLIENT] SourceDataLine: frameSize=$frameSize targetLatencyMs=${targetLatencyMs}ms targetBufferBytes=$targetBytes")
+        return (mixer.getLine(dataLineInfo) as SourceDataLine).also { sdl ->
+            sdl.open(format, targetBytes)
+            println("[CLIENT] SourceDataLine aperta: bufferSize=${sdl.bufferSize} format=${sdl.format} latenzaReale=${sdl.bufferSize * 1000 / (audioSettings.sampleRate.toInt() * frameSize)}ms")
+
+            val gainInfo = sdl.controls
+                .filterIsInstance<javax.sound.sampled.FloatControl>()
+                .find { it.type == javax.sound.sampled.FloatControl.Type.MASTER_GAIN }
+            if (gainInfo != null) {
+                println("[CLIENT] SDL MASTER_GAIN: ${gainInfo.value} dB (min=${gainInfo.minimum} max=${gainInfo.maximum})")
+            } else {
+                println("[CLIENT] SDL MASTER_GAIN: controllo non disponibile")
+            }
+            val muteInfo = sdl.controls
+                .filterIsInstance<javax.sound.sampled.BooleanControl>()
+                .find { it.type == javax.sound.sampled.BooleanControl.Type.MUTE }
+            if (muteInfo != null) {
+                println("[CLIENT] SDL MUTE: ${muteInfo.value}")
+            } else {
+                println("[CLIENT] SDL MUTE: controllo non disponibile")
+            }
+
+            sdl.start()
+            val sr = audioSettings.sampleRate.toInt()
+            val ch = audioSettings.channels
+            val beepDurationMs = 300
+            val beepHz = 880.0
+            val numFrames = sr * beepDurationMs / 1000
+            val beepBuf = ShortArray(numFrames * ch)
+            for (i in 0 until numFrames) {
+                val sample = (Short.MAX_VALUE * 0.3 * Math.sin(2.0 * Math.PI * beepHz * i / sr)).toInt().toShort()
+                for (c in 0 until ch) beepBuf[i * ch + c] = sample
+            }
+            val beepBytes = ByteArray(beepBuf.size * 2)
+            java.nio.ByteBuffer.wrap(beepBytes).order(java.nio.ByteOrder.LITTLE_ENDIAN).asShortBuffer().put(beepBuf)
+            val written = sdl.write(beepBytes, 0, beepBytes.size)
+            println("[CLIENT] SDL beep di test: ${beepDurationMs}ms a ${beepHz}Hz, scritti=$written bytes — SE SENTI UN BIP IL DEVICE E' CORRETTO")
         }
     }
 
@@ -2411,6 +2556,8 @@ object NetworkHandler_v1 {
         streamingJob?.cancelAndJoin();   streamingJob    = null
         micReceiverJob?.cancelAndJoin(); micReceiverJob  = null
         broadcastingJob?.cancelAndJoin(); broadcastingJob = null
+        softwareMicMixer.enable(false)
+        softwareMicMixer.volume = 1.0f
         isMicMuted.value = false
     }
 

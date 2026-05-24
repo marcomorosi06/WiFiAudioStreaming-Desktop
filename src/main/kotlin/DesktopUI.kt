@@ -427,6 +427,35 @@ fun SettingsScreen(
     onClose: () -> Unit
 ) {
     var linuxAutostartInfo by remember { mutableStateOf<String?>(null) }
+    var showResetConfirmDialog by remember { mutableStateOf(false) }
+
+    if (showResetConfirmDialog) {
+        AlertDialog(
+            onDismissRequest = { showResetConfirmDialog = false },
+            icon = { Icon(Icons.Outlined.Restore, contentDescription = null) },
+            title = { Text(stringResource("reset_all_settings_confirm_title")) },
+            text = { Text(stringResource("reset_all_settings_confirm_body")) },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        showResetConfirmDialog = false
+                        onAppSettingsChange(AppSettings())
+                        onAudioSettingsChange(AudioSettings_V1(48000f, 16, 2, 512))
+                        onStreamingPortChange("9090")
+                        onMicPortChange("9092")
+                        onCustomColorChange(null)
+                    },
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = MaterialTheme.colorScheme.error,
+                        contentColor = MaterialTheme.colorScheme.onError
+                    )
+                ) { Text(stringResource("reset")) }
+            },
+            dismissButton = {
+                TextButton(onClick = { showResetConfirmDialog = false }) { Text(stringResource("close")) }
+            }
+        )
+    }
 
     if (linuxAutostartInfo != null) {
         AlertDialog(
@@ -742,16 +771,23 @@ fun SettingsScreen(
                     }
                 }
                 item {
-                    SettingsGroup(title = stringResource("about&help"), icon = Icons.Outlined.Info) {
-                        ClickableSetting(
-                            title = stringResource("android_version"),
-                            description = stringResource("source_code_github"),
-                            icon = Icons.Outlined.PhoneAndroid,
-                            onClick = {
-                                openUrl("https://github.com/marcomorosi06/WiFiAudioStreaming-Android")
-                            }
+                    SettingsGroup(title = stringResource("license"), icon = Icons.Outlined.Gavel) {
+                        InfoSetting(
+                            title = stringResource("license_info_title"),
+                            description = stringResource("license_info_desc"),
+                            icon = Icons.Outlined.VerifiedUser
                         )
                         HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
+                        ClickableSetting(
+                            title = stringResource("license_read_full"),
+                            description = stringResource("license_read_full_desc"),
+                            icon = Icons.Outlined.OpenInBrowser,
+                            onClick = {
+                                openUrl("https://eupl.eu/")
+                            }
+                        )
+                    }
+                    SettingsGroup(title = stringResource("about&help"), icon = Icons.Outlined.Info) {
                         InfoSetting(
                             title = stringResource("developed_by"),
                             description = "Marco Morosi",
@@ -765,6 +801,55 @@ fun SettingsScreen(
                             onClick = {
                                 openUrl("https://ko-fi.com/marcomorosi")
                             }
+                        )
+                        HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
+                        ClickableSetting(
+                            title = stringResource("source_code_android"),
+                            description = stringResource("source_code_github_short"),
+                            icon = Icons.Outlined.Code,
+                            onClick = {
+                                openUrl("https://github.com/marcomorosi06/WiFiAudioStreaming-Android/")
+                            }
+                        )
+                        ClickableSetting(
+                            title = stringResource("source_code_desktop"),
+                            description = stringResource("source_code_github_short"),
+                            icon = Icons.Outlined.Code,
+                            onClick = {
+                                openUrl("https://github.com/marcomorosi06/WiFiAudioStreaming-Desktop")
+                            }
+                        )
+                    }
+                }
+                item {
+                    OutlinedButton(
+                        onClick = { showResetConfirmDialog = true },
+                        modifier = Modifier.fillMaxWidth(),
+                        colors = ButtonDefaults.outlinedButtonColors(
+                            contentColor = MaterialTheme.colorScheme.error
+                        ),
+                        border = androidx.compose.foundation.BorderStroke(
+                            1.dp,
+                            MaterialTheme.colorScheme.error.copy(alpha = 0.5f)
+                        )
+                    ) {
+                        Icon(Icons.Outlined.Restore, contentDescription = null, modifier = Modifier.size(18.dp))
+                        Spacer(Modifier.width(8.dp))
+                        Text(stringResource("reset_all_settings"))
+                    }
+                    Spacer(Modifier.height(8.dp))
+                }
+                item {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(bottom = 20.dp),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Text(
+                            text = "${stringResource("app_version_label")} ${Strings.appVersion}",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
                     }
                 }

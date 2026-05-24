@@ -90,33 +90,44 @@ static void mic_ring_reset(void) {
 }
 
 static void mic_ring_push(const int16_t *samples, int count) {
-    if (count <= 0 || !samples) return;
+if (count <= 0 || !samples) return;
     mic_lock();
     int w = g_mic_ring_w;
     int r = g_mic_ring_r;
-    for (int i = 0; i < count; i++) {
-        g_mic_ring[w] = samples[i];
-        w = (w + 1) % MIC_RING_CAP_SAMPLES;
-        if (w == r) r = (r + 1) % MIC_RING_CAP_SAMPLES;
+
+    int in_buffer = (w - r + MIC_RING_CAP_SAMPLES) % MIC_RING_CAP_SAMPLES;
+    int max_latency = 24000;
+
+    if (in_buffer + count > max_latency) {
+    r = (w + count - max_latency + MIC_RING_CAP_SAMPLES) % MIC_RING_CAP_SAMPLES;
+    r = r & ~1;
     }
-    g_mic_ring_w = w;
-    g_mic_ring_r = r;
-    mic_unlock();
+
+    for (int i = 0; i < count; i++) {
+g_mic_ring[w] = samples[i];
+w = (w + 1) % MIC_RING_CAP_SAMPLES;
+}
+g_mic_ring_w = w;
+g_mic_ring_r = r;
+mic_unlock();
 }
 
 static int mic_ring_pop(int16_t *out, int count) {
-    mic_lock();
-    int w = g_mic_ring_w;
-    int r = g_mic_ring_r;
-    int available = (w - r + MIC_RING_CAP_SAMPLES) % MIC_RING_CAP_SAMPLES;
-    int to_copy = (count < available) ? count : available;
-    for (int i = 0; i < to_copy; i++) {
-        out[i] = g_mic_ring[r];
-        r = (r + 1) % MIC_RING_CAP_SAMPLES;
-    }
-    g_mic_ring_r = r;
-    mic_unlock();
-    return to_copy;
+mic_lock();
+int w = g_mic_ring_w;
+int r = g_mic_ring_r;
+int available = (w - r + MIC_RING_CAP_SAMPLES) % MIC_RING_CAP_SAMPLES;
+int to_copy = (count < available) ? count : available;
+
+to_copy -= to_copy % 2;
+
+for (int i = 0; i < to_copy; i++) {
+out[i] = g_mic_ring[r];
+r = (r + 1) % MIC_RING_CAP_SAMPLES;
+}
+g_mic_ring_r = r;
+mic_unlock();
+return to_copy;
 }
 
 static void mic_mix_into(int16_t *out, int num_shorts) {

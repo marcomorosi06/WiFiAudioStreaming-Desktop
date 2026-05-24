@@ -44,6 +44,13 @@ object Strings {
             key
         }
     }
+
+    val appVersion: String by lazy {
+        val loader = Strings::class.java.classLoader
+        val stream = loader.getResourceAsStream("version.properties") ?: return@lazy "?"
+        val vProps = Properties().apply { load(InputStreamReader(stream, Charsets.UTF_8)) }
+        vProps.getProperty("app.version", "?")
+    }
 }
 
 @Composable

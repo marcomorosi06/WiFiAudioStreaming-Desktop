@@ -249,6 +249,80 @@ enum class MicRoutingMode {
     }
 }
 
+class SoftwareMicMixer {
+    @Volatile private var enabledFlag: Boolean = false
+    @Volatile var volume: Float = 1.0f
+
+    val enabled: Boolean get() = enabledFlag
+
+    private val lock = Any()
+    private val capacity = 48000 * 2 * 2
+    private val ring = ShortArray(capacity)
+    private var writeIdx = 0
+    private var readIdx = 0
+
+    fun enable(value: Boolean) {
+        synchronized(lock) {
+            enabledFlag = value
+            if (!value) {
+                writeIdx = 0
+                readIdx = 0
+            }
+        }
+    }
+
+    fun reset() {
+        synchronized(lock) {
+            writeIdx = 0
+            readIdx = 0
+        }
+    }
+
+    fun pushPcm(buf: ShortArray, numSamples: Int) {
+        if (!enabledFlag) return
+        synchronized(lock) {
+            var r = readIdx
+            val w = writeIdx
+            val available = (w - r + capacity) % capacity
+
+            var toMix = if (available < numSamples) available else numSamples
+            toMix -= toMix % 2
+
+            val vol = volume
+            for (i in 0 until toMix) {
+                val mic = (ring[r].toFloat() * vol).toInt()
+                val sum = (buf[i].toInt() + mic).coerceIn(Short.MIN_VALUE.toInt(), Short.MAX_VALUE.toInt())
+                buf[i] = sum.toShort()
+                r = (r + 1) % capacity
+            }
+            readIdx = r
+        }
+    }
+
+    fun mixInto(buf: ShortArray, n: Int) {
+        if (!enabledFlag || n <= 0) return
+        synchronized(lock) {
+            val w = writeIdx
+            var r = readIdx
+            val available = (w - r + capacity) % capacity
+            if (available <= 0) return
+
+            var toMix = if (n < available) n else available
+            toMix -= toMix % 2
+
+            val vol = volume
+            for (i in 0 until toMix) {
+                val mic = (ring[r].toFloat() * vol).toInt()
+                val sum = (buf[i].toInt() + mic)
+                    .coerceIn(Short.MIN_VALUE.toInt(), Short.MAX_VALUE.toInt())
+                buf[i] = sum.toShort()
+                r = (r + 1) % capacity
+            }
+            readIdx = r
+        }
+    }
+}
+
 object VirtualMicAutodetect {
     data class Detection(
         val mixerInfo: javax.sound.sampled.Mixer.Info?,
