@@ -2,6 +2,7 @@
 
 [![Available on GitHub](https://img.shields.io/badge/Available%20on-GitHub-181717?style=for-the-badge&logo=github)](https://github.com/marcomorosi06/WiFiAudioStreaming-Desktop/releases)  
 [![Available on GitLab](https://img.shields.io/badge/Available%20on-GitLab-FC6D26?style=for-the-badge&logo=gitlab)](https://gitlab.com/marcomorosi.dev/WiFiAudioStreaming-Desktop/-/releases)
+[![AUR version](https://img.shields.io/aur/version/wifi-audio-streaming-desktop?color=blue&logo=arch-linux)](https://aur.archlinux.org/packages/wifi-audio-streaming-desktop)
 
 Turn your computer into a **wireless audio transmitter or receiver**.
 
