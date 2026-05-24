@@ -1,6 +1,6 @@
 # WiFi Audio Streaming (Desktop)
 
-[![Available on GitHub](https://img.shields.io/badge/Available%20on-GitHub-181717?style=for-the-badge&logo=github)](https://github.com/marcomorosi06/WiFiAudioStreaming-Desktop/releases)  
+[![Available on GitHub](https://img.shields.io/badge/Available%20on-GitHub-181717?style=for-the-badge&logo=github)](https://github.com/marcomorosi06/WiFiAudioStreaming-Desktop/releases)
 [![Available on GitLab](https://img.shields.io/badge/Available%20on-GitLab-FC6D26?style=for-the-badge&logo=gitlab)](https://gitlab.com/marcomorosi.dev/WiFiAudioStreaming-Desktop/-/releases)
 [![AUR version](https://img.shields.io/aur/version/wifi-audio-streaming-desktop?color=blue&logo=arch-linux)](https://aur.archlinux.org/packages/wifi-audio-streaming-desktop)
 
@@ -14,7 +14,7 @@ This application allows you to send your PC's audio to any device on the same lo
 
 # 📸 Overview
 
-*Screenshots of the new Material You interface.*  
+*Screenshots of the Material You interface.*
 *(Note: The screenshots show the Italian interface, but the app automatically switches to **English** if your OS language is not set to Italian.)*
 
 <table>
@@ -22,16 +22,13 @@ This application allows you to send your PC's audio to any device on the same lo
 <td align="center">
 <img src="https://github.com/marcomorosi06/WiFiAudioStreaming-Desktop/blob/master/images/server_wfas.jpg?raw=true" alt="Server Mode">
 </td>
-
 <td align="center">
 <img src="https://github.com/marcomorosi06/WiFiAudioStreaming-Desktop/blob/master/images/client_wfas.jpg?raw=true" alt="Client Mode">
 </td>
-
 <td align="center">
 <img src="https://github.com/marcomorosi06/WiFiAudioStreaming-Desktop/blob/master/images/settings_wfas.jpg?raw=true" alt="Settings">
 </td>
 </tr>
-
 <tr>
 <td align="center"><i>Server Mode</i></td>
 <td align="center"><i>Client Mode</i></td>
@@ -43,64 +40,95 @@ This application allows you to send your PC's audio to any device on the same lo
 
 # ✨ Key Features
 
-- **Server & Client Modes**  
+- **Server & Client Modes**
   Use the app to **send (Server)** or **receive (Client)** audio.
 
-- **FFmpeg Audio Engine**  
-  Powered by FFmpeg for high-stability, low-latency audio processing and synchronization.
+- **Native Audio Engine (Windows & macOS)**
+  On Windows and macOS, audio is captured directly via a native C library loaded through JNI. No VB-Cable, no BlackHole, no third-party virtual drivers required. FFmpeg handles encoding only for the HTTP streaming protocols.
 
-- **Automatic & Manual Discovery**  
-  Clients on the local network automatically find available servers via **mDNS**.  
-  If your router blocks this, you can **manually enter the IP address** to force a connection.
+- **Microphone Routing**
+  The server can receive microphone audio from a connected client and route it in three ways: ignore it, expose it as a **virtual microphone** to other apps (Discord, Zoom, games), or **mix it directly into the outgoing stream**. There is also a real-time mute button.
 
-- **Unicast & Multicast Support**  
-  Choose between:
-  - **Unicast** → direct streaming to a single device  
-  - **Multicast** → simultaneous transmission to multiple clients (ideal for multi-room audio)
+- **System Tray**
+  The app lives in your system tray. Configure it to start minimized and close to tray so it runs silently in the background like AirPlay or Chromecast.
 
-- **Detailed Audio Configuration**  
-  Customize the audio stream with:
-  - Sample rate
-  - Bit depth
-  - Channels (mono/stereo)
-  - Buffer size
+- **Automatic & Manual Discovery**
+  Clients automatically find available servers on the network via multicast beacon. If your router blocks it, you can manually enter the IP address.
 
-- **Modern Interface**  
-  A clean **Material You** interface built with **Jetpack Compose for Desktop**.
+- **Unicast & Multicast Support**
+  - **Unicast** → direct streaming to a single device
+  - **Multicast** → simultaneous transmission to multiple clients
 
-- **Multi-Server Support**  
-  Run multiple servers on the same network by changing the **connection port** in the settings.
+- **Multiple Streaming Protocols**
+  - **WFAS** (native protocol, lowest latency)
+  - **RTP** (compatible with any RTP-capable receiver)
+  - **HTTP/AAC** (Safari, iOS)
+  - **HTTP/Opus WebM** (Chrome, Firefox, any browser)
 
-- **Bilingual Support (EN/IT)**  
-  The application automatically adapts to your operating system's language.
+- **Detailed Audio Configuration**
+  Customize sample rate, bit depth, channels, and buffer size.
+
+- **Modern Interface**
+  A **Material You** interface built with Jetpack Compose for Desktop, with wallpaper-based dynamic theming.
+
+- **Bilingual Support (EN/IT)**
+  Automatically adapts to your OS language.
 
 ---
 
-# 🖥️ Platform Support & Virtual Cables
+# 🖥️ Platform Support
 
-To capture system audio in **Server Mode**, the application needs to route audio through a virtual cable.
+| Platform | Architecture | Audio Capture | Tray |
+|----------|-------------|---------------|------|
+| Windows 10/11 | x86_64 | ✅ Native (no drivers needed) | ✅ |
+| macOS 13+ (Ventura) | x86_64, arm64 | ✅ Native (no drivers needed) | ✅ |
+| Linux | x86_64 | FFmpeg + PulseAudio virtual sink (auto-managed) | ✅ |
 
-## 🐧 Linux (Best Experience)
+> **macOS note:** ScreenCaptureKit (used by the native engine) requires macOS 12.3 or later. The app will ask for screen recording and audio permissions on first launch. Yes, there are quite a few permission dialogs. Grant them all and the audio quality is genuinely clean and crisp on the receiving end.
+>
+> **macOS legacy:** If you are on macOS 12.2 or earlier, you can still use the FFmpeg + BlackHole path by disabling the native engine in Settings → Advanced.
 
-The application automatically creates and manages the virtual audio cable.  
-**No extra installation required.**
+---
 
-## 🪟 Windows (Solid Experience)
+# 🐧 Linux: Virtual Audio Cable
 
-You must manually install the free **VB-CABLE Virtual Audio Device**.
+On Linux, the application automatically creates and manages a PulseAudio virtual sink named `VirtualCable` at startup. When you start the server, your system audio is routed through it automatically and restored when you stop. **No extra installation required.**
 
-The app will automatically detect if it is present.
+If you use PipeWire with `pipewire-pulse`, this works identically.
 
-👉 https://vb-audio.com/Cable/index.htm
+---
 
-## 🍎 macOS (Experimental)
+# 🚀 Getting Started
 
-Support for macOS is currently **critically buggy**.
+## Send Audio (Server Mode)
 
-- Audio capture is highly experimental
-- Client playback suffers from severe latency
+1. Open the app and select **Send (Server)**.
+2. On **Linux**, the virtual sink is created automatically. On **Windows and macOS**, the native engine captures system audio directly with no extra setup.
+3. Select **Multicast** (multiple clients) or **Unicast** (single client).
+4. Click **Start Server**.
 
-Contributions are welcome.
+## Receive Audio (Client Mode)
+
+1. Open the app and select **Receive (Client)**.
+2. Choose your physical output device (headphones, speakers).
+3. The app will automatically list active servers on the network.
+4. Select one to connect.
+
+If the server does not appear automatically, enter its local IP address manually.
+
+---
+
+# 🎙️ Microphone Routing
+
+If you are using the Android app as a microphone source, the desktop server can handle the incoming audio in three ways, selectable from the UI:
+
+| Mode | What it does |
+|------|-------------|
+| **Off** | Ignores the incoming mic stream |
+| **Virtual Microphone** | Exposes the mic as a virtual input device, visible in Discord, Zoom, games |
+| **Mix Into Stream** | Blends the mic into the outgoing audio directly |
+
+A mute button is available at any time during streaming.
 
 ---
 
@@ -122,112 +150,52 @@ Turn your smartphone into a **portable audio receiver or transmitter**.
 
 ---
 
-# 🚀 Getting Started
+# 🛠️ Building from Source
 
-## Send Audio (Server Mode)
-
-1. Start the app and select **Send (Server)**.
-2. Choose your audio output device  
-   (e.g. *VB-CABLE* on Windows or the automatically generated virtual sink on Linux).
-3. Select the streaming mode:
-   - **Multicast** → multiple clients
-   - **Unicast** → single client
-4. Click **Start Server**.
-
----
-
-## Receive Audio (Client Mode)
-
-1. Start the app and select **Receive (Client)**.
-2. Choose your **physical output device** (headphones, speakers, etc.).
-3. The app will automatically display active servers on the network.
-4. Select one to connect.
-
-**Fallback:**  
-If the server does not appear, manually enter its **local IP address**.
-
----
-
-# 🛠️ Building & Packaging from Source
-
-To compile the project you need **JDK 17 or newer** installed.
-
-## 1️⃣ Clone the repository
+Requires **JDK 17 or newer**.
 
 ```bash
-git clone https://gitlab.com/marcomorosi.dev/WiFiAudioStreaming-Desktop.git
-```
-
-## 2️⃣ Enter the project directory
-
-```bash
+git clone https://github.com/marcomorosi06/WiFiAudioStreaming-Desktop.git
 cd WiFiAudioStreaming-Desktop
 ```
 
-## 3️⃣ Run the application (for testing)
+The native C library is compiled as part of the build. On the first build (or after changes to `src/main/native/`), Gradle will invoke CMake automatically. On Windows, it searches for `cmake.exe` in all known locations (Visual Studio, CLion, Scoop, Chocolatey, winget).
+
+### Run for testing
 
 ```bash
 ./gradlew run
-```
-
-On **Windows**, use:
-
-```bash
+# Windows:
 gradlew.bat run
 ```
 
-## 📦 Create Installers / Executables
+### Create distributable packages
 
-### Portable Application (All OS)
+| Format | Command |
+|--------|---------|
+| Portable app (all OS) | `./gradlew createDistributable` |
+| Windows installer | `./gradlew packageMsi` |
+| Debian / Ubuntu | `./gradlew packageDeb` |
+| Fedora / CentOS | `./gradlew packageRpm` |
+| macOS | `./gradlew packageDmg` |
 
-```bash
-./gradlew createDistributable
-```
-
-Output directory:
-
-```
-build/compose/binaries/main/app/
-```
-
-### Windows Installer
-
-```bash
-./gradlew packageMsi
-```
-
-### Debian / Ubuntu
-
-```bash
-./gradlew packageDeb
-```
-
-### Fedora / CentOS
-
-```bash
-./gradlew packageRpm
-```
-
-### macOS
-
-```bash
-./gradlew packageDmg
-```
+Output: `build/compose/binaries/main/`
 
 ---
 
 # 💻 Tech Stack
 
-- **Language:** Kotlin  
-- **UI Framework:** Jetpack Compose for Desktop  
-- **Networking:** Ktor (UDP sockets)  
-- **Audio Engine:** FFmpeg (via command-line/process integration)
+- **Language:** Kotlin
+- **UI Framework:** Jetpack Compose for Desktop
+- **Networking:** Ktor (UDP/TCP sockets)
+- **Audio Capture:** Native C library via JNI (Windows, macOS) / FFmpeg via JavaCV (Linux)
+- **Audio Encoding:** FFmpeg via JavaCV (AAC, Opus for HTTP streaming)
 
 ---
 
 # ☕ Support the Project
 
-This project is completely free and open-source. If it helped you as much as it helped me, consider buying me a coffee to support its ongoing development!
+This project is completely free and open-source. If it helped you, consider buying me a coffee.
 
 [![ko-fi](https://ko-fi.com/img/githubbutton_sm.svg)](https://ko-fi.com/marcomorosi)
 
@@ -237,17 +205,15 @@ This project is completely free and open-source. If it helped you as much as it 
 
 This project is licensed under the **European Union Public Licence v1.2 (EUPL v1.2)**.
 
-You are free to:
+It started as a personal script. Then it grew. Then I rewrote the audio engine during exam season, which is when I realized I had become genuinely invested in it, and that the license deserved a second thought. MIT lets anyone take the code and close it off. EUPL does not.
 
-- **Use**: use the software in any circumstances and for all usage types.
-- **Modify**: adapt, transform, or modify the software.
-- **Distribute**: distribute, lend, or communicate the software to the public.
-- **Commercial use**: use the software for commercial purposes.
+**You are free to:**
+- Use, modify, and distribute the software
+- Use it for commercial purposes
 
-**Key Obligations:**
+**Key obligations:**
+- **Copyleft:** modified distributions must be released under the same EUPL license
+- **Network copyleft:** if you run a modified version as a networked service, you must release the source
+- **Attribution:** retain all copyright and trademark notices
 
-- **Copyleft**: If you modify and distribute the software, you must release it under the same EUPL license.
-- **Attribution**: You must retain all copyright, patent, and trademark notices.
-- **No Warranty**: The software is provided **"as is"**, without any warranties.
-
-For the full legal text, see the `LICENSE.md` file included in this repository or visit the [official EUPL website](https://joinup.ec.europa.eu/collection/eupl/eupl-text-eupl-12).
+For the full legal text, see `LICENSE.md` or visit the [official EUPL website](https://joinup.ec.europa.eu/collection/eupl/eupl-text-eupl-12).
