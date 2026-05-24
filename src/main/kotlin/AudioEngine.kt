@@ -53,6 +53,9 @@ class AudioEngine(
     private external fun nativeMicSinkClose()
     private external fun nativeMicSinkDeviceName(): String
 
+    private external fun nativeGetSystemVolume(): Float
+    private external fun nativeSetSystemVolume(volume: Float)
+
     companion object {
         private var libraryLoaded = false
         private var loadError: String? = null
@@ -235,6 +238,16 @@ class AudioEngine(
     fun micSinkDeviceName(): String {
         if (!libraryLoaded) return ""
         return nativeMicSinkDeviceName()
+    }
+
+    fun getSystemVolume(): Float {
+        if (!libraryLoaded) return -1f
+        return nativeGetSystemVolume()
+    }
+
+    fun setSystemVolume(volume: Float) {
+        if (!libraryLoaded) return
+        nativeSetSystemVolume(volume)
     }
 }
 

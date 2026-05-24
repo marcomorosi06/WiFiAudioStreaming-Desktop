@@ -38,6 +38,7 @@
 #import <ScreenCaptureKit/ScreenCaptureKit.h>
 #import <AVFoundation/AVFoundation.h>
 #import <CoreAudio/CoreAudio.h>
+#import <AudioToolbox/AudioServices.h>
 #include <jni.h>
 #include <stdint.h>
 #include <string.h>
@@ -136,15 +137,15 @@ API_AVAILABLE(macos(12.3))
 @implementation WFASStreamDelegate
 
 - (void)stream:(SCStream *)stream
-    didOutputSampleBuffer:(CMSampleBufferRef)sampleBuffer
-                   ofType:(SCStreamOutputType)type {
+didOutputSampleBuffer:(CMSampleBufferRef)sampleBuffer
+        ofType:(SCStreamOutputType)type {
 
     if (type != SCStreamOutputTypeAudio) return;
     if (!CMSampleBufferIsValid(sampleBuffer)) return;
 
     CMFormatDescriptionRef desc = CMSampleBufferGetFormatDescription(sampleBuffer);
     const AudioStreamBasicDescription *asbd =
-        CMAudioFormatDescriptionGetStreamBasicDescription(desc);
+            CMAudioFormatDescriptionGetStreamBasicDescription(desc);
     if (!asbd) return;
 
     CMBlockBufferRef blockBuf = CMSampleBufferGetDataBuffer(sampleBuffer);
@@ -175,9 +176,9 @@ API_AVAILABLE(macos(12.3))
     static int s_logged_fmt = 0;
     if (!s_logged_fmt) {
         fprintf(stderr,
-            "[AudioEngine/macOS] ASBD: sr=%.0f ch=%d bpc=%u bpf=%u flags=0x%x float=%d packed=%d non_int=%d\n",
-            src_sr, src_ch, bits_per_ch, bytes_per_frame,
-            asbd->mFormatFlags, is_float, is_packed, is_non_int);
+                "[AudioEngine/macOS] ASBD: sr=%.0f ch=%d bpc=%u bpf=%u flags=0x%x float=%d packed=%d non_int=%d\n",
+                src_sr, src_ch, bits_per_ch, bytes_per_frame,
+                asbd->mFormatFlags, is_float, is_packed, is_non_int);
         s_logged_fmt = 1;
     }
 
@@ -185,9 +186,9 @@ API_AVAILABLE(macos(12.3))
         static int s_warned_sr = 0;
         if (!s_warned_sr) {
             fprintf(stderr,
-                "[AudioEngine/macOS] WARNING: source sample rate %.0f != requested %d. "
-                "Audio will sound wrong (chipmunk/slow).\n",
-                src_sr, g_mac_sample_rate);
+                    "[AudioEngine/macOS] WARNING: source sample rate %.0f != requested %d. "
+                    "Audio will sound wrong (chipmunk/slow).\n",
+                    src_sr, g_mac_sample_rate);
             s_warned_sr = 1;
         }
     }
@@ -230,29 +231,29 @@ API_AVAILABLE(macos(12.3))
         size_t ablSize = 0;
 
         st = CMSampleBufferGetAudioBufferListWithRetainedBlockBuffer(
-            sampleBuffer,
-            &ablSize,
-            NULL, 0,
-            kCFAllocatorDefault, kCFAllocatorDefault,
-            kCMSampleBufferFlag_AudioBufferList_Assure16ByteAlignment,
-            &bbRetained);
+                sampleBuffer,
+                &ablSize,
+                NULL, 0,
+                kCFAllocatorDefault, kCFAllocatorDefault,
+                kCMSampleBufferFlag_AudioBufferList_Assure16ByteAlignment,
+                &bbRetained);
 
         if (st == kCMBlockBufferNoErr) {
             abl = (AudioBufferList *)malloc(ablSize);
             st  = CMSampleBufferGetAudioBufferListWithRetainedBlockBuffer(
-                sampleBuffer,
-                &ablSize,
-                abl, ablSize,
-                kCFAllocatorDefault, kCFAllocatorDefault,
-                kCMSampleBufferFlag_AudioBufferList_Assure16ByteAlignment,
-                &bbRetained);
+                    sampleBuffer,
+                    &ablSize,
+                    abl, ablSize,
+                    kCFAllocatorDefault, kCFAllocatorDefault,
+                    kCMSampleBufferFlag_AudioBufferList_Assure16ByteAlignment,
+                    &bbRetained);
         }
 
         if (st == kCMBlockBufferNoErr && abl && abl->mNumberBuffers >= 1) {
             float *ch0 = (float *)abl->mBuffers[0].mData;
             float *ch1 = (abl->mNumberBuffers >= 2)
-                         ? (float *)abl->mBuffers[1].mData
-                         : ch0;
+                    ? (float *)abl->mBuffers[1].mData
+                    : ch0;
             size_t frames_abl = abl->mBuffers[0].mDataByteSize / sizeof(float);
             if (frames_abl < num_frames) num_frames = frames_abl;
             for (size_t f = 0; f < num_frames; f++) {
@@ -279,7 +280,7 @@ API_AVAILABLE(macos(12.3))
 - (void)stream:(SCStream *)stream didStopWithError:(NSError *)error {
     if (error) {
         mac_set_error("SCStream stopped: %s",
-                      [[error localizedDescription] UTF8String]);
+                [[error localizedDescription] UTF8String]);
     }
 }
 
@@ -309,95 +310,95 @@ jboolean mac_engine_start(int sample_rate, int channels, int buffer_frames) {
         __block int start_ok = 0;
 
         [SCShareableContent getShareableContentWithCompletionHandler:
-            ^(SCShareableContent *content, NSError *error) {
-                if (error || !content) {
-                    mac_set_error("getShareableContent error: %s",
-                                  error ? [[error localizedDescription] UTF8String]
+                ^(SCShareableContent *content, NSError *error) {
+                    if (error || !content) {
+                        mac_set_error("getShareableContent error: %s",
+                                error ? [[error localizedDescription] UTF8String]
                                         : "content is nil");
-                    dispatch_semaphore_signal(g_sema);
-                    return;
-                }
-
-                /*
-                 * Filtro: cattura tutto il display (audio incluso),
-                 * escludendo la nostra stessa finestra per evitare feedback.
-                 * Per loopback puro (solo audio) possiamo escludere tutte le
-                 * finestre e tenere solo il display — SCKit catturerà comunque
-                 * l'audio di sistema.
-                 */
-                SCContentFilter *filter;
-                SCDisplay *display = content.displays.firstObject;
-                if (!display) {
-                    mac_set_error("Nessun display trovato");
-                    dispatch_semaphore_signal(g_sema);
-                    return;
-                }
-
-                filter = [[SCContentFilter alloc]
-                    initWithDisplay:display
-                    excludingWindows:@[]];
-
-                SCStreamConfiguration *cfg = [[SCStreamConfiguration alloc] init];
-                cfg.capturesAudio           = YES;
-                cfg.excludesCurrentProcessAudio = YES;  /* niente feedback */
-                cfg.sampleRate              = sample_rate;
-                cfg.channelCount            = channels;
-
-                /* Impostiamo dimensione frame in base al buffer_frames richiesto */
-                if (buffer_frames > 0) {
-                    /*
-                     * minimumFrameInterval determina con quale frequenza arrivano
-                     * le callback. CMTime con valore 1/sample_rate * buffer_frames.
-                     */
-                    cfg.minimumFrameInterval = CMTimeMake(buffer_frames, sample_rate);
-                }
-
-                /* Non ci interessa il video: impostiamo risoluzione minima */
-                cfg.width  = 2;
-                cfg.height = 2;
-
-                WFASStreamDelegate *del = [[WFASStreamDelegate alloc] init];
-                del.targetChannels   = channels;
-                del.targetSampleRate = sample_rate;
-                g_delegate = del;
-
-                SCStream *stream = [[SCStream alloc]
-                    initWithFilter:filter
-                    configuration:cfg
-                    delegate:del];
-                g_stream = stream;
-
-                NSError *addErr = nil;
-                BOOL added = [stream addStreamOutput:del
-                                                type:SCStreamOutputTypeAudio
-                                   sampleHandlerQueue:dispatch_get_global_queue(
-                                       QOS_CLASS_USER_INTERACTIVE, 0)
-                                               error:&addErr];
-                if (!added) {
-                    mac_set_error("addStreamOutput error: %s",
-                                  [[addErr localizedDescription] UTF8String]);
-                    dispatch_semaphore_signal(g_sema);
-                    return;
-                }
-
-                [stream startCaptureWithCompletionHandler:^(NSError *startErr) {
-                    if (startErr) {
-                        mac_set_error("startCapture error: %s",
-                                      [[startErr localizedDescription] UTF8String]);
-                        start_ok = 0;
-                    } else {
-                        printf("[AudioEngine/macOS] SCStream started. %d ch, %d Hz\n",
-                               channels, sample_rate);
-                        start_ok = 1;
+                        dispatch_semaphore_signal(g_sema);
+                        return;
                     }
-                    dispatch_semaphore_signal(g_sema);
-                }];
-            }
+
+                    /*
+                     * Filtro: cattura tutto il display (audio incluso),
+                     * escludendo la nostra stessa finestra per evitare feedback.
+                     * Per loopback puro (solo audio) possiamo escludere tutte le
+                     * finestre e tenere solo il display — SCKit catturerà comunque
+                     * l'audio di sistema.
+                     */
+                    SCContentFilter *filter;
+                    SCDisplay *display = content.displays.firstObject;
+                    if (!display) {
+                        mac_set_error("Nessun display trovato");
+                        dispatch_semaphore_signal(g_sema);
+                        return;
+                    }
+
+                    filter = [[SCContentFilter alloc]
+                            initWithDisplay:display
+                           excludingWindows:@[]];
+
+                    SCStreamConfiguration *cfg = [[SCStreamConfiguration alloc] init];
+                    cfg.capturesAudio           = YES;
+                    cfg.excludesCurrentProcessAudio = YES;  /* niente feedback */
+                    cfg.sampleRate              = sample_rate;
+                    cfg.channelCount            = channels;
+
+                    /* Impostiamo dimensione frame in base al buffer_frames richiesto */
+                    if (buffer_frames > 0) {
+                        /*
+                         * minimumFrameInterval determina con quale frequenza arrivano
+                         * le callback. CMTime con valore 1/sample_rate * buffer_frames.
+                         */
+                        cfg.minimumFrameInterval = CMTimeMake(buffer_frames, sample_rate);
+                    }
+
+                    /* Non ci interessa il video: impostiamo risoluzione minima */
+                    cfg.width  = 2;
+                    cfg.height = 2;
+
+                    WFASStreamDelegate *del = [[WFASStreamDelegate alloc] init];
+                    del.targetChannels   = channels;
+                    del.targetSampleRate = sample_rate;
+                    g_delegate = del;
+
+                    SCStream *stream = [[SCStream alloc]
+                            initWithFilter:filter
+                             configuration:cfg
+                                  delegate:del];
+                    g_stream = stream;
+
+                    NSError *addErr = nil;
+                    BOOL added = [stream addStreamOutput:del
+                                                    type:SCStreamOutputTypeAudio
+                                      sampleHandlerQueue:dispatch_get_global_queue(
+                                              QOS_CLASS_USER_INTERACTIVE, 0)
+                                                   error:&addErr];
+                    if (!added) {
+                        mac_set_error("addStreamOutput error: %s",
+                                [[addErr localizedDescription] UTF8String]);
+                        dispatch_semaphore_signal(g_sema);
+                        return;
+                    }
+
+                    [stream startCaptureWithCompletionHandler:^(NSError *startErr) {
+                        if (startErr) {
+                            mac_set_error("startCapture error: %s",
+                                    [[startErr localizedDescription] UTF8String]);
+                            start_ok = 0;
+                        } else {
+                            printf("[AudioEngine/macOS] SCStream started. %d ch, %d Hz\n",
+                                    channels, sample_rate);
+                            start_ok = 1;
+                        }
+                        dispatch_semaphore_signal(g_sema);
+                    }];
+                }
         ];
 
         /* Attendi al massimo 5 secondi */
         dispatch_time_t timeout = dispatch_time(DISPATCH_TIME_NOW,
-                                                (int64_t)(5 * NSEC_PER_SEC));
+                (int64_t)(5 * NSEC_PER_SEC));
         long rc = dispatch_semaphore_wait(g_sema, timeout);
         if (rc != 0) {
             mac_set_error("Timeout in attesa di SCShareableContent");
@@ -438,7 +439,7 @@ void mac_engine_stop(void) {
         if (@available(macOS 12.3, *)) {
             [(SCStream *)g_stream stopCaptureWithCompletionHandler:^(NSError *e) {
                 if (e) fprintf(stderr, "[AudioEngine/macOS] stopCapture: %s\n",
-                               [[e localizedDescription] UTF8String]);
+                            [[e localizedDescription] UTF8String]);
             }];
         }
         g_stream = nil;
@@ -460,4 +461,51 @@ void mac_engine_stop(void) {
 void mac_engine_get_error(char *buf, int buf_size) {
     strncpy(buf, g_mac_error, (size_t)buf_size - 1);
     buf[buf_size - 1] = '\0';
+}
+
+float mac_get_system_volume(void) {
+    AudioObjectPropertyAddress addr = {
+            kAudioHardwareServiceDeviceProperty_VirtualMainVolume,
+            kAudioDevicePropertyScopeOutput,
+            kAudioObjectPropertyElementMain
+    };
+
+    AudioDeviceID deviceID = kAudioObjectUnknown;
+    UInt32 dataSize = sizeof(AudioDeviceID);
+    AudioObjectPropertyAddress defaultAddr = {
+            kAudioHardwarePropertyDefaultOutputDevice,
+            kAudioObjectPropertyScopeGlobal,
+            kAudioObjectPropertyElementMain
+    };
+    OSStatus st = AudioObjectGetPropertyData(kAudioObjectSystemObject, &defaultAddr,
+            0, NULL, &dataSize, &deviceID);
+    if (st != noErr || deviceID == kAudioObjectUnknown) return -1.0f;
+
+    Float32 volume = 0.0f;
+    dataSize = sizeof(Float32);
+    st = AudioObjectGetPropertyData(deviceID, &addr, 0, NULL, &dataSize, &volume);
+    if (st != noErr) return -1.0f;
+    return (float)volume;
+}
+
+void mac_set_system_volume(float volume) {
+    AudioDeviceID deviceID = kAudioObjectUnknown;
+    UInt32 dataSize = sizeof(AudioDeviceID);
+    AudioObjectPropertyAddress defaultAddr = {
+            kAudioHardwarePropertyDefaultOutputDevice,
+            kAudioObjectPropertyScopeGlobal,
+            kAudioObjectPropertyElementMain
+    };
+    OSStatus st = AudioObjectGetPropertyData(kAudioObjectSystemObject, &defaultAddr,
+            0, NULL, &dataSize, &deviceID);
+    if (st != noErr || deviceID == kAudioObjectUnknown) return;
+
+    AudioObjectPropertyAddress addr = {
+            kAudioHardwareServiceDeviceProperty_VirtualMainVolume,
+            kAudioDevicePropertyScopeOutput,
+            kAudioObjectPropertyElementMain
+    };
+    Float32 v = (Float32)volume;
+    dataSize = sizeof(Float32);
+    AudioObjectSetPropertyData(deviceID, &addr, 0, NULL, dataSize, &v);
 }

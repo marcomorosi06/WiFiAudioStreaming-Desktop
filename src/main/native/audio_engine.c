@@ -90,7 +90,7 @@ static void mic_ring_reset(void) {
 }
 
 static void mic_ring_push(const int16_t *samples, int count) {
-if (count <= 0 || !samples) return;
+    if (count <= 0 || !samples) return;
     mic_lock();
     int w = g_mic_ring_w;
     int r = g_mic_ring_r;
@@ -99,35 +99,35 @@ if (count <= 0 || !samples) return;
     int max_latency = 24000;
 
     if (in_buffer + count > max_latency) {
-    r = (w + count - max_latency + MIC_RING_CAP_SAMPLES) % MIC_RING_CAP_SAMPLES;
-    r = r & ~1;
+        r = (w + count - max_latency + MIC_RING_CAP_SAMPLES) % MIC_RING_CAP_SAMPLES;
+        r = r & ~1;
     }
 
     for (int i = 0; i < count; i++) {
-g_mic_ring[w] = samples[i];
-w = (w + 1) % MIC_RING_CAP_SAMPLES;
-}
-g_mic_ring_w = w;
-g_mic_ring_r = r;
-mic_unlock();
+        g_mic_ring[w] = samples[i];
+        w = (w + 1) % MIC_RING_CAP_SAMPLES;
+    }
+    g_mic_ring_w = w;
+    g_mic_ring_r = r;
+    mic_unlock();
 }
 
 static int mic_ring_pop(int16_t *out, int count) {
-mic_lock();
-int w = g_mic_ring_w;
-int r = g_mic_ring_r;
-int available = (w - r + MIC_RING_CAP_SAMPLES) % MIC_RING_CAP_SAMPLES;
-int to_copy = (count < available) ? count : available;
+    mic_lock();
+    int w = g_mic_ring_w;
+    int r = g_mic_ring_r;
+    int available = (w - r + MIC_RING_CAP_SAMPLES) % MIC_RING_CAP_SAMPLES;
+    int to_copy = (count < available) ? count : available;
 
-to_copy -= to_copy % 2;
+    to_copy -= to_copy % 2;
 
-for (int i = 0; i < to_copy; i++) {
-out[i] = g_mic_ring[r];
-r = (r + 1) % MIC_RING_CAP_SAMPLES;
-}
-g_mic_ring_r = r;
-mic_unlock();
-return to_copy;
+    for (int i = 0; i < to_copy; i++) {
+        out[i] = g_mic_ring[r];
+        r = (r + 1) % MIC_RING_CAP_SAMPLES;
+    }
+    g_mic_ring_r = r;
+    mic_unlock();
+    return to_copy;
 }
 
 static void mic_mix_into(int16_t *out, int num_shorts) {
@@ -1200,6 +1200,8 @@ extern jboolean mac_engine_start(int sample_rate, int channels, int buffer_frame
 extern jint     mac_engine_read(int16_t *out_buf, int num_stereo_samples);
 extern void     mac_engine_stop(void);
 extern void     mac_engine_get_error(char *buf, int buf_size);
+extern float    mac_get_system_volume(void);
+extern void     mac_set_system_volume(float volume);
 
 #else
 #   include <stdarg.h>
@@ -1219,7 +1221,7 @@ extern void     mac_engine_get_error(char *buf, int buf_size);
 
 JNIEXPORT jboolean JNICALL
 Java_AudioEngine_nativeStart(JNIEnv *env, jobject thiz,
-                              jint sample_rate, jint channels, jint buffer_frames) {
+        jint sample_rate, jint channels, jint buffer_frames) {
     (void)env; (void)thiz;
     g_last_error[0] = '\0';
 
@@ -1242,7 +1244,7 @@ Java_AudioEngine_nativeStart(JNIEnv *env, jobject thiz,
  */
 JNIEXPORT jint JNICALL
 Java_AudioEngine_nativeRead(JNIEnv *env, jobject thiz,
-                             jshortArray out_buf, jint num_samples) {
+        jshortArray out_buf, jint num_samples) {
     (void)thiz;
 
     jshort *buf = (*env)->GetShortArrayElements(env, out_buf, NULL);
@@ -1287,16 +1289,16 @@ Java_AudioEngine_nativeRead(JNIEnv *env, jobject thiz,
 
 JNIEXPORT void JNICALL
 Java_AudioEngine_nativeStop(JNIEnv *env, jobject thiz) {
-    (void)env; (void)thiz;
+(void)env; (void)thiz;
 
 #if defined(_WIN32)
-    wasapi_stop();
+wasapi_stop();
 #elif defined(__linux__)
-    pulse_stop();
+pulse_stop();
 #elif defined(__APPLE__)
-    mac_engine_stop();
+mac_engine_stop();
 #else
-    (void)0;
+(void)0;
 #endif
 }
 
@@ -1321,11 +1323,11 @@ Java_AudioEngine_nativeMicSetMixEnabled(JNIEnv *env, jobject thiz, jboolean enab
 
 JNIEXPORT void JNICALL
 Java_AudioEngine_nativeMicSetVolume(JNIEnv *env, jobject thiz, jfloat volume) {
-    (void)env; (void)thiz;
-    float v = (float)volume;
-    if (v < 0.0f) v = 0.0f;
-    if (v > 4.0f) v = 4.0f;
-    g_mic_volume = v;
+(void)env; (void)thiz;
+float v = (float)volume;
+if (v < 0.0f) v = 0.0f;
+if (v > 4.0f) v = 4.0f;
+g_mic_volume = v;
 }
 
 JNIEXPORT jint JNICALL
@@ -1359,9 +1361,9 @@ Java_AudioEngine_nativeVirtualSinkCreate(JNIEnv *env, jobject thiz, jint sample_
 
 JNIEXPORT void JNICALL
 Java_AudioEngine_nativeVirtualSinkDestroy(JNIEnv *env, jobject thiz) {
-    (void)env; (void)thiz;
+(void)env; (void)thiz;
 #if defined(__linux__)
-    linux_vsink_destroy();
+linux_vsink_destroy();
 #endif
 }
 
@@ -1442,18 +1444,27 @@ Java_AudioEngine_nativeMicSinkWrite(JNIEnv *env, jobject thiz, jshortArray pcm, 
 
 JNIEXPORT void JNICALL
 Java_AudioEngine_nativeMicSinkClose(JNIEnv *env, jobject thiz) {
-    (void)env; (void)thiz;
+(void)env; (void)thiz;
 #if defined(_WIN32)
-    wasapi_sink_close_internal();
+wasapi_sink_close_internal();
 #endif
 }
 
-JNIEXPORT jstring JNICALL
-Java_AudioEngine_nativeMicSinkDeviceName(JNIEnv *env, jobject thiz) {
-    (void)thiz;
-#if defined(_WIN32)
-    return (*env)->NewStringUTF(env, g_ws.device_name);
+
+JNIEXPORT jfloat JNICALL
+Java_AudioEngine_nativeGetSystemVolume(JNIEnv *env, jobject thiz) {
+    (void)env; (void)thiz;
+#if defined(__APPLE__)
+    return (jfloat)mac_get_system_volume();
 #else
-    return (*env)->NewStringUTF(env, "");
+    return -1.0f;
+#endif
+}
+
+JNIEXPORT void JNICALL
+Java_AudioEngine_nativeSetSystemVolume(JNIEnv *env, jobject thiz, jfloat volume) {
+(void)env; (void)thiz;
+#if defined(__APPLE__)
+mac_set_system_volume((float)volume);
 #endif
 }

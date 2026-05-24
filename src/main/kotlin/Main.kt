@@ -456,6 +456,9 @@ object NetworkHandler_v1 {
     private var originalLinuxSink:   String? = null
     private var originalLinuxSource: String? = null
 
+    // ── macOS volume mute-on-server ───────────────────────────────────────────
+    @Volatile private var macOriginalVolume: Float = -1f
+
     private fun getPactlDefault(type: String): String? {
         try {
             val info = ProcessBuilder("pactl", "info").start()
@@ -1948,6 +1951,17 @@ object NetworkHandler_v1 {
             )
         }
 
+        val isMacOS = System.getProperty("os.name").lowercase().let { it.contains("mac") || it.contains("darwin") }
+        if (isMacOS && AudioEngine.loadLibrary()) {
+            val helperEngine = AudioEngine()
+            val vol = helperEngine.getSystemVolume()
+            if (vol >= 0f) {
+                macOriginalVolume = vol
+                helperEngine.setSystemVolume(0f)
+                println("[Server] macOS: volume salvato ($vol), abbassato a 0")
+            }
+        }
+
         if (micRoutingMode == MicRoutingMode.MIX_INTO_STREAM && micMixInputInfo != null) {
             localMicMixJob = scope.launchLocalMicMix(audioSettings, micMixInputInfo)
         }
@@ -2364,7 +2378,7 @@ object NetworkHandler_v1 {
                                     audioPackets++
                                     totalAudioBytes += pcmLen
                                     if (audioPackets == 1L || audioPackets % 500L == 0L) {
-                                            println("[CLIENT][UNICAST] audioPkt #$audioPackets size=${bytes.size} pcmLen=$pcmLen totalAudioBytes=$totalAudioBytes SDL=${sourceDataLine?.isActive}")
+                                        println("[CLIENT][UNICAST] audioPkt #$audioPackets size=${bytes.size} pcmLen=$pcmLen totalAudioBytes=$totalAudioBytes SDL=${sourceDataLine?.isActive}")
                                     }
                                     sourceDataLine?.write(bytes, AUDIO_HEADER_SIZE, pcmLen)
                                 } else {
@@ -2559,6 +2573,16 @@ object NetworkHandler_v1 {
         softwareMicMixer.enable(false)
         softwareMicMixer.volume = 1.0f
         isMicMuted.value = false
+
+        val savedVol = macOriginalVolume
+        if (savedVol >= 0f) {
+            macOriginalVolume = -1f
+            val isMacOS = System.getProperty("os.name").lowercase().let { it.contains("mac") || it.contains("darwin") }
+            if (isMacOS && AudioEngine.loadLibrary()) {
+                AudioEngine().setSystemVolume(savedVol)
+                println("[Server] macOS: volume ripristinato a $savedVol")
+            }
+        }
     }
 
     fun terminateAllServices() { scope.cancel() }
@@ -2591,7 +2615,7 @@ object NetworkHandler_v1 {
                 for (i in 0 until samples) {
                     val t = i / sampleRate
                     val env = if (i < samples / 4) i.toDouble() / (samples / 4)
-                              else 1.0 - (i - samples / 4).toDouble() / (samples * 3 / 4)
+                    else 1.0 - (i - samples / 4).toDouble() / (samples * 3 / 4)
                     val sample = ((Math.sin(2 * Math.PI * 880.0 * t) * 0.5 + Math.sin(2 * Math.PI * 1320.0 * t) * 0.5) * env * Short.MAX_VALUE).toInt()
                         .coerceIn(Short.MIN_VALUE.toInt(), Short.MAX_VALUE.toInt())
                     buf[i * 2] = (sample and 0xFF).toByte()
@@ -2638,7 +2662,7 @@ object NetworkHandler_v1 {
                 for (i in 0 until samples) {
                     val t = i / sampleRate
                     val env = if (i < samples / 4) i.toDouble() / (samples / 4)
-                              else 1.0 - (i - samples / 4).toDouble() / (samples * 3 / 4)
+                    else 1.0 - (i - samples / 4).toDouble() / (samples * 3 / 4)
                     val sample = ((Math.sin(2 * Math.PI * 660.0 * t) * 0.5 + Math.sin(2 * Math.PI * 440.0 * t) * 0.5) * env * Short.MAX_VALUE).toInt()
                         .coerceIn(Short.MIN_VALUE.toInt(), Short.MAX_VALUE.toInt())
                     buf[i * 2] = (sample and 0xFF).toByte()
@@ -2672,7 +2696,7 @@ private fun loadTrayIconPainter(): Painter {
     for (loader in loaders) {
         for (path in candidates) {
             val resource = if (path.startsWith("/")) Any::class.java.getResourceAsStream(path)
-                           else loader.getResourceAsStream(path)
+            else loader.getResourceAsStream(path)
             if (resource != null) {
                 return runCatching {
                     resource.use { input ->

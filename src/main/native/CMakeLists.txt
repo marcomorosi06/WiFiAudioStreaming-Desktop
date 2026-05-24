@@ -80,6 +80,7 @@ elseif(APPLE)
         "-framework CoreMedia"
         "-framework CoreFoundation"
         "-framework Foundation"
+        "-framework AudioToolbox"
     )
     # macOS 12.3 minimo per ScreenCaptureKit
     set_target_properties(audio_engine PROPERTIES
