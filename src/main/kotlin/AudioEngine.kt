@@ -68,8 +68,7 @@ class AudioEngine(
             val osArch = System.getProperty("os.arch").lowercase()
 
             if (!osName.contains("win") && !osName.contains("mac")) {
-                loadError = "Motore audio nativo disabilitato su Linux: viene usato il backend FFmpeg."
-                println("[AudioEngine] $loadError")
+                loadError = "Native audio engine disabled on Linux: using FFmpeg backend."
                 return false
             }
 
@@ -95,8 +94,8 @@ class AudioEngine(
                 val stream: InputStream = AudioEngine::class.java
                     .getResourceAsStream(resourcePath)
                     ?: throw UnsatisfiedLinkError(
-                        "Libreria nativa non trovata nel classpath: $resourcePath. " +
-                                "Esegui 'gradle copyNativeLib' prima di avviare l'app."
+                        "Native library not found in classpath: $resourcePath. " +
+                                "Run 'gradle copyNativeLib' before starting the app."
                     )
 
                 val extension = libName.substringAfterLast('.', "tmp")
@@ -109,12 +108,12 @@ class AudioEngine(
                 libraryLoaded = true
                 true
             } catch (e: UnsatisfiedLinkError) {
-                loadError = e.message ?: "UnsatisfiedLinkError senza messaggio"
-                System.err.println("[AudioEngine] Impossibile caricare la libreria: $loadError")
+                loadError = e.message ?: "UnsatisfiedLinkError"
+                System.err.println("[AudioEngine] Failed to load library: $loadError")
                 false
             } catch (e: Exception) {
                 loadError = e.message ?: e.toString()
-                System.err.println("[AudioEngine] Errore caricamento libreria: $loadError")
+                System.err.println("[AudioEngine] Library load error: $loadError")
                 false
             }
         }
@@ -124,14 +123,14 @@ class AudioEngine(
 
     fun start(): Boolean {
         if (!libraryLoaded) {
-            lastError = loadError ?: "Libreria nativa non caricata. Chiama AudioEngine.loadLibrary() prima."
+            lastError = loadError ?: "Native library not loaded. Call AudioEngine.loadLibrary() first."
             return false
         }
         if (started) return true
 
         val ok = nativeStart(sampleRate, channels, bufferFrames)
         if (!ok) {
-            lastError = nativeGetError().ifEmpty { "Errore sconosciuto in nativeStart" }
+            lastError = nativeGetError().ifEmpty { "Unknown error in nativeStart" }
             return false
         }
         started = true
@@ -154,7 +153,7 @@ class AudioEngine(
         val written = nativeRead(readBufShort, numSamplesPerRead)
 
         if (written < 0) {
-            lastError = nativeGetError().ifEmpty { "Errore in nativeRead" }
+            lastError = nativeGetError().ifEmpty { "Error in nativeRead" }
             return@withContext null
         }
 
@@ -187,11 +186,11 @@ class AudioEngine(
 
     fun createVirtualSink(sampleRate: Int = this.sampleRate, channels: Int = this.channels): Boolean {
         if (!libraryLoaded) {
-            lastError = loadError ?: "Libreria nativa non caricata."
+            lastError = loadError ?: "Native library not loaded."
             return false
         }
         val ok = nativeVirtualSinkCreate(sampleRate, channels)
-        if (!ok) lastError = nativeGetError().ifEmpty { "Creazione virtual sink fallita." }
+        if (!ok) lastError = nativeGetError().ifEmpty { "Virtual sink creation failed." }
         return ok
     }
 
@@ -214,11 +213,11 @@ class AudioEngine(
 
     fun micSinkOpen(deviceName: String?, sampleRate: Int = this.sampleRate, channels: Int = this.channels): Boolean {
         if (!libraryLoaded) {
-            lastError = loadError ?: "Libreria nativa non caricata."
+            lastError = loadError ?: "Native library not loaded."
             return false
         }
         val ok = nativeMicSinkOpen(deviceName, sampleRate, channels)
-        if (!ok) lastError = nativeGetError().ifEmpty { "Apertura MicSink fallita." }
+        if (!ok) lastError = nativeGetError().ifEmpty { "MicSink open failed." }
         return ok
     }
 

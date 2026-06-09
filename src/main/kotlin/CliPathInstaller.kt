@@ -24,13 +24,15 @@ object CliPathInstaller {
     val isMac     = osName.contains("mac") || osName.contains("darwin")
     val isLinux   = !isWindows && !isMac
 
-    private val symlinkTarget = "/usr/local/bin/wfas"
+    private val macSymlinkTarget = "/usr/local/bin/wfas"
 
     sealed class InstallResult {
         object Success          : InstallResult()
         object TerminalLaunched : InstallResult()
         data class Failure(val reason: String) : InstallResult()
     }
+
+    // ── Windows helpers ───────────────────────────────────────────────────────
 
     private fun resolveWindowsExePath(): String? {
         val fromProcess = ProcessHandle.current().info().command().orElse(null)
@@ -87,31 +89,90 @@ object CliPathInstaller {
         }.getOrNull()
     }
 
-    fun executablePath(): String? =
-        if (isWindows) resolveWindowsExePath()
-        else ProcessHandle.current().info().command().orElse(null)
-
     private fun wfasBatDir(): File =
         File(System.getenv("APPDATA") ?: System.getProperty("user.home"), "wfas")
 
-    fun isInstalled(): Boolean {
-        if (isWindows) {
+    private fun isInWindowsUserPath(dir: String): Boolean {
+        val ps = """
+            ${'$'}cur = [Environment]::GetEnvironmentVariable('PATH', 'User')
+            if ((${'$'}cur -split ';') -contains '$dir') { exit 0 } else { exit 1 }
+        """.trimIndent()
+        return runCatching {
+            ProcessBuilder("powershell", "-NoProfile", "-NonInteractive", "-Command", ps)
+                .start().waitFor() == 0
+        }.getOrDefault(false)
+    }
+
+    // ── Linux helpers ─────────────────────────────────────────────────────────
+
+    private fun wfasScriptDir(): File =
+        File(System.getProperty("user.home"), ".local/bin")
+
+    private fun wfasScriptFile(): File = File(wfasScriptDir(), "wfas")
+
+    private fun resolveLinuxInstallPaths(): Triple<String, String, String>? {
+        // Packaged build: bundled java at lib/runtime/bin/java
+        val resourcesDirProp = System.getProperty("compose.application.resources.dir")
+        if (resourcesDirProp != null) {
+            val appDir = File(resourcesDirProp).parentFile
+            val libDir = appDir?.parentFile
+            val javaExe = libDir?.let { File(it, "runtime/bin/java") }
+            if (javaExe != null && javaExe.exists()) {
+                return Triple(javaExe.absolutePath, "${appDir!!.absolutePath}/*", resourcesDirProp)
+            }
+        }
+        // Development build fallback: use current JVM and full classpath
+        val javaExe = ProcessHandle.current().info().command().orElse(null) ?: return null
+        if (!File(javaExe).name.lowercase().startsWith("java")) return null
+        val cp = System.getProperty("java.class.path") ?: return null
+        val resDir = resourcesDirProp
+            ?: cp.split(":").map { File(it) }
+                .firstOrNull { it.isDirectory && File(it, "version.properties").exists() }
+                ?.absolutePath
+            ?: ""
+        return Triple(javaExe, cp, resDir)
+    }
+
+    /** Appends an export line to ~/.bashrc and ~/.profile if dir is not in PATH. */
+    private fun ensureInLinuxPath(dir: String) {
+        val currentPath = System.getenv("PATH") ?: ""
+        if (currentPath.split(":").contains(dir)) return
+        val home = System.getProperty("user.home")
+        val exportLine = "\nexport PATH=\"$dir:\$PATH\""
+        for (rc in listOf(".bashrc", ".profile")) {
+            val f = File(home, rc)
+            runCatching {
+                if (f.exists() && !f.readText().contains(dir)) {
+                    f.appendText(exportLine)
+                }
+            }
+        }
+    }
+
+    // ── Public API ────────────────────────────────────────────────────────────
+
+    fun isInstalled(): Boolean = when {
+        isWindows -> {
             val bat = File(wfasBatDir(), "wfas.bat")
-            return bat.exists() && isInWindowsUserPath(wfasBatDir().absolutePath)
-        } else {
-            val link   = File(symlinkTarget)
-            if (!link.exists()) return false
-            val target = runCatching { link.canonicalPath }.getOrNull() ?: return false
-            return target == executablePath()
+            bat.exists() && isInWindowsUserPath(wfasBatDir().absolutePath)
+        }
+        isLinux -> wfasScriptFile().exists()
+        else    -> {
+            val link = File(macSymlinkTarget)
+            if (!link.exists()) false
+            else runCatching { link.canonicalPath }.getOrNull() ==
+                    ProcessHandle.current().info().command().orElse(null)
         }
     }
 
     fun install(): InstallResult = when {
         isWindows -> installWindows()
-        isMac     -> installUnix()
+        isMac     -> installMac()
         isLinux   -> installLinux()
         else      -> InstallResult.Failure("Unsupported OS")
     }
+
+    // ── Per-platform install ──────────────────────────────────────────────────
 
     private fun installWindows(): InstallResult {
         val exePath = resolveWindowsExePath()
@@ -164,32 +225,41 @@ object CliPathInstaller {
     }
 
     private fun installLinux(): InstallResult {
-        val exePath = executablePath()
-            ?: return InstallResult.Failure("Cannot determine executable path")
+        val (javaExe, cpWildcard, resourcesDir) = resolveLinuxInstallPaths()
+            ?: return InstallResult.Failure(
+                "Cannot determine install directory.\nRun the installed app, not the development build."
+            )
 
-        val cmd = "ln -sf \"$exePath\" $symlinkTarget"
+        val wfasDir = wfasScriptDir()
+        runCatching { wfasDir.mkdirs() }
+            .onFailure { return InstallResult.Failure("Cannot create ${wfasDir.absolutePath}: ${it.message}") }
 
-        if (tryPkexec(cmd)) return InstallResult.TerminalLaunched
+        val script = wfasScriptFile()
+        runCatching {
+            script.writeText(
+                "#!/bin/sh\n" +
+                "WFAS_JAVA=\"$javaExe\"\n" +
+                "WFAS_CP=\"$cpWildcard\"\n" +
+                "WFAS_RESDIR=\"$resourcesDir\"\n" +
+                "if [ \$# -eq 0 ]; then\n" +
+                "    exec \"\$WFAS_JAVA\" -Djava.net.preferIPv4Stack=true \"-Dcompose.application.resources.dir=\$WFAS_RESDIR\" -cp \"\$WFAS_CP\" MainKt --help\n" +
+                "else\n" +
+                "    exec \"\$WFAS_JAVA\" -Djava.net.preferIPv4Stack=true \"-Dcompose.application.resources.dir=\$WFAS_RESDIR\" -cp \"\$WFAS_CP\" MainKt \"\$@\"\n" +
+                "fi\n"
+            )
+            script.setExecutable(true)
+        }.onFailure { return InstallResult.Failure("Cannot write wfas script: ${it.message}") }
 
-        val terminals = listOf(
-            listOf("x-terminal-emulator", "-e"),
-            listOf("gnome-terminal", "--"),
-            listOf("konsole", "-e"),
-            listOf("xfce4-terminal", "-e"),
-            listOf("xterm", "-e"),
-        )
-        for ((term, flag) in terminals.map { it[0] to it[1] }) {
-            if (tryTerminal(term, flag, "sudo $cmd ; read -p 'Press Enter to close...'"))
-                return InstallResult.TerminalLaunched
-        }
-        return InstallResult.Failure("No terminal emulator found. Run manually:\n  sudo $cmd")
+        ensureInLinuxPath(wfasDir.absolutePath)
+
+        return InstallResult.Success
     }
 
-    private fun installUnix(): InstallResult {
-        val exePath = executablePath()
+    private fun installMac(): InstallResult {
+        val exePath = ProcessHandle.current().info().command().orElse(null)
             ?: return InstallResult.Failure("Cannot determine executable path")
 
-        val cmd = "sudo ln -sf \"$exePath\" $symlinkTarget"
+        val cmd = "sudo ln -sf \"$exePath\" $macSymlinkTarget"
 
         runCatching {
             val script = "tell application \"Terminal\" to do script \"$cmd\""
@@ -198,38 +268,5 @@ object CliPathInstaller {
          .onFailure { return InstallResult.Failure("Cannot open Terminal: ${it.message}") }
 
         return InstallResult.TerminalLaunched
-    }
-
-    private fun tryPkexec(cmd: String): Boolean {
-        val which = runCatching {
-            ProcessBuilder("which", "pkexec").start().inputStream.bufferedReader().readText().trim()
-        }.getOrNull()
-        if (which.isNullOrEmpty()) return false
-        return runCatching {
-            ProcessBuilder("pkexec", "sh", "-c", cmd).start()
-            true
-        }.getOrDefault(false)
-    }
-
-    private fun tryTerminal(termBin: String, flag: String, cmd: String): Boolean {
-        val which = runCatching {
-            ProcessBuilder("which", termBin).start().inputStream.bufferedReader().readText().trim()
-        }.getOrNull()
-        if (which.isNullOrEmpty()) return false
-        return runCatching {
-            ProcessBuilder(termBin, flag, "sh", "-c", cmd).start()
-            true
-        }.getOrDefault(false)
-    }
-
-    private fun isInWindowsUserPath(dir: String): Boolean {
-        val ps = """
-            ${'$'}cur = [Environment]::GetEnvironmentVariable('PATH', 'User')
-            if ((${'$'}cur -split ';') -contains '$dir') { exit 0 } else { exit 1 }
-        """.trimIndent()
-        return runCatching {
-            ProcessBuilder("powershell", "-NoProfile", "-NonInteractive", "-Command", ps)
-                .start().waitFor() == 0
-        }.getOrDefault(false)
     }
 }

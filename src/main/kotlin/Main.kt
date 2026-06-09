@@ -549,12 +549,12 @@ object NetworkHandler_v1 {
             if (loadErr != null) {
                 return when {
                     os.contains("linux") -> VirtualDriverStatus.LinuxActionRequired(
-                        "Impossibile caricare il motore audio nativo.\n$loadErr",
-                        "Ricompila con: ./gradlew copyNativeLib"
+                        "Cannot load native audio engine.\n$loadErr",
+                        "Rebuild with: ./gradlew copyNativeLib"
                     )
                     else -> VirtualDriverStatus.Missing(
-                        "Motore audio nativo",
-                        "Ricompila con: ./gradlew copyNativeLib — $loadErr"
+                        "Native audio engine",
+                        "Rebuild with: ./gradlew copyNativeLib — $loadErr"
                     )
                 }
             }
@@ -1210,6 +1210,7 @@ object NetworkHandler_v1 {
         chunkArray: ShortArray,
         byteBuffer: java.nio.ByteBuffer,
         maxShortsPerPacket: Int,
+        onPcm: ((ShortArray) -> Unit)? = null,
         onChunk: suspend (bytesToSend: Int) -> Unit
     ) {
         if (frame.samples == null) return
@@ -1227,6 +1228,7 @@ object NetworkHandler_v1 {
                         .toShort()
                 }
             }
+            onPcm?.invoke(chunkArray.copyOf(shortsToRead))
             byteBuffer.clear()
             byteBuffer.asShortBuffer().put(chunkArray, 0, shortsToRead)
             onChunk(shortsToRead * 2)
@@ -2038,7 +2040,7 @@ object NetworkHandler_v1 {
                                         break
                                     }
                                     if (frame != null) {
-                                        processGrabberFrame(frame, chunkArray, byteBuffer, maxShortsPerPacket) { bytesToSend ->
+                                        processGrabberFrame(frame, chunkArray, byteBuffer, maxShortsPerPacket, onAudioFrame) { bytesToSend ->
                                             packetArray[0] = AUDIO_MAGIC_0
                                             packetArray[1] = AUDIO_MAGIC_1
                                             packetArray[2] = AUDIO_VERSION
@@ -2206,7 +2208,7 @@ object NetworkHandler_v1 {
                                         }
                                         if (!clientAlive.get()) break
                                         if (frame != null) {
-                                            processGrabberFrame(frame, chunkArray, byteBuffer, maxShortsPerPacket) { bytesToSend ->
+                                            processGrabberFrame(frame, chunkArray, byteBuffer, maxShortsPerPacket, onAudioFrame) { bytesToSend ->
                                                 packetArray[0] = AUDIO_MAGIC_0
                                                 packetArray[1] = AUDIO_MAGIC_1
                                                 packetArray[2] = AUDIO_VERSION

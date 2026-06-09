@@ -74,7 +74,9 @@ import androidx.compose.ui.text.input.KeyboardType
 import kotlin.math.atan2
 import kotlin.math.cos
 import kotlin.math.sin
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import java.awt.image.BufferedImage
 import javax.imageio.ImageIO
 
@@ -416,6 +418,8 @@ fun VirtualDriverBanner(status: VirtualDriverStatus.Missing) {
 @Composable
 fun WelcomeScreen(visible: Boolean, onDismiss: () -> Unit) {
     var cliInstallResult by remember { mutableStateOf<CliPathInstaller.InstallResult?>(null) }
+    var cliInstalling by remember { mutableStateOf(false) }
+    val welcomeScope = rememberCoroutineScope()
 
     AnimatedVisibility(
         visible = visible,
@@ -544,10 +548,21 @@ fun WelcomeScreen(visible: Boolean, onDismiss: () -> Unit) {
                                 }
                                 null -> {
                                     OutlinedButton(
-                                        onClick = { cliInstallResult = CliPathInstaller.install() },
+                                        enabled = !cliInstalling,
+                                        onClick = {
+                                            welcomeScope.launch(Dispatchers.IO) {
+                                                cliInstalling = true
+                                                cliInstallResult = CliPathInstaller.install()
+                                                cliInstalling = false
+                                            }
+                                        },
                                         modifier = Modifier.fillMaxWidth()
                                     ) {
-                                        Icon(Icons.Outlined.Download, contentDescription = null, modifier = Modifier.size(18.dp))
+                                        if (cliInstalling) {
+                                            CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp)
+                                        } else {
+                                            Icon(Icons.Outlined.Download, contentDescription = null, modifier = Modifier.size(18.dp))
+                                        }
                                         Spacer(Modifier.width(8.dp))
                                         Text(stringResource("welcome_cli_btn"))
                                     }
@@ -592,6 +607,8 @@ fun SettingsScreen(
     var showResetConfirmDialog by remember { mutableStateOf(false) }
     var cliInstallResult by remember { mutableStateOf<CliPathInstaller.InstallResult?>(null) }
     var cliIsInstalled by remember { mutableStateOf(CliPathInstaller.isInstalled()) }
+    var cliInstalling by remember { mutableStateOf(false) }
+    val settingsScope = rememberCoroutineScope()
 
     if (showResetConfirmDialog) {
         AlertDialog(
@@ -1001,19 +1018,31 @@ fun SettingsScreen(
                                 )
                             }
                             Button(
+                                enabled = !cliInstalling,
                                 onClick = {
-                                    val result = CliPathInstaller.install()
-                                    cliInstallResult = result
-                                    if (result is CliPathInstaller.InstallResult.Success) {
-                                        cliIsInstalled = true
+                                    settingsScope.launch(Dispatchers.IO) {
+                                        cliInstalling = true
+                                        val result = CliPathInstaller.install()
+                                        cliInstallResult = result
+                                        if (result is CliPathInstaller.InstallResult.Success) {
+                                            cliIsInstalled = true
+                                        }
+                                        cliInstalling = false
                                     }
                                 }
                             ) {
-                                Icon(
-                                    if (cliIsInstalled) Icons.Outlined.Refresh else Icons.Outlined.Download,
-                                    contentDescription = null,
-                                    modifier = Modifier.size(18.dp)
-                                )
+                                if (cliInstalling) {
+                                    CircularProgressIndicator(
+                                        modifier = Modifier.size(18.dp),
+                                        strokeWidth = 2.dp
+                                    )
+                                } else {
+                                    Icon(
+                                        if (cliIsInstalled) Icons.Outlined.Refresh else Icons.Outlined.Download,
+                                        contentDescription = null,
+                                        modifier = Modifier.size(18.dp)
+                                    )
+                                }
                                 Spacer(Modifier.width(6.dp))
                                 Text(
                                     if (cliIsInstalled) stringResource("cli_btn_update")

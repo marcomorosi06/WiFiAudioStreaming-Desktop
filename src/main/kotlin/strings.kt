@@ -18,21 +18,15 @@
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
 import java.io.InputStreamReader
-import java.util.Locale
 import java.util.Properties
 
 object Strings {
     private val props = Properties()
 
     init {
-        val lang = Locale.getDefault().language
-        val fileName = if (lang == "it") "strings_it.properties" else "strings.properties"
-        val fallback = "strings.properties"
-
         val loader = Strings::class.java.classLoader
-        val stream = loader.getResourceAsStream(fileName)
-            ?: loader.getResourceAsStream(fallback)
-        stream?.use { props.load(InputStreamReader(it, Charsets.UTF_8)) }
+        loader.getResourceAsStream("strings.properties")
+            ?.use { props.load(InputStreamReader(it, Charsets.UTF_8)) }
     }
 
     fun get(key: String): String = props.getProperty(key, key)

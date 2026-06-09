@@ -82,7 +82,7 @@ data class CliArgs(
             if (args.isEmpty())
                 return CliArgs(runMode = RunMode.GUI)
 
-            var runMode         = if (isHeadless) RunMode.CLI_SERVER else RunMode.GUI
+            var runMode         = RunMode.CLI_SERVER
             var modeExplicit    = false
             var guiSubMode: String?         = null
             var port            = 9090
@@ -108,7 +108,8 @@ data class CliArgs(
             var sdpOut: String?             = null
             var controlCmd: ControlCommand? = null
             var networkIface    = "Auto"
-            var useNativeEngine = true
+            val osLower         = System.getProperty("os.name", "").lowercase()
+            var useNativeEngine = osLower.contains("win") || osLower.contains("mac")
             var viz             = false
             var vizTheme: String?           = null
             var printHelp       = false
