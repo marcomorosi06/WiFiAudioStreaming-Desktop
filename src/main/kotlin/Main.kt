@@ -483,53 +483,50 @@ object NetworkHandler_v1 {
             ?.also { originalLinuxSink = it }
         getPactlDefault("source").takeIf { it != null && !it.contains("VirtualCable", true) }
             ?.also { originalLinuxSource = it }
-        println("--- Linux: saved sink='$originalLinuxSink' source='$originalLinuxSource' ---")
+        AppDebug.log("---Linux: saved sink='$originalLinuxSink' source='$originalLinuxSource' ---")
         runCatching { ProcessBuilder("pactl", "set-default-sink",   "VirtualCable").start().waitFor() }
         runCatching { ProcessBuilder("pactl", "set-default-source", "VirtualCable.monitor").start().waitFor() }
-        println("--- Linux: audio routed to VirtualCable ---")
+        AppDebug.log("---Linux: audio routed to VirtualCable ---")
     }
 
     fun restoreLinuxAudioRouting() {
         if (!System.getProperty("os.name").lowercase().contains("linux")) return
-        val sink   = originalLinuxSink   ?: run { println("--- Linux: nothing to restore ---"); return }
+        val sink   = originalLinuxSink   ?: run { AppDebug.log("---Linux: nothing to restore ---"); return }
         val source = originalLinuxSource
         runCatching { ProcessBuilder("pactl", "set-default-sink", sink).start().waitFor() }
         source?.let { runCatching { ProcessBuilder("pactl", "set-default-source", it).start().waitFor() } }
-        println("--- Linux: audio restored to sink='$sink' source='$source' ---")
+        AppDebug.log("---Linux: audio restored to sink='$sink' source='$source' ---")
         originalLinuxSink   = null
         originalLinuxSource = null
     }
 
     fun setupLinuxVirtualCable(useNativeEngine: Boolean) {
-        if (useNativeEngine) {
-            println("--- Linux: AudioEngine nativo attivo, VirtualCable non richiesto ---")
-            return
-        }
         if (!System.getProperty("os.name").lowercase().contains("linux")) return
+        if (useNativeEngine) return
         try {
             if (ProcessBuilder("which", "pactl").start().waitFor() != 0) {
-                println("'pactl' not found — cannot create virtual cable automatically.")
+                AppDebug.log("'pactl' not found - cannot create virtual cable automatically.")
                 return
             }
             getPactlDefault("sink").takeIf { it != null && !it.contains("VirtualCable", true) }
                 ?.also { originalLinuxSink = it }
             getPactlDefault("source").takeIf { it != null && !it.contains("VirtualCable", true) }
                 ?.also { originalLinuxSource = it }
-            println("--- Linux: real sink saved at startup: '$originalLinuxSink' ---")
+            AppDebug.log("---Linux: real sink saved at startup: '$originalLinuxSink' ---")
 
             val check = ProcessBuilder("sh", "-c", "pactl list short sinks | grep VirtualCable").start()
-            if (check.waitFor() == 0) { println("--- Linux: VirtualCable already active ---"); return }
+            if (check.waitFor() == 0) { AppDebug.log("---Linux: VirtualCable already active ---"); return }
 
-            println("--- Linux: creating VirtualCable... ---")
+            AppDebug.log("---Linux: creating VirtualCable... ---")
             val create = ProcessBuilder(
                 "pactl", "load-module", "module-null-sink",
                 "sink_name=VirtualCable",
                 "sink_properties=device.description=VirtualCable"
             ).start()
-            if (create.waitFor() == 0) println("--- Linux: VirtualCable created ---")
-            else println("--- Linux: failed to create VirtualCable ---")
+            if (create.waitFor() == 0) AppDebug.log("---Linux: VirtualCable created ---")
+            else AppDebug.log("---Linux: failed to create VirtualCable ---")
         } catch (e: Exception) {
-            println("Linux audio setup error: ${e.message}")
+            AppDebug.log("Linux audio setup error: ${e.message}")
         }
     }
 
@@ -626,20 +623,20 @@ object NetworkHandler_v1 {
 
                         if (remoteIp in localIps || !message.startsWith(DISCOVERY_MESSAGE)) continue
 
-                        println("[DISCOVERY] Ricevuto da $remoteIp: $message")
+                        AppDebug.log("[DISCOVERY] Ricevuto da $remoteIp: $message")
                         val parts = message.split(";")
-                        if (parts.size < 4) { println("[DISCOVERY] pacchetto malformato (parti=${parts.size}): $message"); continue }
+                        if (parts.size < 4) { AppDebug.log("[DISCOVERY] pacchetto malformato (parti=${parts.size}): $message"); continue }
                         val hostname = parts[1]
 
                         if (message.contains("BYE")) {
-                            println("[DISCOVERY] BYE da $hostname ($remoteIp), rimuovo dalla lista")
+                            AppDebug.log("[DISCOVERY] BYE da $hostname ($remoteIp), rimuovo dalla lista")
                             onDeviceFound(hostname, ServerInfo("", false, 0, null, 0L))
                             continue
                         }
 
                         val isMulticast = parts[2].equals("MULTICAST", ignoreCase = true)
                         val port        = parts[3].toIntOrNull() ?: continue
-                        println("[DISCOVERY] Server trovato: hostname=$hostname ip=$remoteIp isMulticast=$isMulticast port=$port")
+                        AppDebug.log("[DISCOVERY] Server trovato: hostname=$hostname ip=$remoteIp isMulticast=$isMulticast port=$port")
 
                         val capabilities = if (parts.size >= 5) {
                             val protoStr = parts.firstOrNull { it.startsWith("protocols=") }
@@ -663,7 +660,7 @@ object NetworkHandler_v1 {
                     } catch (_: java.net.SocketTimeoutException) { continue }
                 }
             } catch (e: Exception) {
-                if (e !is CancellationException) println("Discovery listening error: ${e.message}")
+                if (e !is CancellationException) AppDebug.log("Discovery listening error: ${e.message}")
             } finally {
                 runCatching { socket?.leaveGroup(groupAddress) }
                 socket?.close()
@@ -748,12 +745,12 @@ object NetworkHandler_v1 {
                             audioSettings.channels
                         )
                         if (!created) {
-                            println("[MicReceiver] createVirtualSink fallita: ${engine.lastError}")
+                            AppDebug.log("[MicReceiver] createVirtualSink fallita: ${engine.lastError}")
                             return@launch
                         }
                         activeVirtualSinkEngine = engine
                         nativeVirtualSinkActive = true
-                        println("[MicReceiver] Virtual sink attivo: ${engine.virtualSinkName()}")
+                        AppDebug.log("[MicReceiver] Virtual sink attivo: ${engine.virtualSinkName()}")
                     } else if (isWindows) {
                         val engine = AudioEngine(
                             sampleRate   = audioSettings.sampleRate.toInt(),
@@ -763,12 +760,12 @@ object NetworkHandler_v1 {
                         val hint = micOutputMixerInfo?.name
                         val opened = engine.micSinkOpen(hint, audioSettings.sampleRate.toInt(), audioSettings.channels)
                         if (!opened) {
-                            println("[MicReceiver] WASAPI micSinkOpen fallita: ${engine.lastError}")
+                            AppDebug.log("[MicReceiver] WASAPI micSinkOpen fallita: ${engine.lastError}")
                             val outputs = runCatching { findAvailableOutputMixers() }.getOrDefault(emptyList())
                             val fallback = micOutputMixerInfo
                                 ?: VirtualMicAutodetect.detectManualCable(outputs)?.mixerInfo
                                 ?: run {
-                                    println("[MicReceiver] Nessun cable selezionato/rilevato.")
+                                    AppDebug.log("[MicReceiver] Nessun cable selezionato/rilevato.")
                                     return@launch
                                 }
                             val mixer = runCatching { AudioSystem.getMixer(fallback) }.getOrNull() ?: return@launch
@@ -779,35 +776,35 @@ object NetworkHandler_v1 {
                                 it.open(format, audioSettings.bufferSize * 8)
                                 it.start()
                             }
-                            println("[MicReceiver] Fallback SourceDataLine su '${fallback.name}'")
+                            AppDebug.log("[MicReceiver] Fallback SourceDataLine su '${fallback.name}'")
                         } else {
                             wasapiSinkEngine = engine
-                            println("[MicReceiver] WASAPI sink attivo su '${engine.micSinkDeviceName()}'")
+                            AppDebug.log("[MicReceiver] WASAPI sink attivo su '${engine.micSinkDeviceName()}'")
                         }
                     } else {
                         val outputs = runCatching { findAvailableOutputMixers() }.getOrDefault(emptyList())
                         val mixerInfo = micOutputMixerInfo
                             ?: VirtualMicAutodetect.detectManualCable(outputs)?.mixerInfo
                             ?: run {
-                                println("[MicReceiver] VIRTUAL_MIC su ${osName}: nessun cable selezionato/rilevato.")
+                                AppDebug.log("[MicReceiver] VIRTUAL_MIC su ${osName}: nessun cable selezionato/rilevato.")
                                 return@launch
                             }
-                        println("[MicReceiver] Apertura SourceDataLine verso '${mixerInfo.name}'")
+                        AppDebug.log("[MicReceiver] Apertura SourceDataLine verso '${mixerInfo.name}'")
                         val mixer = runCatching { AudioSystem.getMixer(mixerInfo) }.getOrNull() ?: run {
-                            println("[MicReceiver] getMixer() fallita per ${mixerInfo.name}")
+                            AppDebug.log("[MicReceiver] getMixer() fallita per ${mixerInfo.name}")
                             return@launch
                         }
                         val format   = audioSettings.toAudioFormat()
                         val lineInfo = DataLine.Info(SourceDataLine::class.java, format)
                         if (!mixer.isLineSupported(lineInfo)) {
-                            println("[MicReceiver] Mixer ${mixerInfo.name} non supporta il formato ${format.sampleRate}Hz/${format.channels}ch/${format.sampleSizeInBits}bit.")
+                            AppDebug.log("[MicReceiver] Mixer ${mixerInfo.name} non supporta il formato ${format.sampleRate}Hz/${format.channels}ch/${format.sampleSizeInBits}bit.")
                             return@launch
                         }
                         line = (mixer.getLine(lineInfo) as SourceDataLine).also {
                             it.open(format, audioSettings.bufferSize * 8)
                             it.start()
                         }
-                        println("[MicReceiver] SourceDataLine aperta: buffer=${line?.bufferSize} bytes, format=$format")
+                        AppDebug.log("[MicReceiver] SourceDataLine aperta: buffer=${line?.bufferSize} bytes, format=$format")
                     }
                 }
                 MicRoutingMode.MIX_INTO_STREAM -> {
@@ -845,7 +842,7 @@ object NetworkHandler_v1 {
                     soTimeout = 1000
                     receiveBufferSize = 1 shl 20
                 }
-                println("[MicReceiver] In ascolto su porta $micPort (mode=$routingMode) rcvbuf=${socket.receiveBufferSize}")
+                AppDebug.log("[MicReceiver] In ascolto su porta $micPort (mode=$routingMode) rcvbuf=${socket.receiveBufferSize}")
 
                 val reusableShorts = ShortArray(buf.size / 2)
                 var totalPackets = 0L
@@ -861,7 +858,7 @@ object NetworkHandler_v1 {
                         totalPackets++
                         totalBytes += len
                         if (totalPackets == 1L || totalPackets % 200L == 0L) {
-                            println("[MicReceiver] pkt #$totalPackets from ${packet.address.hostAddress}:${packet.port} len=$len totalBytes=$totalBytes")
+                            AppDebug.log("[MicReceiver] pkt #$totalPackets from ${packet.address.hostAddress}:${packet.port} len=$len totalBytes=$totalBytes")
                         }
 
                         when (routingMode) {
@@ -891,7 +888,7 @@ object NetworkHandler_v1 {
                                         val evenLen = len - (len % 2)
                                         currentLine.write(packet.data, 0, evenLen)
                                     } else {
-                                        if (totalPackets == 1L) println("[MicReceiver] ERRORE: SourceDataLine null, mixer non selezionato")
+                                        if (totalPackets == 1L) AppDebug.log("[MicReceiver] ERRORE: SourceDataLine null, mixer non selezionato")
                                     }
                                 }
                             }
@@ -914,7 +911,7 @@ object NetworkHandler_v1 {
                 socket?.close()
             }
         } catch (e: Exception) {
-            if (e !is CancellationException) println("[MicReceiver] errore: ${e.message}")
+            if (e !is CancellationException) AppDebug.log("[MicReceiver] errore: ${e.message}")
         } finally {
             muteCollectorJob?.cancel()
             if (mixActive && localMicMixJob?.isActive != true) {
@@ -1104,7 +1101,7 @@ object NetworkHandler_v1 {
             }
         } catch (_: CancellationException) {
         } catch (e: Exception) {
-            println("[LocalMicMix] error: ${e.message}")
+            AppDebug.log("[LocalMicMix] error: ${e.message}")
         } finally {
             muteCollectorJob?.cancel()
             engineEnableJob?.cancel()
@@ -1151,7 +1148,7 @@ object NetworkHandler_v1 {
                 }
             }
         } catch (e: Exception) {
-            if (e !is CancellationException) println("Mic sender error: ${e.message}")
+            if (e !is CancellationException) AppDebug.log("Mic sender error: ${e.message}")
         } finally {
             socket?.close()
             line.stop(); line.close()
@@ -1470,13 +1467,13 @@ object NetworkHandler_v1 {
             // prima che cancelAndJoin() ritorni al chiamante (stopCurrentStream).
             // invokeOnCompletion era asincrono e causava BindException al riavvio.
             try {
-                println("--- HTTP server on port $httpPort (safariMode=$safariMode) ---")
+                AppDebug.log("---HTTP server on port $httpPort (safariMode=$safariMode) ---")
                 while (isActive) {
                     val sock = try { serverSocket.accept() }
                     catch (_: java.net.SocketTimeoutException) { continue }
                     catch (e: Exception) {
                         if (e !is CancellationException && !serverSocket.isClosed)
-                            println("HTTP accept: ${e.message}")
+                            AppDebug.log("HTTP accept: ${e.message}")
                         break
                     }
                     launch(Dispatchers.IO) {
@@ -1498,7 +1495,7 @@ object NetworkHandler_v1 {
                                     out.write("HTTP/1.1 200 OK\r\nContent-Type: audio/aac\r\nTransfer-Encoding: chunked\r\nCache-Control: no-cache\r\nConnection: keep-alive\r\nAccess-Control-Allow-Origin: *\r\n\r\n".toByteArray())
                                     out.flush()
                                     aacClients.add(out)
-                                    println("--- /stream/aac client: ${sock.inetAddress} ---")
+                                    AppDebug.log("---/stream/aac client: ${sock.inetAddress} ---")
                                     while (isActive && !sock.isClosed) delay(500)
                                 }
                                 path == "/stream/opus" && headers["upgrade"]?.lowercase() == "websocket" -> {
@@ -1509,7 +1506,7 @@ object NetworkHandler_v1 {
                                     )
                                     out.write("HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: $accept\r\n\r\n".toByteArray())
                                     out.flush()
-                                    println("--- /stream/opus WS client: ${sock.inetAddress} ---")
+                                    AppDebug.log("---/stream/opus WS client: ${sock.inetAddress} ---")
                                     // Se l'init segment WebM è già disponibile, invialo subito
                                     // al nuovo client e aggiungilo alla lista attiva.
                                     // Se non è ancora disponibile (encoder non ancora partito)
@@ -1536,7 +1533,7 @@ object NetworkHandler_v1 {
                                 }
                             }
                         } catch (e: Exception) {
-                            if (e !is CancellationException) println("HTTP handler: ${e.message}")
+                            if (e !is CancellationException) AppDebug.log("HTTP handler: ${e.message}")
                         } finally {
                             runCatching { sock.close() }
                         }
@@ -1551,7 +1548,7 @@ object NetworkHandler_v1 {
         val aacEncoderJob = launch(Dispatchers.IO) {
             val codec = org.bytedeco.ffmpeg.global.avcodec.avcodec_find_encoder(
                 org.bytedeco.ffmpeg.global.avcodec.AV_CODEC_ID_AAC
-            ) ?: run { println("AAC codec not found"); return@launch }
+            ) ?: run { AppDebug.log("AAC codec not found"); return@launch }
 
             val ctx = org.bytedeco.ffmpeg.global.avcodec.avcodec_alloc_context3(codec)
             ctx.bit_rate(192_000)
@@ -1613,7 +1610,7 @@ object NetworkHandler_v1 {
                     }
                 }
             } catch (e: Exception) {
-                if (e !is CancellationException) println("AAC encoder error: ${e.message}")
+                if (e !is CancellationException) AppDebug.log("AAC encoder error: ${e.message}")
             } finally {
                 runCatching { org.bytedeco.ffmpeg.global.avutil.av_frame_free(avFrame) }
                 runCatching { org.bytedeco.ffmpeg.global.avcodec.av_packet_free(pkt) }
@@ -1714,7 +1711,7 @@ object NetworkHandler_v1 {
                     }
                 } catch (e: Exception) {
                     if (e !is CancellationException && e !is java.io.IOException)
-                        println("Opus pipe reader error: ${e.message}")
+                        AppDebug.log("Opus pipe reader error: ${e.message}")
                 } finally {
                     runCatching { pipeIn.close() }
                 }
@@ -1737,12 +1734,12 @@ object NetworkHandler_v1 {
                         it.samples       = arrayOf(java.nio.ShortBuffer.wrap(shorts))
                     }
                     try { recorder.record(frame) } catch (e: Exception) {
-                        if (e !is CancellationException) println("Opus record error: ${e.message}")
+                        if (e !is CancellationException) AppDebug.log("Opus record error: ${e.message}")
                         break
                     }
                 }
             } catch (e: Exception) {
-                if (e !is CancellationException) println("Opus encoder error: ${e.message}")
+                if (e !is CancellationException) AppDebug.log("Opus encoder error: ${e.message}")
             } finally {
                 // Order matters: stop recorder (flushes internal buffers into pipe) → close pipe
                 // (unblocks reader) → cancel reader → release native resources.
@@ -1786,7 +1783,7 @@ object NetworkHandler_v1 {
         val destAddress = if (isMulticast) InetAddress.getByName(MULTICAST_GROUP_IP)
         else InetAddress.getByName(getLocalIpAddress())
 
-        println("--- RTP sidecar started on port $port (multicast=$isMulticast) ---")
+        AppDebug.log("---RTP sidecar started on port $port (multicast=$isMulticast) ---")
         try {
             while (isActive) {
                 val pcmLeBytes = queue.poll(200, java.util.concurrent.TimeUnit.MILLISECONDS) ?: continue
@@ -1822,11 +1819,11 @@ object NetworkHandler_v1 {
                 }
             }
         } catch (e: Exception) {
-            if (e !is CancellationException) println("RTP sidecar error: ${e.message}")
+            if (e !is CancellationException) AppDebug.log("RTP sidecar error: ${e.message}")
         } finally {
             socket.close()
             rtpPcmQueue = null
-            println("--- RTP sidecar stopped ---")
+            AppDebug.log("---RTP sidecar stopped ---")
         }
     }
 
@@ -1915,6 +1912,7 @@ object NetworkHandler_v1 {
         rtpPort: Int,
         useNativeEngine: Boolean = true,
         micMixInputInfo: Mixer.Info? = null,
+        onAudioFrame: ((ShortArray) -> Unit)? = null,
         onStatusUpdate: (key: String, args: Array<out Any>) -> Unit
     ) {
         val myGen = lifecycleGeneration.incrementAndGet()
@@ -1926,7 +1924,7 @@ object NetworkHandler_v1 {
                 startServerInstanceLocked(
                     audioSettings, port, isMulticast, capabilities,
                     micRoutingMode, micOutputMixerInfo, micPort, rtpPort,
-                    useNativeEngine, micMixInputInfo, onStatusUpdate
+                    useNativeEngine, micMixInputInfo, onAudioFrame, onStatusUpdate
                 )
             }
         }
@@ -1943,6 +1941,7 @@ object NetworkHandler_v1 {
         rtpPort: Int,
         useNativeEngine: Boolean = true,
         micMixInputInfo: Mixer.Info? = null,
+        onAudioFrame: ((ShortArray) -> Unit)? = null,
         onStatusUpdate: (key: String, args: Array<out Any>) -> Unit
     ) {
         if (micRoutingMode != MicRoutingMode.OFF && !isMulticast) {
@@ -1958,7 +1957,7 @@ object NetworkHandler_v1 {
             if (vol >= 0f) {
                 macOriginalVolume = vol
                 helperEngine.setSystemVolume(0f)
-                println("[Server] macOS: volume salvato ($vol), abbassato a 0")
+                AppDebug.log("[Server] macOS: volume salvato ($vol), abbassato a 0")
             }
         }
 
@@ -2023,6 +2022,7 @@ object NetworkHandler_v1 {
                                     val engine  = serverEngine ?: break
                                     val samples = engine.readFrame() ?: break
                                     if (samples.isEmpty()) continue
+                                    onAudioFrame?.invoke(samples)
 
                                     processEngineFrame(samples, chunkArray, byteBuffer, maxShortsPerPacket, nCh) { bytesToSend ->
                                         byteBuffer.array().copyInto(packetArray, 0, 0, bytesToSend)
@@ -2034,7 +2034,7 @@ object NetworkHandler_v1 {
                                     val grabber = serverGrabber ?: break
                                     val frame = try { grabber.grabSamples() }
                                     catch (e: org.bytedeco.javacv.FFmpegFrameGrabber.Exception) {
-                                        println("Grabber exception (multicast): ${e.message}")
+                                        AppDebug.log("Grabber exception (multicast): ${e.message}")
                                         break
                                     }
                                     if (frame != null) {
@@ -2063,7 +2063,7 @@ object NetworkHandler_v1 {
                                     repeat(3) {
                                         socket.send(DatagramPacket(bye, bye.size, group, port))
                                     }
-                                    println("--- Sent BYE to multicast group ---")
+                                    AppDebug.log("---Sent BYE to multicast group ---")
                                 }
                             }
                         }
@@ -2128,7 +2128,7 @@ object NetworkHandler_v1 {
                                         failures = 0
                                     } catch (_: Exception) {
                                         if (++failures >= 3) {
-                                            println("--- PING failed 3 times, client considered gone ---")
+                                            AppDebug.log("---PING failed 3 times, client considered gone ---")
                                             clientAlive.set(false)
                                         }
                                     }
@@ -2141,7 +2141,7 @@ object NetworkHandler_v1 {
                                         val datagram = socket.receive()
                                         val msg = datagram.packet.readText().trim()
                                         if (msg == "CLIENT_BYE") {
-                                            println("--- Received CLIENT_BYE from $clientAddress ---")
+                                            AppDebug.log("---Received CLIENT_BYE from $clientAddress ---")
                                             clientAlive.set(false)
                                             if (useNativeEngine) {
                                                 runCatching { serverEngine?.stop() }
@@ -2172,6 +2172,7 @@ object NetworkHandler_v1 {
                                         val samples = engine.readFrame() ?: break
                                         if (!clientAlive.get()) break
                                         if (samples.isEmpty()) continue
+                                        onAudioFrame?.invoke(samples)
                                         processEngineFrame(samples, chunkArray, byteBuffer, maxShortsPerPacket, audioSettings.channels) { bytesToSend ->
                                             byteBuffer.array().copyInto(packetArray, 0, 0, bytesToSend)
                                             val packet = buildPacket { writeFully(packetArray, 0, bytesToSend) }
@@ -2200,7 +2201,7 @@ object NetworkHandler_v1 {
                                         val grabber = serverGrabber ?: break
                                         val frame = try { grabber.grabSamples() }
                                         catch (e: org.bytedeco.javacv.FFmpegFrameGrabber.Exception) {
-                                            println("Grabber exception (unicast): ${e.message}")
+                                            AppDebug.log("Grabber exception (unicast): ${e.message}")
                                             break
                                         }
                                         if (!clientAlive.get()) break
@@ -2236,7 +2237,7 @@ object NetworkHandler_v1 {
                                     withContext(NonCancellable) {
                                         runCatching {
                                             socket.send(Datagram(buildPacket { writeText("BYE") }, clientAddress))
-                                            println("--- Sent BYE to $clientAddress ---")
+                                            AppDebug.log("---Sent BYE to $clientAddress ---")
                                         }
                                     }
                                 }
@@ -2292,6 +2293,7 @@ object NetworkHandler_v1 {
         micPort: Int,
         connectionSoundEnabled: Boolean = true,
         disconnectionSoundEnabled: Boolean = true,
+        onAudioFrame: ((ShortArray) -> Unit)? = null,
         onStatusUpdate: (key: String, args: Array<out Any>) -> Unit
     ) {
         // Protocol selection: WFAS > RTP > HTTP
@@ -2305,7 +2307,7 @@ object NetworkHandler_v1 {
             onStatusUpdate("status_opening_browser", arrayOf(url))
             runCatching { openUrl(url) }
                 .onFailure { e ->
-                    println("Cannot open browser: ${e.message}")
+                    AppDebug.log("Cannot open browser: ${e.message}")
                     onStatusUpdate("status_error_client", arrayOf(e.message ?: "browser unavailable"))
                 }
             return
@@ -2316,30 +2318,30 @@ object NetworkHandler_v1 {
 
         streamingJob = scope.launch {
             var sourceDataLine: SourceDataLine? = null
-            println("[CLIENT] launchClientInstance avviato: server=${serverInfo.ip}:${serverInfo.port} isMulticast=${serverInfo.isMulticast} sendMic=$sendMicrophone mixer='${selectedMixerInfo.name}'")
+            AppDebug.log("[CLIENT] launchClientInstance avviato: server=${serverInfo.ip}:${serverInfo.port} isMulticast=${serverInfo.isMulticast} sendMic=$sendMicrophone mixer='${selectedMixerInfo.name}'")
             try {
                 if (!serverInfo.isMulticast) { // Unicast
                     val remoteAddress = InetSocketAddress(serverInfo.ip, serverInfo.port)
-                    println("[CLIENT][UNICAST] connessione unicast verso $remoteAddress")
+                    AppDebug.log("[CLIENT][UNICAST] connessione unicast verso $remoteAddress")
                     aSocket(SelectorManager(Dispatchers.IO)).udp().bind().use { socket ->
                         sourceDataLine = prepareSourceDataLine(selectedMixerInfo, audioSettings)
                         sourceDataLine?.start()
-                        println("[CLIENT][UNICAST] SourceDataLine avviata, invio HELLO a $remoteAddress")
+                        AppDebug.log("[CLIENT][UNICAST] SourceDataLine avviata, invio HELLO a $remoteAddress")
 
                         onStatusUpdate("status_contacting_server", arrayOf(remoteAddress))
                         socket.send(Datagram(buildPacket { writeText(CLIENT_HELLO_MESSAGE) }, remoteAddress))
-                        println("[CLIENT][UNICAST] HELLO inviato, attendo ACK (timeout 15s)...")
+                        AppDebug.log("[CLIENT][UNICAST] HELLO inviato, attendo ACK (timeout 15s)...")
 
                         onStatusUpdate("status_waiting_ack", emptyArray())
                         val ackDatagram = withTimeout(15000) { socket.receive() }
                         val ackText = ackDatagram.packet.readText().trim()
-                        println("[CLIENT][UNICAST] ACK ricevuto da ${ackDatagram.address}: '$ackText'")
+                        AppDebug.log("[CLIENT][UNICAST] ACK ricevuto da ${ackDatagram.address}: '$ackText'")
                         if (ackText != "HELLO_ACK") {
-                            println("[CLIENT][UNICAST] ERRORE handshake: risposta inattesa '$ackText'")
+                            AppDebug.log("[CLIENT][UNICAST] ERRORE handshake: risposta inattesa '$ackText'")
                             onStatusUpdate("status_handshake_failed", emptyArray())
                             return@use
                         }
-                        println("[CLIENT][UNICAST] handshake OK, streaming avviato da $remoteAddress")
+                        AppDebug.log("[CLIENT][UNICAST] handshake OK, streaming avviato da $remoteAddress")
                         onStatusUpdate("status_connected_streaming_from", arrayOf(remoteAddress))
                         if (connectionSoundEnabled) playConnectionSound()
 
@@ -2355,10 +2357,10 @@ object NetworkHandler_v1 {
                             while (isActive && serverAlive.get()) {
                                 delay(1000)
                                 val elapsed = System.currentTimeMillis() - lastPingReceived
-                                println("[CLIENT][UNICAST] watchdog: ${elapsed}ms dall'ultimo PING (timeout=${pingTimeoutMs}ms) audioPkts=$audioPackets totalAudioBytes=$totalAudioBytes")
+                                AppDebug.log("[CLIENT][UNICAST] watchdog: ${elapsed}ms dall'ultimo PING (timeout=${pingTimeoutMs}ms) audioPkts=$audioPackets totalAudioBytes=$totalAudioBytes")
                                 if (elapsed > pingTimeoutMs) {
-                                    println("--- Server timeout: no PING for ${pingTimeoutMs}ms ---")
-                                    println("[CLIENT][UNICAST] TIMEOUT: nessun PING in ${pingTimeoutMs}ms, disconnessione")
+                                    AppDebug.log("---Server timeout: no PING for ${pingTimeoutMs}ms ---")
+                                    AppDebug.log("[CLIENT][UNICAST] TIMEOUT: nessun PING in ${pingTimeoutMs}ms, disconnessione")
                                     onStatusUpdate("status_server_disconnected", emptyArray())
                                     if (disconnectionSoundEnabled) playDisconnectionSound()
                                     serverAlive.set(false)
@@ -2378,9 +2380,16 @@ object NetworkHandler_v1 {
                                     audioPackets++
                                     totalAudioBytes += pcmLen
                                     if (audioPackets == 1L || audioPackets % 500L == 0L) {
-                                        println("[CLIENT][UNICAST] audioPkt #$audioPackets size=${bytes.size} pcmLen=$pcmLen totalAudioBytes=$totalAudioBytes SDL=${sourceDataLine?.isActive}")
+                                        AppDebug.log("[CLIENT][UNICAST] audioPkt #$audioPackets size=${bytes.size} pcmLen=$pcmLen totalAudioBytes=$totalAudioBytes SDL=${sourceDataLine?.isActive}")
                                     }
                                     sourceDataLine?.write(bytes, AUDIO_HEADER_SIZE, pcmLen)
+                                    if (onAudioFrame != null && pcmLen >= 2) {
+                                        val shorts = ShortArray(pcmLen / 2)
+                                        java.nio.ByteBuffer.wrap(bytes, AUDIO_HEADER_SIZE, pcmLen)
+                                            .order(java.nio.ByteOrder.LITTLE_ENDIAN)
+                                            .asShortBuffer().get(shorts)
+                                        onAudioFrame.invoke(shorts)
+                                    }
                                 } else {
                                     val text = bytes.toString(Charsets.UTF_8).trim()
                                     when (text) {
@@ -2388,33 +2397,33 @@ object NetworkHandler_v1 {
                                             lastPingReceived = System.currentTimeMillis()
                                             pingCount++
                                             if (pingCount == 1L || pingCount % 10L == 0L) {
-                                                println("[CLIENT][UNICAST] PING #$pingCount ricevuto da ${datagram.address}")
+                                                AppDebug.log("[CLIENT][UNICAST] PING #$pingCount ricevuto da ${datagram.address}")
                                             }
                                         }
                                         "BYE"  -> {
-                                            println("--- Received BYE from server ---")
-                                            println("[CLIENT][UNICAST] BYE ricevuto, disconnessione pulita")
+                                            AppDebug.log("---Received BYE from server ---")
+                                            AppDebug.log("[CLIENT][UNICAST] BYE ricevuto, disconnessione pulita")
                                             onStatusUpdate("status_server_disconnected", emptyArray())
                                             if (disconnectionSoundEnabled) playDisconnectionSound()
                                             serverAlive.set(false)
                                         }
-                                        else -> println("[CLIENT][UNICAST] msg sconosciuto (#$receivedPackets): '$text'")
+                                        else -> AppDebug.log("[CLIENT][UNICAST] msg sconosciuto (#$receivedPackets): '$text'")
                                     }
                                 }
                             }
                         } finally {
-                            println("[CLIENT][UNICAST] loop terminato: receivedPackets=$receivedPackets audioPackets=$audioPackets pingCount=$pingCount totalAudioBytes=$totalAudioBytes")
+                            AppDebug.log("[CLIENT][UNICAST] loop terminato: receivedPackets=$receivedPackets audioPackets=$audioPackets pingCount=$pingCount totalAudioBytes=$totalAudioBytes")
                             watchdogJob.cancel()
                             withContext(NonCancellable) {
                                 runCatching {
-                                    println("[CLIENT][UNICAST] invio CLIENT_BYE a $remoteAddress")
+                                    AppDebug.log("[CLIENT][UNICAST] invio CLIENT_BYE a $remoteAddress")
                                     socket.send(Datagram(buildPacket { writeText("CLIENT_BYE") }, remoteAddress))
                                 }
                             }
                         }
                     }
                 } else { // Multicast
-                    println("[CLIENT][MULTICAST] modalità multicast, porta=${serverInfo.port} ip=${serverInfo.ip}")
+                    AppDebug.log("[CLIENT][MULTICAST] modalità multicast, porta=${serverInfo.port} ip=${serverInfo.ip}")
                     onStatusUpdate("status_joining_multicast", arrayOf(serverInfo.port))
                     val groupAddress = InetAddress.getByName(MULTICAST_GROUP_IP)
                     MulticastSocket(null as java.net.SocketAddress?).use { socket ->
@@ -2422,17 +2431,17 @@ object NetworkHandler_v1 {
                         socket.bind(java.net.InetSocketAddress(serverInfo.port))
                         val netIface = getActiveNetworkInterface()
                         if (netIface != null) {
-                            println("[CLIENT][MULTICAST] join group $groupAddress via iface ${netIface.name}")
+                            AppDebug.log("[CLIENT][MULTICAST] join group $groupAddress via iface ${netIface.name}")
                             socket.joinGroup(java.net.InetSocketAddress(groupAddress, 0), netIface)
                         } else {
-                            println("[CLIENT][MULTICAST] join group $groupAddress (nessuna iface specifica)")
+                            AppDebug.log("[CLIENT][MULTICAST] join group $groupAddress (nessuna iface specifica)")
                             socket.joinGroup(groupAddress)
                         }
                         val effectiveAudioSettings = serverInfo.serverAudioSettings ?: audioSettings
-                        println("[CLIENT][MULTICAST] effectiveAudioSettings: sr=${effectiveAudioSettings.sampleRate} ch=${effectiveAudioSettings.channels} bd=${effectiveAudioSettings.bitDepth}")
+                        AppDebug.log("[CLIENT][MULTICAST] effectiveAudioSettings: sr=${effectiveAudioSettings.sampleRate} ch=${effectiveAudioSettings.channels} bd=${effectiveAudioSettings.bitDepth}")
                         sourceDataLine = prepareSourceDataLine(selectedMixerInfo, effectiveAudioSettings)
                         sourceDataLine?.start()
-                        println("[CLIENT][MULTICAST] SourceDataLine avviata, attendo pacchetti multicast...")
+                        AppDebug.log("[CLIENT][MULTICAST] SourceDataLine avviata, attendo pacchetti multicast...")
                         onStatusUpdate("status_multicast_streaming", arrayOf(serverInfo.port))
                         if (connectionSoundEnabled) playConnectionSound()
                         socket.soTimeout = 2000
@@ -2453,12 +2462,21 @@ object NetworkHandler_v1 {
                                 mcAudioPkts++
                                 mcTotalBytes += aligned
                                 if (mcAudioPkts == 1L || mcAudioPkts % 500L == 0L) {
-                                    println("[CLIENT][MULTICAST] audioPkt #$mcAudioPkts len=${packet.length} pcmLen=$pcmLen aligned=$aligned totalBytes=$mcTotalBytes")
+                                    AppDebug.log("[CLIENT][MULTICAST] audioPkt #$mcAudioPkts len=${packet.length} pcmLen=$pcmLen aligned=$aligned totalBytes=$mcTotalBytes")
                                 }
-                                if (aligned > 0) sourceDataLine?.write(packet.data, AUDIO_HEADER_SIZE, aligned)
+                                if (aligned > 0) {
+                                    sourceDataLine?.write(packet.data, AUDIO_HEADER_SIZE, aligned)
+                                    if (onAudioFrame != null) {
+                                        val shorts = ShortArray(aligned / 2)
+                                        java.nio.ByteBuffer.wrap(packet.data, AUDIO_HEADER_SIZE, aligned)
+                                            .order(java.nio.ByteOrder.LITTLE_ENDIAN)
+                                            .asShortBuffer().get(shorts)
+                                        onAudioFrame.invoke(shorts)
+                                    }
+                                }
                             } else if (packet.length >= 3 && String(packet.data, 0, minOf(packet.length, 3), Charsets.UTF_8) == "BYE") {
-                                println("--- Received BYE from multicast server ---")
-                                println("[CLIENT][MULTICAST] BYE ricevuto dopo $mcAudioPkts pacchetti audio ($mcTotalBytes bytes totali)")
+                                AppDebug.log("---Received BYE from multicast server ---")
+                                AppDebug.log("[CLIENT][MULTICAST] BYE ricevuto dopo $mcAudioPkts pacchetti audio ($mcTotalBytes bytes totali)")
                                 onStatusUpdate("status_server_disconnected", emptyArray())
                                 if (disconnectionSoundEnabled) playDisconnectionSound()
                                 break
@@ -2467,20 +2485,20 @@ object NetworkHandler_v1 {
                     }
                 }
             } catch (_: TimeoutCancellationException) {
-                println("[CLIENT] TIMEOUT: nessuna risposta dal server entro 15s")
+                AppDebug.log("[CLIENT] TIMEOUT: nessuna risposta dal server entro 15s")
                 onStatusUpdate("status_server_no_response", emptyArray())
             } catch (e: Exception) {
                 if (e !is CancellationException) {
-                    println("[CLIENT] ECCEZIONE: ${e.javaClass.simpleName}: ${e.message}")
+                    AppDebug.log("[CLIENT] ECCEZIONE: ${e.javaClass.simpleName}: ${e.message}")
                     e.printStackTrace()
                     onStatusUpdate("Error: %s", arrayOf(e.message ?: e.toString()))
                 }
             } finally {
-                println("[CLIENT] finally: chiusura SourceDataLine")
+                AppDebug.log("[CLIENT] finally: chiusura SourceDataLine")
                 sourceDataLine?.drain()
                 sourceDataLine?.stop()
                 sourceDataLine?.close()
-                println("[CLIENT] launchClientInstance terminato")
+                AppDebug.log("[CLIENT] launchClientInstance terminato")
             }
         }
     }
@@ -2490,10 +2508,10 @@ object NetworkHandler_v1 {
         val format       = audioSettings.toAudioFormat()
         val dataLineInfo = DataLine.Info(SourceDataLine::class.java, format)
 
-        println("[CLIENT] prepareSourceDataLine: mixer='${mixerInfo.name}' format=$format sr=${audioSettings.sampleRate} ch=${audioSettings.channels} bd=${audioSettings.bitDepth}")
+        AppDebug.log("[CLIENT] prepareSourceDataLine: mixer='${mixerInfo.name}' format=$format sr=${audioSettings.sampleRate} ch=${audioSettings.channels} bd=${audioSettings.bitDepth}")
 
         if (!mixer.isLineSupported(dataLineInfo)) {
-            println("[CLIENT] ERRORE: mixer '${mixerInfo.name}' NON supporta il formato $format")
+            AppDebug.log("[CLIENT] ERRORE: mixer '${mixerInfo.name}' NON supporta il formato $format")
             return null
         }
 
@@ -2503,26 +2521,26 @@ object NetworkHandler_v1 {
             .let { it - (it % frameSize) }
             .coerceAtLeast(frameSize * 256)
 
-        println("[CLIENT] SourceDataLine: frameSize=$frameSize targetLatencyMs=${targetLatencyMs}ms targetBufferBytes=$targetBytes")
+        AppDebug.log("[CLIENT] SourceDataLine: frameSize=$frameSize targetLatencyMs=${targetLatencyMs}ms targetBufferBytes=$targetBytes")
         return (mixer.getLine(dataLineInfo) as SourceDataLine).also { sdl ->
             sdl.open(format, targetBytes)
-            println("[CLIENT] SourceDataLine aperta: bufferSize=${sdl.bufferSize} format=${sdl.format} latenzaReale=${sdl.bufferSize * 1000 / (audioSettings.sampleRate.toInt() * frameSize)}ms")
+            AppDebug.log("[CLIENT] SourceDataLine aperta: bufferSize=${sdl.bufferSize} format=${sdl.format} latenzaReale=${sdl.bufferSize * 1000 / (audioSettings.sampleRate.toInt() * frameSize)}ms")
 
             val gainInfo = sdl.controls
                 .filterIsInstance<javax.sound.sampled.FloatControl>()
                 .find { it.type == javax.sound.sampled.FloatControl.Type.MASTER_GAIN }
             if (gainInfo != null) {
-                println("[CLIENT] SDL MASTER_GAIN: ${gainInfo.value} dB (min=${gainInfo.minimum} max=${gainInfo.maximum})")
+                AppDebug.log("[CLIENT] SDL MASTER_GAIN: ${gainInfo.value} dB (min=${gainInfo.minimum} max=${gainInfo.maximum})")
             } else {
-                println("[CLIENT] SDL MASTER_GAIN: controllo non disponibile")
+                AppDebug.log("[CLIENT] SDL MASTER_GAIN: controllo non disponibile")
             }
             val muteInfo = sdl.controls
                 .filterIsInstance<javax.sound.sampled.BooleanControl>()
                 .find { it.type == javax.sound.sampled.BooleanControl.Type.MUTE }
             if (muteInfo != null) {
-                println("[CLIENT] SDL MUTE: ${muteInfo.value}")
+                AppDebug.log("[CLIENT] SDL MUTE: ${muteInfo.value}")
             } else {
-                println("[CLIENT] SDL MUTE: controllo non disponibile")
+                AppDebug.log("[CLIENT] SDL MUTE: controllo non disponibile")
             }
 
             sdl.start()
@@ -2539,7 +2557,7 @@ object NetworkHandler_v1 {
             val beepBytes = ByteArray(beepBuf.size * 2)
             java.nio.ByteBuffer.wrap(beepBytes).order(java.nio.ByteOrder.LITTLE_ENDIAN).asShortBuffer().put(beepBuf)
             val written = sdl.write(beepBytes, 0, beepBytes.size)
-            println("[CLIENT] SDL beep di test: ${beepDurationMs}ms a ${beepHz}Hz, scritti=$written bytes — SE SENTI UN BIP IL DEVICE E' CORRETTO")
+            AppDebug.log("[CLIENT] SDL beep di test: ${beepDurationMs}ms a ${beepHz}Hz, scritti=$written bytes — SE SENTI UN BIP IL DEVICE E' CORRETTO")
         }
     }
 
@@ -2580,7 +2598,7 @@ object NetworkHandler_v1 {
             val isMacOS = System.getProperty("os.name").lowercase().let { it.contains("mac") || it.contains("darwin") }
             if (isMacOS && AudioEngine.loadLibrary()) {
                 AudioEngine().setSystemVolume(savedVol)
-                println("[Server] macOS: volume ripristinato a $savedVol")
+                AppDebug.log("[Server] macOS: volume ripristinato a $savedVol")
             }
         }
     }
@@ -2712,7 +2730,16 @@ private fun loadTrayIconPainter(): Painter {
     return BitmapPainter(blank.toComposeImageBitmap())
 }
 
-fun main() = application {
+fun main(args: Array<String>) {
+    System.setOut(java.io.PrintStream(System.out, true, "UTF-8"))
+    System.setErr(java.io.PrintStream(System.err, true, "UTF-8"))
+
+    val cliArgs = CliArgs.parse(args)
+
+    if (cliArgs.printHelp)    { CliArgs.printHelp();    return }
+    if (cliArgs.printVersion) { CliArgs.printVersion(); return }
+    if (cliArgs.printFred)    { CliArgs.printFred();    return }
+
     // FIX CRASH: disabilita AVX-512/AVX3 — causa EXCEPTION_ACCESS_VIOLATION in
     // StubRoutines::jlong_disjoint_arraycopy_avx3 durante la copia di buffer audio
     // nativi su alcune CPU Windows con la JVM Temurin 17.
@@ -2724,6 +2751,15 @@ fun main() = application {
     org.bytedeco.javacv.FFmpegLogCallback.set()
     org.bytedeco.ffmpeg.global.avdevice.avdevice_register_all()
 
+    val isHeadless = java.awt.GraphicsEnvironment.isHeadless()
+    if (cliArgs.runMode != RunMode.GUI || isHeadless) {
+        runCli(cliArgs)
+    } else {
+        startGuiApplication(cliArgs)
+    }
+}
+
+fun startGuiApplication(cliArgs: CliArgs) = application {
     val loadedSettings = SettingsRepository.loadSettings()
     var appSettings    by remember { mutableStateOf(loadedSettings.app) }
     var audioSettings  by remember { mutableStateOf(loadedSettings.audio) }
@@ -2740,6 +2776,7 @@ fun main() = application {
         SettingsRepository.saveSettings(AllSettings(appSettings, audioSettings, streamingPort, micPort, micRoutingMode.name))
     }
 
+    var showWelcome        by remember { mutableStateOf(!SettingsRepository.hasSeenWelcome()) }
     var showSettings       by remember { mutableStateOf(false) }
     var isServer           by remember { mutableStateOf(true) }
     val discoveredDevices  = remember { mutableStateMapOf<String, ServerInfo>() }
@@ -2897,7 +2934,7 @@ fun main() = application {
                 linuxTray.menu.add(quitItem)
 
             } else {
-                println("Attenzione: Dorkbox SystemTray non è supportato su questo sistema/DE.")
+                AppDebug.log("Attenzione: Dorkbox SystemTray non e' supportato su questo sistema/DE.")
             }
         }
     }
@@ -2988,6 +3025,88 @@ fun main() = application {
                     }
                 }
 
+                LaunchedEffect(Unit) {
+                    IpcServer.start(cliArgs)
+                }
+
+                LaunchedEffect(Unit) {
+                    delay(300)
+                    when (cliArgs.guiInitMode) {
+                        "server" -> {
+                            if (isStreaming) return@LaunchedEffect
+                            isServer = true
+                            isStreaming = true
+                            connectionStatus = "Starting Server..."
+
+                            val port = cliArgs.port
+                            val mic  = cliArgs.micPort
+                            val rtp  = cliArgs.rtpPort
+
+                            if (cliArgs.multicast || cliArgs.rtp || cliArgs.http)
+                                isMulticastMode = true
+
+                            val protocols = mutableSetOf(StreamingProtocol.WFAS)
+                            if (cliArgs.rtp)  protocols += StreamingProtocol.RTP
+                            if (cliArgs.http) protocols += StreamingProtocol.HTTP
+                            val caps = ServerCapabilities(
+                                protocols  = protocols,
+                                httpPort   = if (cliArgs.http) cliArgs.httpPort else null,
+                                safariMode = cliArgs.httpSafari
+                            )
+
+                            val micMode = if (cliArgs.mic) cliArgs.micRouting else micRoutingMode
+
+                            NetworkHandler_v1.launchServerInstance(
+                                audioSettings, port, isMulticastMode, caps,
+                                micMode, selectedServerMicOutput, mic, rtp,
+                                cliArgs.useNativeEngine, selectedMicMixInput
+                            ) { key, args ->
+                                if (key == "error_virtual_driver_missing") {
+                                    isStreaming = false
+                                    virtualDriverStatus = NetworkHandler_v1.checkVirtualDriverStatus(cliArgs.useNativeEngine)
+                                    connectionStatus = Strings.get("status_inactive")
+                                } else if (key == "status_client_disconnected") {
+                                    scope.launch {
+                                        NetworkHandler_v1.stopCurrentStream()
+                                        isStreaming = false
+                                        connectionStatus = Strings.get("status_inactive")
+                                    }
+                                } else {
+                                    connectionStatus = if (args.isEmpty()) key else String.format(key, *args)
+                                }
+                            }
+
+                            if (cliArgs.volume != null) NetworkHandler_v1.setServerVolume(cliArgs.volume)
+                            if (cliArgs.mute)           NetworkHandler_v1.isMicMuted.value = true
+                        }
+
+                        "client" -> {
+                            if (isStreaming || selectedOutputDevice == null) return@LaunchedEffect
+                            isServer = false
+                            isStreaming = true
+
+                            val serverInfo = if (cliArgs.serverIp != null) {
+                                ServerInfo(ip = cliArgs.serverIp, isMulticast = false, port = cliArgs.port)
+                            } else {
+                                discoveredDevices.values.firstOrNull()
+                            } ?: return@LaunchedEffect
+
+                            connectionStatus = "Connecting to ${serverInfo.ip}..."
+                            NetworkHandler_v1.endDeviceDiscovery()
+                            NetworkHandler_v1.launchClientInstance(
+                                audioSettings, serverInfo, selectedOutputDevice!!,
+                                cliArgs.mic, selectedClientMic, cliArgs.micPort,
+                                appSettings.connectionSoundEnabled,
+                                appSettings.disconnectionSoundEnabled,
+                                onStatusUpdate = clientStatusHandler
+                            )
+
+                            if (cliArgs.volume != null) NetworkHandler_v1.setServerVolume(cliArgs.volume)
+                            if (cliArgs.mute)           NetworkHandler_v1.isMicMuted.value = true
+                        }
+                    }
+                }
+
                 LaunchedEffect(isStreaming) {
                     if (!isStreaming) {
                         lastDisconnectTime = System.currentTimeMillis()
@@ -3022,7 +3141,7 @@ fun main() = application {
                                         sendMicrophone, selectedClientMic, mic,
                                         appSettings.connectionSoundEnabled,
                                         appSettings.disconnectionSoundEnabled,
-                                        clientStatusHandler
+                                        onStatusUpdate = clientStatusHandler
                                     )
                                     break
                                 }
@@ -3097,7 +3216,7 @@ fun main() = application {
                                         sendMicrophone, selectedClientMic, mic,
                                         appSettings.connectionSoundEnabled,
                                         appSettings.disconnectionSoundEnabled,
-                                        clientStatusHandler
+                                        onStatusUpdate = clientStatusHandler
                                     )
                                 }
                             },
@@ -3163,7 +3282,7 @@ fun main() = application {
                                     sendMicrophone, selectedClientMic, mic,
                                     appSettings.connectionSoundEnabled,
                                     appSettings.disconnectionSoundEnabled,
-                                    clientStatusHandler
+                                    onStatusUpdate = clientStatusHandler
                                 )
                             },
                             onRefreshDevices = {
@@ -3203,7 +3322,16 @@ fun main() = application {
                             onStreamingPortChange  = { streamingPort  = it },
                             onMicPortChange        = { micPort        = it },
                             onClose                = { showSettings   = false },
-                            onCustomColorChange    = { color -> appSettings = appSettings.copy(customThemeColor = color) }
+                            onCustomColorChange    = { color -> appSettings = appSettings.copy(customThemeColor = color) },
+                            onShowWelcome          = { showSettings = false; showWelcome = true }
+                        )
+
+                        WelcomeScreen(
+                            visible   = showWelcome,
+                            onDismiss = {
+                                showWelcome = false
+                                SettingsRepository.markWelcomeSeen()
+                            }
                         )
                     }
                 }

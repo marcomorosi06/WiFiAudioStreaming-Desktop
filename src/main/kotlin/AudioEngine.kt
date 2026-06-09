@@ -107,7 +107,6 @@ class AudioEngine(
 
                 System.load(tempFile.absolutePath)
                 libraryLoaded = true
-                println("[AudioEngine] Libreria caricata da $resourcePath")
                 true
             } catch (e: UnsatisfiedLinkError) {
                 loadError = e.message ?: "UnsatisfiedLinkError senza messaggio"

@@ -23,6 +23,8 @@ import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.shape.CircleShape
@@ -411,6 +413,165 @@ fun VirtualDriverBanner(status: VirtualDriverStatus.Missing) {
 // ==               SCHERMATA IMPOSTAZIONI                        ==
 // =================================================================
 
+@Composable
+fun WelcomeScreen(visible: Boolean, onDismiss: () -> Unit) {
+    var cliInstallResult by remember { mutableStateOf<CliPathInstaller.InstallResult?>(null) }
+
+    AnimatedVisibility(
+        visible = visible,
+        enter = fadeIn(animationSpec = tween(400)) + scaleIn(initialScale = 0.92f),
+        exit  = fadeOut(animationSpec = tween(300)) + scaleOut(targetScale = 0.92f)
+    ) {
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(MaterialTheme.colorScheme.background),
+            contentAlignment = Alignment.Center
+        ) {
+            Column(
+                modifier = Modifier
+                    .widthIn(max = 480.dp)
+                    .fillMaxHeight()
+                    .padding(horizontal = 32.dp),
+                horizontalAlignment = Alignment.CenterHorizontally
+            ) {
+                Column(
+                    modifier = Modifier
+                        .weight(1f)
+                        .verticalScroll(rememberScrollState())
+                        .padding(top = 32.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.spacedBy(20.dp)
+                ) {
+                    Icon(
+                        Icons.Outlined.WifiTethering,
+                        contentDescription = null,
+                        modifier = Modifier.size(64.dp),
+                        tint = MaterialTheme.colorScheme.primary
+                    )
+
+                    Text(
+                        text = stringResource("welcome_title"),
+                        style = MaterialTheme.typography.headlineMedium,
+                        fontWeight = FontWeight.Bold,
+                        textAlign = TextAlign.Center
+                    )
+
+                    Text(
+                        text = stringResource("welcome_thanks"),
+                        style = MaterialTheme.typography.bodyLarge,
+                        textAlign = TextAlign.Center,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+
+                    HorizontalDivider()
+
+                    ElevatedCard(modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(16.dp)) {
+                        Column(modifier = Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                                Icon(Icons.Outlined.PhoneAndroid, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
+                                Text(stringResource("welcome_android_title"), style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+                            }
+                            Text(
+                                text = stringResource("welcome_android_body"),
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                            FilledTonalButton(
+                                onClick = { openUrl("https://github.com/marcomorosi06/WiFiAudioStreaming-Android/releases") },
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Icon(Icons.Outlined.OpenInBrowser, contentDescription = null, modifier = Modifier.size(18.dp))
+                                Spacer(Modifier.width(8.dp))
+                                Text(stringResource("welcome_android_btn"))
+                            }
+                        }
+                    }
+
+                    ElevatedCard(modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(16.dp)) {
+                        Column(modifier = Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                                Icon(Icons.Outlined.Terminal, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
+                                Text(stringResource("welcome_cli_title"), style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+                            }
+                            Text(
+                                text = stringResource("welcome_cli_body"),
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+
+                            val installResult = cliInstallResult
+                            when (installResult) {
+                                is CliPathInstaller.InstallResult.Success -> {
+                                    FilledTonalButton(
+                                        onClick = {},
+                                        enabled = false,
+                                        modifier = Modifier.fillMaxWidth(),
+                                        colors = ButtonDefaults.filledTonalButtonColors(
+                                            disabledContainerColor = MaterialTheme.colorScheme.primaryContainer,
+                                            disabledContentColor   = MaterialTheme.colorScheme.onPrimaryContainer
+                                        )
+                                    ) {
+                                        Icon(Icons.Outlined.CheckCircle, contentDescription = null, modifier = Modifier.size(18.dp))
+                                        Spacer(Modifier.width(8.dp))
+                                        Text(stringResource("cli_install_success_title"))
+                                    }
+                                }
+                                is CliPathInstaller.InstallResult.TerminalLaunched -> {
+                                    FilledTonalButton(
+                                        onClick = {},
+                                        enabled = false,
+                                        modifier = Modifier.fillMaxWidth()
+                                    ) {
+                                        Icon(Icons.Outlined.OpenInNew, contentDescription = null, modifier = Modifier.size(18.dp))
+                                        Spacer(Modifier.width(8.dp))
+                                        Text(stringResource("cli_install_terminal_title"))
+                                    }
+                                }
+                                is CliPathInstaller.InstallResult.Failure -> {
+                                    OutlinedButton(
+                                        onClick = { cliInstallResult = CliPathInstaller.install() },
+                                        modifier = Modifier.fillMaxWidth(),
+                                        colors = ButtonDefaults.outlinedButtonColors(
+                                            contentColor = MaterialTheme.colorScheme.error
+                                        ),
+                                        border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.error)
+                                    ) {
+                                        Icon(Icons.Outlined.ErrorOutline, contentDescription = null, modifier = Modifier.size(18.dp))
+                                        Spacer(Modifier.width(8.dp))
+                                        Text(stringResource("cli_install_failure_title"))
+                                    }
+                                }
+                                null -> {
+                                    OutlinedButton(
+                                        onClick = { cliInstallResult = CliPathInstaller.install() },
+                                        modifier = Modifier.fillMaxWidth()
+                                    ) {
+                                        Icon(Icons.Outlined.Download, contentDescription = null, modifier = Modifier.size(18.dp))
+                                        Spacer(Modifier.width(8.dp))
+                                        Text(stringResource("welcome_cli_btn"))
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    Spacer(Modifier.height(4.dp))
+                }
+
+                Button(
+                    onClick = onDismiss,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(vertical = 16.dp)
+                ) {
+                    Text(stringResource("welcome_get_started"))
+                }
+            }
+        }
+    }
+}
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun SettingsScreen(
@@ -424,10 +585,13 @@ fun SettingsScreen(
     onStreamingPortChange: (String) -> Unit,
     onMicPortChange: (String) -> Unit,
     onCustomColorChange: (Long?) -> Unit,
-    onClose: () -> Unit
+    onClose: () -> Unit,
+    onShowWelcome: () -> Unit = {}
 ) {
     var linuxAutostartInfo by remember { mutableStateOf<String?>(null) }
     var showResetConfirmDialog by remember { mutableStateOf(false) }
+    var cliInstallResult by remember { mutableStateOf<CliPathInstaller.InstallResult?>(null) }
+    var cliIsInstalled by remember { mutableStateOf(CliPathInstaller.isInstalled()) }
 
     if (showResetConfirmDialog) {
         AlertDialog(
@@ -472,6 +636,41 @@ fun SettingsScreen(
             },
             confirmButton = {
                 TextButton(onClick = { linuxAutostartInfo = null }) { Text(stringResource("ok")) }
+            }
+        )
+    }
+
+    if (cliInstallResult != null) {
+        val result = cliInstallResult!!
+        AlertDialog(
+            onDismissRequest = { cliInstallResult = null },
+            icon = {
+                Icon(
+                    if (result is CliPathInstaller.InstallResult.Failure) Icons.Default.Error
+                    else Icons.Default.CheckCircle,
+                    contentDescription = null
+                )
+            },
+            title = {
+                Text(
+                    when (result) {
+                        is CliPathInstaller.InstallResult.Success          -> stringResource("cli_install_success_title")
+                        is CliPathInstaller.InstallResult.TerminalLaunched -> stringResource("cli_install_terminal_title")
+                        is CliPathInstaller.InstallResult.Failure          -> stringResource("cli_install_failure_title")
+                    }
+                )
+            },
+            text = {
+                Text(
+                    when (result) {
+                        is CliPathInstaller.InstallResult.Success          -> stringResource("cli_install_success_body")
+                        is CliPathInstaller.InstallResult.TerminalLaunched -> stringResource("cli_install_terminal_body")
+                        is CliPathInstaller.InstallResult.Failure          -> result.reason
+                    }
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = { cliInstallResult = null }) { Text(stringResource("ok")) }
             }
         )
     }
@@ -771,6 +970,60 @@ fun SettingsScreen(
                     }
                 }
                 item {
+                    SettingsGroup(title = stringResource("cli_group_title"), icon = Icons.Outlined.Terminal) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            Column(modifier = Modifier.weight(1f).padding(end = 16.dp)) {
+                                Text(
+                                    text = stringResource("cli_install_title"),
+                                    style = MaterialTheme.typography.bodyLarge
+                                )
+                                Spacer(Modifier.height(2.dp))
+                                Text(
+                                    text = if (cliIsInstalled)
+                                        stringResource("cli_status_installed")
+                                    else
+                                        stringResource("cli_status_not_installed"),
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = if (cliIsInstalled)
+                                        MaterialTheme.colorScheme.primary
+                                    else
+                                        MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                                Spacer(Modifier.height(4.dp))
+                                Text(
+                                    text = stringResource("cli_install_desc"),
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                            Button(
+                                onClick = {
+                                    val result = CliPathInstaller.install()
+                                    cliInstallResult = result
+                                    if (result is CliPathInstaller.InstallResult.Success) {
+                                        cliIsInstalled = true
+                                    }
+                                }
+                            ) {
+                                Icon(
+                                    if (cliIsInstalled) Icons.Outlined.Refresh else Icons.Outlined.Download,
+                                    contentDescription = null,
+                                    modifier = Modifier.size(18.dp)
+                                )
+                                Spacer(Modifier.width(6.dp))
+                                Text(
+                                    if (cliIsInstalled) stringResource("cli_btn_update")
+                                    else stringResource("cli_btn_install")
+                                )
+                            }
+                        }
+                    }
+                }
+                item {
                     SettingsGroup(title = stringResource("license"), icon = Icons.Outlined.Gavel) {
                         InfoSetting(
                             title = stringResource("license_info_title"),
@@ -820,6 +1073,17 @@ fun SettingsScreen(
                             }
                         )
                     }
+                }
+                item {
+                    OutlinedButton(
+                        onClick = { onShowWelcome(); onClose() },
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Icon(Icons.Outlined.Celebration, contentDescription = null, modifier = Modifier.size(18.dp))
+                        Spacer(Modifier.width(8.dp))
+                        Text(stringResource("show_welcome_screen"))
+                    }
+                    Spacer(Modifier.height(8.dp))
                 }
                 item {
                     OutlinedButton(

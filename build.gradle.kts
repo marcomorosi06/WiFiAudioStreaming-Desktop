@@ -303,3 +303,72 @@ compose.desktop {
 kotlin {
     jvmToolchain(17)
 }
+
+// ─── Man page installation ────────────────────────────────────────────────────
+
+val manPageSrc = file("src/main/resources/man/wfas.1")
+
+tasks.register<Copy>("installManPage") {
+    description = "Install wfas.1 man page to /usr/local/share/man/man1/"
+    group       = "install"
+    onlyIf { isLinux || isMac }
+
+    from(manPageSrc)
+    into(if (isLinux) "/usr/share/man/man1" else "/usr/local/share/man/man1")
+
+    doLast {
+        if (isLinux) {
+            exec {
+                commandLine("mandb")
+                isIgnoreExitValue = true
+            }
+        } else {
+            exec {
+                commandLine("makewhatis", "/usr/local/share/man")
+                isIgnoreExitValue = true
+            }
+        }
+        println("[man] wfas.1 installed. Run 'man wfas' to read it.")
+    }
+}
+
+tasks.register<Copy>("packageManPage") {
+    description = "Copy wfas.1 into the build output for inclusion in packages"
+    group       = "build"
+
+    from(manPageSrc)
+    into("${layout.buildDirectory.get()}/man/man1")
+}
+
+tasks.named("build") {
+    dependsOn("packageManPage")
+}
+
+tasks.withType<org.jetbrains.compose.desktop.application.tasks.AbstractJPackageTask> {
+    dependsOn("packageManPage")
+}
+
+if (isWindows) {
+    afterEvaluate {
+        listOf("createDistributable", "createReleaseDistributable").forEach { taskName ->
+            tasks.findByName(taskName)?.doLast {
+                val javaExeSrc = File(System.getProperty("java.home"), "bin\\java.exe")
+                if (!javaExeSrc.exists()) {
+                    logger.warn("[wfas] java.exe non trovato in ${javaExeSrc.absolutePath} — il comando wfas potrebbe non funzionare")
+                    return@doLast
+                }
+                val suffix = if (taskName.contains("release", ignoreCase = true)) "main-release" else "main"
+                val appDir = layout.buildDirectory.dir("compose/binaries/$suffix/app").get().asFile
+                appDir.listFiles()
+                    ?.filter { it.isDirectory }
+                    ?.forEach { appSubDir ->
+                        val binDir = File(appSubDir, "runtime\\bin")
+                        if (binDir.exists()) {
+                            javaExeSrc.copyTo(File(binDir, "java.exe"), overwrite = true)
+                            logger.lifecycle("[wfas] Copiato java.exe -> ${binDir.absolutePath}")
+                        }
+                    }
+            }
+        }
+    }
+}

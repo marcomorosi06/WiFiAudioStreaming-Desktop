@@ -1,0 +1,448 @@
+.\" WiFi Audio Streaming — manual page
+.\" Copyright (c) 2026 Marco Morosi. Licensed under EUPL-1.2.
+.\"
+.TH WFAS 1 "2026" "5.0.0" "WiFi Audio Streaming"
+.\"
+.\" ─────────────────────────────────────────────────────────────────────────────
+.SH NAME
+.\"
+wfas \- stream audio over a local Wi\-Fi network
+.\"
+.\" ─────────────────────────────────────────────────────────────────────────────
+.SH SYNOPSIS
+.\"
+.B wfas
+.RB [ --gui | --cli ]
+.RB [ --mode
+.IR server | client | discover ]
+.RI [ OPTIONS ]
+.br
+.B wfas
+.B control
+.IR volume " <0\-100> | mute | unmute | stop | status"
+.\"
+.\" ─────────────────────────────────────────────────────────────────────────────
+.SH DESCRIPTION
+.\"
+.B wfas
+transmits audio from one device (server) to one or more receivers (clients)
+on the same local network using the WFAS protocol.
+It also supports RTP and HTTP streaming as optional additional protocols.
+.PP
+By default
+.B wfas
+starts in CLI mode without loading any graphical interface,
+making it suitable for use on headless systems such as Raspberry Pi or in
+automation scripts.
+.PP
+When a display is available,
+.B --gui
+opens the full graphical interface.
+Combining
+.B --gui
+with
+.B --mode
+opens the GUI and immediately starts the corresponding operation,
+as if the user had clicked the Start button.
+.\"
+.\" ─────────────────────────────────────────────────────────────────────────────
+.SH MODES
+.\"
+.TP
+.B server
+Capture audio from the system's default audio output (or a virtual cable)
+and stream it to connected clients.
+This is the default mode when no
+.B --mode
+flag is provided.
+.TP
+.B client
+Receive audio from a server and play it on a local output device.
+If
+.B --server
+is omitted,
+.B wfas
+scans the network for available servers and connects automatically
+when only one is found, or presents an interactive list otherwise.
+.TP
+.B discover
+Scan the network and print available servers.
+With
+.B --watch
+the scan continues until the process is interrupted.
+.\"
+.\" ─────────────────────────────────────────────────────────────────────────────
+.SH OPTIONS
+.\"
+.SS Entry point
+.TP
+.B --gui
+Open the graphical interface.
+.TP
+.B --cli
+Start in CLI mode (explicit).
+.\"
+.SS Mode selection
+.TP
+\fB--mode\fR \fIserver\fR|\fIclient\fR|\fIdiscover\fR
+Select the operating mode.
+.\"
+.SS Server options
+.TP
+\fB--port\fR \fIn\fR
+WFAS streaming port (default:
+.IR 9090 ).
+.TP
+\fB--mic-port\fR \fIn\fR
+Port used to receive microphone audio from clients (default:
+.IR 9092 ).
+.TP
+.B --multicast
+Enable multicast transmission.
+Automatically set when
+.B --rtp
+or
+.B --http
+is used.
+.TP
+.B --rtp
+Enable RTP side-channel.
+Allows any RTP-capable player (e.g. VLC) to receive the audio stream.
+Implies
+.BR --multicast .
+.TP
+\fB--rtp-port\fR \fIn\fR
+RTP destination port (default:
+.IR 9094 ).
+.TP
+.B --http
+Enable HTTP streaming (AAC chunked + Opus WebSocket).
+Implies
+.BR --multicast .
+.TP
+\fB--http-port\fR \fIn\fR
+HTTP server port (default:
+.IR 8080 ).
+.TP
+.B --http-safari
+Enable Safari-compatible HLS mode on the HTTP server.
+.TP
+.B --sdp
+Print the SDP session descriptor to standard output when the server starts.
+Only meaningful with
+.BR --rtp .
+.TP
+\fB--sdp-out\fR \fIpath\fR
+Write the SDP session descriptor to
+.I path
+in addition to printing it.
+.\"
+.SS Client options
+.TP
+\fB--server\fR \fIip\fR
+IP address of the server to connect to.
+If omitted,
+.B wfas
+performs automatic discovery.
+.TP
+\fB--output\fR \fIname\fR
+Name (or substring) of the audio output device to use.
+Uses the system default when omitted.
+To list available devices run
+.B wfas --mode discover --json
+and look at
+.IR serverAudioSettings .
+.\"
+.SS Microphone options (server and client)
+.TP
+.B --mic
+Enable microphone capture and transmission.
+.TP
+\fB--mic-input\fR \fIname\fR
+Name (or substring) of the microphone device.
+Uses the system default when omitted.
+.TP
+\fB--mic-routing\fR \fImode\fR
+How the microphone is routed on the server side.
+.RS
+.TP
+.B mix
+Mix microphone into the outgoing audio stream (default when
+.B --mic
+is used).
+.TP
+.B virtual
+Route microphone to a virtual output device (e.g. CABLE Input).
+.TP
+.B off
+Disable microphone routing.
+.RE
+.\"
+.SS Audio options
+.TP
+\fB--volume\fR \fIn\fR
+Initial volume as a percentage from 0 to 100 (default:
+.IR 100 ).
+.TP
+.B --mute
+Start with audio muted.
+.\"
+.SS Runtime control
+These subcommands communicate with a running
+.B wfas
+instance via an IPC socket and exit immediately.
+.TP
+\fBcontrol volume\fR \fIn\fR
+Set the volume to
+.I n
+percent (0\-100).
+.TP
+.B control mute
+Mute the audio.
+.TP
+.B control unmute
+Unmute the audio.
+.TP
+.B control stop
+Stop the current stream without closing the process.
+.TP
+.B control status
+Print the current status as JSON, including mode, volume, mute state,
+port, protocols enabled, uptime, and PID.
+.\"
+.SS Discover options
+.TP
+.B --watch
+Keep scanning continuously instead of exiting after 5 seconds.
+.TP
+.B --json
+Output results as newline-delimited JSON objects instead of a human-readable table.
+.\"
+.SS Global options
+.TP
+\fB--interface\fR \fIname\fR
+Name of the network interface to use (default:
+.IR Auto ,
+which picks the active non-virtual interface automatically).
+.TP
+\fB--config\fR \fIpath\fR
+Load settings from
+.I path
+instead of the default settings store.
+Useful when running multiple instances with different configurations.
+.TP
+.B --json
+Emit all output as newline-delimited JSON.
+Useful for scripting and monitoring pipelines.
+.TP
+.B --quiet
+Suppress informational output.
+Only errors are written to standard error.
+.TP
+.B --no-native-engine
+Force the FFmpeg audio backend even on platforms where the native JNI
+engine is available (Windows, macOS).
+On Linux the FFmpeg backend is always used.
+.TP
+.B --help
+Print usage information and exit.
+.TP
+.B --version
+Print the version string and exit.
+.\"
+.\" ─────────────────────────────────────────────────────────────────────────────
+.SH IPC CONTROL
+.\"
+When
+.B wfas
+starts it creates a file
+.IR /tmp/wfas-<pid>.port
+containing the TCP port number of its local IPC socket.
+The
+.B control
+subcommand reads this file, connects to the socket, and sends a JSON command.
+.PP
+If multiple
+.B wfas
+instances are running simultaneously, the control command targets the most
+recently started instance.
+A future
+.B --pid
+option will allow targeting a specific instance by PID.
+.PP
+The IPC socket listens only on the loopback interface and is not accessible
+from other machines.
+.\"
+.\" ─────────────────────────────────────────────────────────────────────────────
+.SH FILES
+.\"
+.TP
+.I ~/.config/wfas/settings.json
+User settings (Linux, macOS).
+.TP
+.I %APPDATA%\ewfas\esettings.json
+User settings (Windows).
+.TP
+.I /tmp/wfas-<pid>.port
+IPC port file created by each running instance.
+Deleted automatically on exit.
+.TP
+.I /tmp/stream.sdp
+RTP session descriptor written when
+.B --rtp
+is active.
+Used by external players.
+.\"
+.\" ─────────────────────────────────────────────────────────────────────────────
+.SH EXIT STATUS
+.\"
+.TP
+.B 0
+Success.
+.TP
+.B 1
+General error (bad arguments, port conflict, device not found, etc.).
+.\"
+.\" ─────────────────────────────────────────────────────────────────────────────
+.SH EXAMPLES
+.\"
+Start a CLI server on the default port:
+.PP
+.RS
+.B wfas
+.RE
+.PP
+Start a server with RTP enabled and print the SDP to stdout:
+.PP
+.RS
+.B wfas --mode server --rtp --sdp
+.RE
+.PP
+Pipe the SDP directly into VLC:
+.PP
+.RS
+.B wfas --mode server --rtp --sdp | vlc -
+.RE
+.PP
+Write the SDP to a file for later use:
+.PP
+.RS
+.B wfas --mode server --rtp --sdp-out /tmp/stream.sdp
+.RE
+.PP
+Connect as a client to a specific server:
+.PP
+.RS
+.B wfas --mode client --server 192.168.1.42
+.RE
+.PP
+Connect and specify the output device:
+.PP
+.RS
+.B wfas --mode client --server 192.168.1.42 --output "Built-in Audio"
+.RE
+.PP
+Discover servers and output JSON (useful for scripts):
+.PP
+.RS
+.B wfas --mode discover --json
+.RE
+.PP
+Keep the discovery running and monitor in real time:
+.PP
+.RS
+.B wfas --mode discover --watch
+.RE
+.PP
+Open the GUI and start the server immediately:
+.PP
+.RS
+.B wfas --gui --mode server --multicast
+.RE
+.PP
+Open the GUI and connect to a specific server immediately:
+.PP
+.RS
+.B wfas --gui --mode client --server 192.168.1.42
+.RE
+.PP
+Set volume to 60% on a running instance:
+.PP
+.RS
+.B wfas control volume 60
+.RE
+.PP
+Check the status of the running instance:
+.PP
+.RS
+.B wfas control status
+.RE
+.PP
+Run as a systemd service on Raspberry Pi (example unit file):
+.PP
+.RS
+.nf
+[Unit]
+Description=WiFi Audio Streaming Server
+After=network.target sound.target
+
+[Service]
+ExecStart=/opt/wfas/bin/wfas --mode server --multicast
+Restart=on-failure
+RestartSec=5
+User=pi
+
+[Install]
+WantedBy=multi-user.target
+.fi
+.RE
+.PP
+Monitor volume from a shell script:
+.PP
+.RS
+.nf
+while true; do
+    wfas control status --json | jq -r .volume
+    sleep 5
+done
+.fi
+.RE
+.\"
+.\" ─────────────────────────────────────────────────────────────────────────────
+.SH NOTES
+.\"
+On Linux, the native JNI audio engine is not available.
+.B wfas
+automatically falls back to the FFmpeg backend, which requires
+.B ffmpeg
+to be installed or is bundled with the distribution package.
+.PP
+On Windows, some firewalls block multicast packets.
+If clients cannot discover the server, try disabling multicast with
+.B --multicast
+omitted and providing the server IP explicitly via
+.B --server
+on the client side.
+.PP
+The
+.B --sdp
+flag generates an SDP descriptor based on the configured audio settings.
+The payload type is L16 (raw PCM) over RTP.
+Most players including VLC, ffplay, and GStreamer support this format.
+.\"
+.\" ─────────────────────────────────────────────────────────────────────────────
+.SH SEE ALSO
+.\"
+.BR vlc (1),
+.BR ffplay (1),
+.BR gst-launch-1.0 (1),
+.BR aplay (1),
+.BR systemctl (1)
+.\"
+.\" ─────────────────────────────────────────────────────────────────────────────
+.SH AUTHOR
+.\"
+Marco Morosi.
+Licensed under the European Union Public Licence (EUPL), version 1.2.
+.br
+.I https://joinup.ec.europa.eu/software/page/eupl

@@ -80,7 +80,14 @@ object SettingsRepository {
     private const val USE_NATIVE_ENGINE_KEY = "use_native_engine"
     private const val MIC_ROUTING_MODE_KEY = "mic_routing_mode"
     private const val START_MINIMIZED_TRAY_KEY = "start_minimized_tray"
-    private const val CLOSE_TO_TRAY_KEY = "close_to_tray"
+    private const val CLOSE_TO_TRAY_KEY       = "close_to_tray"
+    private const val HAS_SEEN_WELCOME_KEY     = "has_seen_welcome"
+    private const val HAS_SEEN_CLI_WELCOME_KEY = "has_seen_cli_welcome"
+
+    fun hasSeenWelcome(): Boolean    = prefs.getBoolean(HAS_SEEN_WELCOME_KEY,     false)
+    fun markWelcomeSeen()            { prefs.putBoolean(HAS_SEEN_WELCOME_KEY,     true); runCatching { prefs.flush() } }
+    fun hasSeenCliWelcome(): Boolean = prefs.getBoolean(HAS_SEEN_CLI_WELCOME_KEY, false)
+    fun markCliWelcomeSeen()         { prefs.putBoolean(HAS_SEEN_CLI_WELCOME_KEY, true); runCatching { prefs.flush() } }
 
     fun saveSettings(settings: AllSettings) {
         try {
