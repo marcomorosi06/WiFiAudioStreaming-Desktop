@@ -3036,6 +3036,10 @@ fun startGuiApplication(cliArgs: CliArgs) = application {
         undecorated = true,
         icon       = trayIcon
     ) {
+        // Enforce a minimum window size so content is always reachable on low-res displays.
+        LaunchedEffect(Unit) {
+            window.minimumSize = java.awt.Dimension(400, 500)
+        }
         val customColor = appSettings.customThemeColor?.toULong()?.let { Color(it) }
         val currentColorScheme = if (customColor != null) {
             MaterialYouGenerator.generateDynamicColorScheme(customColor, useDarkTheme)
