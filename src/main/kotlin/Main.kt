@@ -1176,13 +1176,40 @@ object NetworkHandler_v1 {
     // ── FFmpeg grabber factory (motore legacy) ─────────────────────────────────
     private fun buildAndStartGrabber(audioSettings: AudioSettings_V1): org.bytedeco.javacv.FFmpegFrameGrabber? {
         val os = System.getProperty("os.name").lowercase()
+        val isLinux = !os.contains("win") && !os.contains("mac")
+
+        if (isLinux) routeLinuxAudioToVirtualCable()
+
+        if (isLinux) {
+            // Prova prima pulse:VirtualCable.monitor — bypassa il plugin ALSA di PulseAudio
+            // e permette di impostare fragment_size direttamente su PA, riducendo la latenza
+            // da ~1s (alsa:default via plugin ALSA) a ~10ms.
+            val fragSize = (audioSettings.sampleRate.toInt() * audioSettings.channels * 2 * 5 / 1000)
+                .coerceAtLeast(256)
+            try {
+                return org.bytedeco.javacv.FFmpegFrameGrabber("VirtualCable.monitor").apply {
+                    setFormat("pulse")
+                    setOption("probesize",         "32")
+                    setOption("analyzeduration",   "0")
+                    setOption("fflags",            "nobuffer")
+                    setOption("thread_queue_size", "4096")
+                    setOption("fragment_size",     fragSize.toString())
+                    sampleRate    = audioSettings.sampleRate.toInt()
+                    audioChannels = audioSettings.channels
+                    sampleFormat  = org.bytedeco.ffmpeg.global.avutil.AV_SAMPLE_FMT_S16
+                    start()
+                }
+            } catch (e: Exception) {
+                println("=== FFmpeg pulse grabber failed (${e.message}), falling back to alsa ===")
+            }
+        }
+
         val (grabberFormat, deviceName) = when {
             os.contains("win") -> "dshow"        to "audio=CABLE Output (VB-Audio Virtual Cable)"
             os.contains("mac") -> "avfoundation" to ":BlackHole 2ch"
             else               -> "alsa"         to "default"
         }
         return try {
-            routeLinuxAudioToVirtualCable()
             org.bytedeco.javacv.FFmpegFrameGrabber(deviceName).apply {
                 setFormat(grabberFormat)
                 setOption("probesize",         "32")
@@ -2732,6 +2759,56 @@ private fun loadTrayIconPainter(): Painter {
     return BitmapPainter(blank.toComposeImageBitmap())
 }
 
+private enum class SetupAction { GUI, DONE, SHOW_HELP, EXIT }
+
+private fun runInteractiveSetup(isHeadless: Boolean): SetupAction {
+    val console = System.console() ?: return SetupAction.EXIT
+    val ver = displayVersion(runCatching {
+        object {}.javaClass.getResourceAsStream("/version.properties")
+            ?.bufferedReader()?.lineSequence()
+            ?.firstOrNull { it.startsWith("app.version=") }
+            ?.removePrefix("app.version=")?.trim()
+    }.getOrNull() ?: "")
+
+    println()
+    println("  WiFi Audio Streaming${if (ver.isNotEmpty()) " $ver" else ""}")
+    println()
+
+    data class Option(val label: String, val action: SetupAction)
+    val options = mutableListOf<Option>()
+    if (!isHeadless) options += Option("Open GUI", SetupAction.GUI)
+    val alreadyInstalled = CliPathInstaller.isInstalled()
+    options += Option(
+        if (alreadyInstalled) "Reinstall wfas to PATH  (~/.local/bin/wfas + man wfas)"
+        else                  "Add wfas to PATH  (~/.local/bin/wfas + man wfas)",
+        SetupAction.DONE
+    )
+    options += Option("Show help", SetupAction.SHOW_HELP)
+    options += Option("Exit",      SetupAction.EXIT)
+
+    options.forEachIndexed { i, o -> println("  ${i + 1}) ${o.label}") }
+    println()
+
+    val choice = console.readLine("  Choose [1-${options.size}]: ")
+        ?.trim()?.toIntOrNull()?.minus(1) ?: return SetupAction.EXIT
+    val selected = options.getOrNull(choice) ?: return SetupAction.EXIT
+
+    if (selected.action == SetupAction.DONE) {
+        println()
+        when (val result = CliPathInstaller.install()) {
+            is CliPathInstaller.InstallResult.Success ->
+                println("  ✓  Done.\n     Restart your terminal and run: wfas --help\n     Then try: man wfas")
+            is CliPathInstaller.InstallResult.Failure ->
+                System.err.println("  ✗  ${result.reason}")
+            is CliPathInstaller.InstallResult.TerminalLaunched ->
+                println("  ✓  Terminal launched for installation.")
+        }
+        println()
+        return SetupAction.EXIT
+    }
+    return selected.action
+}
+
 fun main(args: Array<String>) {
     System.setOut(java.io.PrintStream(System.out, true, "UTF-8"))
     System.setErr(java.io.PrintStream(System.err, true, "UTF-8"))
@@ -2754,6 +2831,17 @@ fun main(args: Array<String>) {
     org.bytedeco.ffmpeg.global.avdevice.avdevice_register_all()
 
     val isHeadless = java.awt.GraphicsEnvironment.isHeadless()
+
+    // Interactive terminal with no arguments: show first-run setup menu
+    if (args.isEmpty() && System.console() != null) {
+        when (runInteractiveSetup(isHeadless)) {
+            SetupAction.GUI       -> startGuiApplication(CliArgs(runMode = RunMode.GUI))
+            SetupAction.SHOW_HELP -> CliArgs.printHelp()
+            else                  -> Unit
+        }
+        return
+    }
+
     if (cliArgs.runMode != RunMode.GUI || isHeadless) {
         runCli(cliArgs)
     } else {

@@ -1,7 +1,7 @@
 .\" WiFi Audio Streaming — manual page
 .\" Copyright (c) 2026 Marco Morosi. Licensed under EUPL-1.2.
 .\"
-.TH WFAS 1 "2026" "5.0.0" "WiFi Audio Streaming"
+.TH WFAS 1 "2026" "1.0.0" "WiFi Audio Streaming"
 .\"
 .\" ─────────────────────────────────────────────────────────────────────────────
 .SH NAME
@@ -239,10 +239,33 @@ Useful for scripting and monitoring pipelines.
 Suppress informational output.
 Only errors are written to standard error.
 .TP
+.BR --legacy-engine ", " --no-native-engine
+(Server only.)
+Use the legacy FFmpeg audio grabber instead of the native C audio engine.
+.PP
+The native engine is the default on all three platforms:
+.RS
+.TP
+.B Windows
+WASAPI exclusive loopback \[em] no virtual driver required.
+.TP
+.B macOS
+ScreenCaptureKit \[em] system audio capture.
+.TP
+.B Linux
+PulseAudio/PipeWire via
+.BR dlopen (3),
+~5\~ms fragment latency, automatically mutes the default speaker sink
+while streaming and restores it on exit.
+.RE
+.PP
+Use
+.B --legacy-engine
+on Linux when PulseAudio or PipeWire is not available
+(e.g.\& ALSA-only minimal systems), or as a fallback if the native
+engine fails to initialise.
 .B --no-native-engine
-Force the FFmpeg audio backend even on platforms where the native JNI
-engine is available (Windows, macOS).
-On Linux the FFmpeg backend is always used.
+is a legacy alias for the same flag.
 .TP
 .B --help
 Print usage information and exit.
@@ -411,11 +434,23 @@ done
 .\" ─────────────────────────────────────────────────────────────────────────────
 .SH NOTES
 .\"
-On Linux, the native JNI audio engine is not available.
-.B wfas
-automatically falls back to the FFmpeg backend, which requires
-.B ffmpeg
-to be installed or is bundled with the distribution package.
+On Linux the native C audio engine uses
+.BR dlopen (3)
+to load
+.B libpulse-simple.so.0
+at runtime.
+No link-time dependency is required; the
+.B libaudio_engine.so
+bundled in the package works on any distribution.
+If
+.B libpulse-simple
+is not installed, start the server with
+.B --legacy-engine
+to use the FFmpeg backend instead, and install
+.B pulseaudio-utils
+(Debian/RPi OS) or
+.B pipewire-pulseaudio
+(Fedora/Arch) to enable the native engine.
 .PP
 On Windows, some firewalls block multicast packets.
 If clients cannot discover the server, try disabling multicast with

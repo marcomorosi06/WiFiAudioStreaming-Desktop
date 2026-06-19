@@ -64,7 +64,7 @@ data class CliArgs(
     companion object {
 
         private val VERSION: String by lazy {
-            runCatching {
+            val raw = runCatching {
                 CliArgs::class.java.getResourceAsStream("/version.properties")
                     ?.bufferedReader()
                     ?.lineSequence()
@@ -72,6 +72,7 @@ data class CliArgs(
                     ?.removePrefix("app.version=")
                     ?.trim()
             }.getOrNull() ?: "unknown"
+            displayVersion(raw)
         }
 
         fun parse(args: Array<String>): CliArgs {
@@ -108,8 +109,7 @@ data class CliArgs(
             var sdpOut: String?             = null
             var controlCmd: ControlCommand? = null
             var networkIface    = "Auto"
-            val osLower         = System.getProperty("os.name", "").lowercase()
-            var useNativeEngine = osLower.contains("win") || osLower.contains("mac")
+            var useNativeEngine = true
             var viz             = false
             var vizTheme: String?           = null
             var printHelp       = false
@@ -222,7 +222,7 @@ data class CliArgs(
                         networkIface = nextArg(args, i, "--interface") ?: parseError("--interface requires a name")
                         i++
                     }
-                    "--no-native-engine" -> useNativeEngine = false
+                    "--no-native-engine", "--legacy-engine" -> useNativeEngine = false
 
                     "--viz" -> {
                         viz = true
@@ -284,7 +284,7 @@ data class CliArgs(
 
         fun printHelp() {
             println("""
-WiFi Audio Streaming ${'$'}{VERSION} (c) stream audio over your local network.
+WiFi Audio Streaming ${VERSION} (c) stream audio over your local network.
 
 USAGE
   wfas [--gui | --cli] [--mode server|client|discover] [OPTIONS]
@@ -313,6 +313,14 @@ SERVER OPTIONS
   --http-safari       Enable Safari-compatible HLS
   --sdp               Print stream.sdp to stdout when server starts
   --sdp-out <path>    Write stream.sdp to file     (e.g. /tmp/stream.sdp)
+  --legacy-engine     Use the legacy FFmpeg grabber instead of the native C
+                      audio engine. Native engine is the default on all platforms:
+                        Windows  WASAPI loopback (no virtual driver needed)
+                        macOS    ScreenCaptureKit
+                        Linux    PulseAudio/PipeWire via dlopen, ~5ms latency
+                      Use --legacy-engine on Linux if PulseAudio is unavailable
+                      or for compatibility with older setups.
+  --no-native-engine  Alias for --legacy-engine.
 
 CLIENT OPTIONS
   --server <ip>       Server IP to connect to      (auto-discover if omitted)
@@ -342,7 +350,6 @@ GLOBAL OPTIONS
   --config <path>     Alternate settings file
   --json              All output as JSON
   --quiet             Suppress logs, only errors to stderr
-  --no-native-engine  Force FFmpeg backend
   --viz [theme]       Animated ASCII spectrum histogram of the audio stream.
                       Optional theme: a hex color (e.g. #1e88e5) recolors the
                       whole view via the Material You palette, or 'rainbow'
@@ -376,7 +383,7 @@ Licensed under the EUPL, Version 1.2
         }
 
         fun printVersion() {
-            println("wfas ${'$'}{VERSION}")
+            println("wfas $VERSION")
         }
 
         fun printFred() {

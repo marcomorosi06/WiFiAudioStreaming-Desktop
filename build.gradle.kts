@@ -144,7 +144,6 @@ val nativeResDir    = file("src/main/resources/native/$nativeOsDir/$nativeArchDi
 val compileNative by tasks.registering(Exec::class) {
     description = "Configura il progetto CMake per audio_engine"
     group       = "build"
-    onlyIf { !isLinux }
 
     doFirst {
         nativeBuildDir.mkdirs()
@@ -177,7 +176,6 @@ val compileNative by tasks.registering(Exec::class) {
 val buildNative by tasks.registering(Exec::class) {
     description = "Compila audio_engine tramite cmake --build"
     group       = "build"
-    onlyIf { !isLinux }
     dependsOn(compileNative)
 
     val cmakePath = if (isLinux) "cmake" else findCmakeExecutable()
@@ -188,7 +186,6 @@ val buildNative by tasks.registering(Exec::class) {
 val copyNativeLib by tasks.registering(Copy::class) {
     description = "Copia la libreria nativa in src/main/resources/native/"
     group       = "build"
-    onlyIf { !isLinux }
     dependsOn(buildNative)
 
     from(nativeOutputDir) {
@@ -202,14 +199,12 @@ val copyNativeLib by tasks.registering(Copy::class) {
     includeEmptyDirs = false
 }
 
-if (!isLinux) {
-    tasks.named("compileKotlin") {
-        dependsOn(copyNativeLib)
-    }
+tasks.named("compileKotlin") {
+    dependsOn(copyNativeLib)
+}
 
-    tasks.named<ProcessResources>("processResources") {
-        dependsOn(copyNativeLib)
-    }
+tasks.named<ProcessResources>("processResources") {
+    dependsOn(copyNativeLib)
 }
 
 // ─── Dipendenze ───────────────────────────────────────────────────────────────

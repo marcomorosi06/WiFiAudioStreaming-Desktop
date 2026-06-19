@@ -952,17 +952,15 @@ fun SettingsScreen(
                                 }
                             }
                         }
-                        if (!isLinux) {
-                            HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp))
+                        HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp))
 
-                            SwitchSetting(
-                                title = stringResource("native_engine_title"),
-                                description = stringResource("native_engine_desc"),
-                                icon = Icons.Outlined.Memory,
-                                checked = appSettings.useNativeEngine,
-                                onCheckedChange = { onAppSettingsChange(appSettings.copy(useNativeEngine = it)) }
-                            )
-                        }
+                        SwitchSetting(
+                            title = stringResource("native_engine_title"),
+                            description = stringResource("native_engine_desc"),
+                            icon = Icons.Outlined.Memory,
+                            checked = appSettings.useNativeEngine,
+                            onCheckedChange = { onAppSettingsChange(appSettings.copy(useNativeEngine = it)) }
+                        )
 
                         HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp))
 

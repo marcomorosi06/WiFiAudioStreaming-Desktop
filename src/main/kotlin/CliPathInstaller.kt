@@ -111,18 +111,55 @@ object CliPathInstaller {
     private fun wfasScriptFile(): File = File(wfasScriptDir(), "wfas")
 
     private fun resolveLinuxInstallPaths(): Triple<String, String, String>? {
-        // Packaged build: bundled java at lib/runtime/bin/java
         val resourcesDirProp = System.getProperty("compose.application.resources.dir")
+        val javaExeFromProcess = ProcessHandle.current().info().command().orElse(null)
+
+        // Helper: given an install root directory, try to resolve java + classpath.
+        // Uses the bundled JRE if present, otherwise falls back to system "java".
+        // Returns a Triple only if lib/app exists (contains the application JARs).
+        fun resolveFromRoot(root: File): Triple<String, String, String>? {
+            val appDir = File(root, "lib/app")
+            if (!appDir.exists()) return null
+            val bundledJava = File(root, "lib/runtime/bin/java")
+            val javaExe = if (bundledJava.exists()) bundledJava.absolutePath else "java"
+            return Triple(javaExe, "${appDir.absolutePath}/*", "")
+        }
+
+        // 1. jpackage.app-path — set by the JPackage native launcher (RPM/DEB/distributable).
+        // The launcher binary is at <root>/bin/<name>, so two parentFile calls reach <root>.
+        val jpackageAppPath = System.getProperty("jpackage.app-path")
+        if (!jpackageAppPath.isNullOrEmpty()) {
+            val installRoot = File(jpackageAppPath).parentFile?.parentFile
+            if (installRoot != null) {
+                resolveFromRoot(installRoot)?.let { return it }
+            }
+        }
+
+        // 2. compose.application.resources.dir points to <root>/lib/app/resources.
+        // Walking up two levels gives <root>/lib, one more gives <root>.
         if (resourcesDirProp != null) {
-            val appDir = File(resourcesDirProp).parentFile
-            val libDir = appDir?.parentFile
+            val installRoot = File(resourcesDirProp).parentFile?.parentFile?.parentFile
+            if (installRoot != null) {
+                resolveFromRoot(installRoot)?.let { return it }
+            }
+            // Legacy path: resources dir is directly inside lib/ (older Compose layout)
+            val appDir  = File(resourcesDirProp).parentFile
+            val libDir  = appDir?.parentFile
             val javaExe = libDir?.let { File(it, "runtime/bin/java") }
             if (javaExe != null && javaExe.exists()) {
                 return Triple(javaExe.absolutePath, "${appDir!!.absolutePath}/*", resourcesDirProp)
             }
         }
-        // Development build fallback: use current JVM and full classpath
-        val javaExe = ProcessHandle.current().info().command().orElse(null) ?: return null
+
+        // 3. Known default install location (RPM/DEB installed via package manager)
+        val standardInstall = File("/opt/wifi-audio-streaming")
+        if (standardInstall.exists()) {
+            resolveFromRoot(standardInstall)?.let { return it }
+        }
+
+        // 4. Development build fallback: current JVM process + full classpath.
+        // Only applies when the current process IS a java binary (not a native launcher).
+        val javaExe = javaExeFromProcess ?: return null
         if (!File(javaExe).name.lowercase().startsWith("java")) return null
         val cp = System.getProperty("java.class.path") ?: return null
         val resDir = resourcesDirProp
@@ -227,7 +264,12 @@ object CliPathInstaller {
     private fun installLinux(): InstallResult {
         val (javaExe, cpWildcard, resourcesDir) = resolveLinuxInstallPaths()
             ?: return InstallResult.Failure(
-                "Cannot determine install directory.\nRun the installed app, not the development build."
+                "Cannot determine install directory.\n\n" +
+                "Diagnostic info:\n" +
+                "  jpackage.app-path = ${System.getProperty("jpackage.app-path") ?: "(null)"}\n" +
+                "  process command   = ${ProcessHandle.current().info().command().orElse("(empty)")}\n" +
+                "  java.class.path   = ${System.getProperty("java.class.path")?.take(120) ?: "(null)"}\n" +
+                "  compose.res.dir   = ${System.getProperty("compose.application.resources.dir") ?: "(null)"}"
             )
 
         val wfasDir = wfasScriptDir()
@@ -251,8 +293,29 @@ object CliPathInstaller {
         }.onFailure { return InstallResult.Failure("Cannot write wfas script: ${it.message}") }
 
         ensureInLinuxPath(wfasDir.absolutePath)
+        installLinuxManPage()
 
         return InstallResult.Success
+    }
+
+    private fun installLinuxManPage() {
+        val stream = CliPathInstaller::class.java.getResourceAsStream("/man/wfas.1") ?: return
+        val manDir = File(System.getProperty("user.home"), ".local/share/man/man1")
+        runCatching { manDir.mkdirs() }
+        runCatching { stream.use { File(manDir, "wfas.1").writeBytes(it.readBytes()) } }
+            .onFailure { return }
+        // Try to update the user man-db cache; failures are silent
+        runCatching { ProcessBuilder("mandb", "-q", "-u").redirectErrorStream(true).start().waitFor() }
+        // Ensure ~/.local/share/man is in MANPATH for shells that don't include it by default
+        val manBase = manDir.parent
+        val exportLine = "\nexport MANPATH=\"$manBase:\$MANPATH\""
+        val home = System.getProperty("user.home")
+        for (rc in listOf(".bashrc", ".profile")) {
+            val f = File(home, rc)
+            runCatching {
+                if (f.exists() && !f.readText().contains(manBase)) f.appendText(exportLine)
+            }
+        }
     }
 
     private fun installMac(): InstallResult {

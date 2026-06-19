@@ -43,7 +43,22 @@ object Strings {
         val loader = Strings::class.java.classLoader
         val stream = loader.getResourceAsStream("version.properties") ?: return@lazy "?"
         val vProps = Properties().apply { load(InputStreamReader(stream, Charsets.UTF_8)) }
-        vProps.getProperty("app.version", "?")
+        displayVersion(vProps.getProperty("app.version", "?"))
+    }
+}
+
+/**
+ * Transforms the internal build version (e.g. "5.0.0") into the
+ * user-facing display version by subtracting 4 from the major component.
+ * The build number in build.gradle.kts remains unchanged.
+ */
+fun displayVersion(raw: String): String {
+    val parts = raw.split(".", limit = 3)
+    val major = parts.getOrNull(0)?.toIntOrNull() ?: return raw
+    val adjusted = (major - 4).coerceAtLeast(0)
+    return buildString {
+        append(adjusted)
+        parts.drop(1).forEach { append('.').append(it) }
     }
 }
 

@@ -17,8 +17,7 @@ cmake_minimum_required(VERSION 3.21)
 project(audio_engine C)
 
 if(UNIX AND NOT APPLE)
-    message(STATUS "Linux detected: audio_engine nativo disabilitato. Uso del backend FFmpeg.")
-    return()
+    message(STATUS "Linux detected: building native audio engine (PulseAudio/PipeWire via dlopen).")
 endif()
 
 # Abilita Objective-C SOLO su macOS
@@ -93,12 +92,10 @@ elseif(APPLE)
     )
 
 elseif(UNIX)
-    # PulseAudio / PipeWire (interfaccia libpulse-simple)
-    find_package(PkgConfig REQUIRED)
-    pkg_check_modules(PULSEAUDIO REQUIRED libpulse-simple)
-    target_include_directories(audio_engine PRIVATE ${PULSEAUDIO_INCLUDE_DIRS})
-    target_link_libraries(audio_engine PRIVATE ${PULSEAUDIO_LIBRARIES})
-    target_compile_options(audio_engine PRIVATE ${PULSEAUDIO_CFLAGS_OTHER})
+    # Linux: zero link-time deps on libpulse — loaded via dlopen at runtime.
+    # Only pthread (for mutex) and dl (for dlopen) are required.
+    find_package(Threads REQUIRED)
+    target_link_libraries(audio_engine PRIVATE Threads::Threads ${CMAKE_DL_LIBS})
 endif()
 
 # ── Output directory ──────────────────────────────────────────────────────────

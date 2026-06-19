@@ -985,108 +985,355 @@ static jboolean wasapi_sink_open(const wchar_t *device_hint, int sample_rate, in
 }
 
 /* ═══════════════════════════════════════════════════════════════════════════
- *  LINUX — PulseAudio / PipeWire (interfaccia libpulse-simple compatibile)
+ *  LINUX — PulseAudio / PipeWire via dlopen (zero link-time deps).
+ *
+ *  Loads libpulse-simple.so.0 at runtime so the .so works on any distro,
+ *  including those without PulseAudio headers or the lib installed.
+ *  Falls back to a descriptive error if the lib is not present.
+ *
+ *  Speaker mute: mutes the default PulseAudio/PipeWire sink on nativeStart()
+ *  and restores it on nativeStop(), with an atexit() safety net.
  * ═══════════════════════════════════════════════════════════════════════════*/
 #elif defined(__linux__)
 
+#include <dlfcn.h>
 #include <stdarg.h>
-#include <pulse/simple.h>
-#include <pulse/error.h>
+#include <time.h>
+#include <unistd.h>
 
-static pa_simple *g_pa_stream = NULL;
-static int        g_pa_initialized = 0;
+/* ── Inline PulseAudio types — no <pulse/*.h> needed ─────────────────────── */
+#define PA_SAMPLE_S16LE   3
+#define PA_STREAM_PLAYBACK 1
+#define PA_STREAM_RECORD   2
 
-/*
- * Su Linux leggiamo dal "monitor" del sink di default.
- * Il nome del monitor è sempre "<nome_sink>.monitor".
- * Se passiamo NULL come device, PulseAudio/PipeWire scelgono
- * automaticamente il monitor del sink di default — più robusto.
- */
-static char* get_default_monitor(void) {
-    static char monitor_name[256];
-    FILE *fp = popen("pactl get-default-sink 2>/dev/null", "r");
+typedef struct { int format; uint32_t rate; uint8_t channels; } pa_sample_spec_t;
+typedef struct {
+    uint32_t maxlength, tlength, prebuf, minreq, fragsize;
+} pa_buffer_attr_t;
 
+/* ── Function pointers loaded via dlopen ─────────────────────────────────── */
+static void *g_libpulse = NULL;
+
+static void* (*fn_pa_simple_new)(
+    const char*, const char*, int, const char*, const char*,
+    const pa_sample_spec_t*, const void*, const pa_buffer_attr_t*, int*) = NULL;
+static int   (*fn_pa_simple_read)  (void*, void*, size_t, int*) = NULL;
+static int   (*fn_pa_simple_write) (void*, const void*, size_t, int*) = NULL;
+static void  (*fn_pa_simple_free)  (void*)                      = NULL;
+static const char* (*fn_pa_strerror)(int)                       = NULL;
+
+static int load_libpulse(void) {
+    if (g_libpulse) return 1;
+    const char *libs[] = {
+        "libpulse-simple.so.0", "libpulse-simple.so", NULL
+    };
+    for (int i = 0; libs[i]; i++) {
+        g_libpulse = dlopen(libs[i], RTLD_LAZY | RTLD_LOCAL);
+        if (g_libpulse) break;
+    }
+    if (!g_libpulse) {
+        set_error("libpulse-simple not found. "
+                  "Install pulseaudio or pipewire-pulse:\n"
+                  "  Debian/RPi OS : sudo apt install pulseaudio-utils\n"
+                  "  Fedora        : sudo dnf install pipewire-pulseaudio\n"
+                  "  Arch          : sudo pacman -S pipewire-pulse");
+        return 0;
+    }
+    fn_pa_simple_new   = dlsym(g_libpulse, "pa_simple_new");
+    fn_pa_simple_read  = dlsym(g_libpulse, "pa_simple_read");
+    fn_pa_simple_write = dlsym(g_libpulse, "pa_simple_write");
+    fn_pa_simple_free  = dlsym(g_libpulse, "pa_simple_free");
+    fn_pa_strerror     = dlsym(g_libpulse, "pa_strerror");
+    if (!fn_pa_simple_new || !fn_pa_simple_read || !fn_pa_simple_write || !fn_pa_simple_free) {
+        set_error("Failed to resolve symbols from libpulse-simple");
+        dlclose(g_libpulse);
+        g_libpulse = NULL;
+        return 0;
+    }
+    return 1;
+}
+
+/* ── Stop-flag for safe shutdown ──────────────────────────────────────────── */
+static void              *g_pa_stream      = NULL;
+static volatile int       g_pa_initialized = 0;
+static volatile int       g_pa_stopping    = 0;
+static volatile int       g_pa_reading     = 0;
+
+/* ── Saved config (for stream recreation on drift) ────────────────────────── */
+static int     g_pa_rate       = 48000;
+static int     g_pa_channels   = 2;
+static double  g_drift_ms      = 0.0;
+static int     g_drift_skips   = 0;
+
+/* ── Speaker mute / restore ───────────────────────────────────────────────── */
+static int  g_did_mute_sink      = 0;
+static int  g_linux_atexit_reg   = 0;
+
+static void linux_restore_sink_mute(void);  /* forward */
+
+static void linux_atexit_handler(void) { linux_restore_sink_mute(); }
+
+static void linux_save_and_mute_sink(void) {
+    /* Check current mute state with LC_ALL=C so we always get "yes"/"no". */
+    FILE *fp = popen("LC_ALL=C pactl get-sink-mute @DEFAULT_SINK@ 2>/dev/null", "r");
+    if (!fp) return;
+    char buf[32] = {0};
+    int already_muted = 0;
+    if (fgets(buf, sizeof(buf), fp)) {
+        already_muted = (strstr(buf, "yes") != NULL);
+    }
+    pclose(fp);
+
+    if (already_muted) {
+        g_did_mute_sink = 0;   /* already muted — leave it alone */
+        return;
+    }
+
+    FILE *fp2 = popen("LC_ALL=C pactl set-sink-mute @DEFAULT_SINK@ 1 2>/dev/null", "r");
+    if (fp2) pclose(fp2);
+    g_did_mute_sink = 1;
+    fprintf(stderr, "[AudioEngine/Linux] Default sink muted.\n");
+
+    if (!g_linux_atexit_reg) {
+        g_linux_atexit_reg = 1;
+        atexit(linux_atexit_handler);
+    }
+}
+
+static void linux_restore_sink_mute(void) {
+    if (!g_did_mute_sink) return;
+    g_did_mute_sink = 0;
+    FILE *fp = popen("LC_ALL=C pactl set-sink-mute @DEFAULT_SINK@ 0 2>/dev/null", "r");
+    if (fp) pclose(fp);
+    fprintf(stderr, "[AudioEngine/Linux] Default sink unmuted.\n");
+}
+
+/* ── Monitor-source name ──────────────────────────────────────────────────── */
+static char g_monitor_name[256];
+
+static const char *get_default_monitor(void) {
+    FILE *fp = popen("LC_ALL=C pactl get-default-sink 2>/dev/null", "r");
     if (!fp) return NULL;
-
-    char sink[128] = {0};
+    char sink[200] = {0};
     if (fgets(sink, sizeof(sink), fp)) {
         sink[strcspn(sink, "\r\n")] = 0;
         if (strlen(sink) > 0) {
-            snprintf(monitor_name, sizeof(monitor_name), "%s.monitor", sink);
+            snprintf(g_monitor_name, sizeof(g_monitor_name), "%s.monitor", sink);
             pclose(fp);
-            return monitor_name;
+            return g_monitor_name;
         }
     }
     pclose(fp);
     return NULL;
 }
 
+/* ── pulse_drain_stream — svuota i dati accumulati nel buffer PulseAudio ─────
+ * Legge e scarta chunk finché pa_simple_read inizia a bloccarsi per il tempo
+ * reale, ovvero siamo sincronizzati con l'audio "live".
+ * ─────────────────────────────────────────────────────────────────────────── */
+static void pulse_drain_stream(void) {
+    if (!g_pa_stream) return;
+
+    /* Chunk piccolo (~10 ms) per un drain granulare */
+    uint32_t drain_bytes = (uint32_t)((uint64_t)g_pa_rate * g_pa_channels * 2 * 10 / 1000);
+    if (drain_bytes < 256) drain_bytes = 256;
+    double expected_ms = (double)drain_bytes
+                       / ((double)g_pa_rate * (double)g_pa_channels * 2.0) * 1000.0;
+
+    int16_t *tmp = (int16_t *)malloc(drain_bytes);
+    if (!tmp) return;
+
+    for (int i = 0; i < 120 && !g_pa_stopping; i++) {  /* max ~1.2 s di drain */
+        struct timespec t0, t1;
+        clock_gettime(CLOCK_MONOTONIC, &t0);
+        int err = 0;
+        if (fn_pa_simple_read(g_pa_stream, tmp, drain_bytes, &err) < 0) break;
+        clock_gettime(CLOCK_MONOTONIC, &t1);
+        double elapsed = (double)(t1.tv_sec - t0.tv_sec) * 1000.0
+                       + (double)(t1.tv_nsec - t0.tv_nsec) / 1e6;
+        if (elapsed >= expected_ms * 0.7 && i > 0) break;  /* sincronizzati con il live */
+    }
+    free(tmp);
+    if (!g_pa_stopping)
+        fprintf(stderr, "[AudioEngine/Linux] Buffer iniziale svuotato.\n");
+}
+
+/* ── pulse_flush_stream — ricrea il stream per azzerare latenza accumulata ── */
+
+static void pulse_flush_stream(void) {
+    if (g_pa_stopping) return;
+
+    void *old = g_pa_stream;
+    g_pa_stream = NULL;
+    if (old) fn_pa_simple_free(old);
+    if (g_pa_stopping) return;
+
+    pa_sample_spec_t ss;
+    ss.format   = PA_SAMPLE_S16LE;
+    ss.rate     = (uint32_t)g_pa_rate;
+    ss.channels = (uint8_t)g_pa_channels;
+
+    uint32_t frag = (uint32_t)((uint64_t)g_pa_rate * g_pa_channels * 2 * 5 / 1000);
+    if (frag < 256) frag = 256;
+
+    pa_buffer_attr_t attr;
+    attr.maxlength = frag * 8;
+    attr.tlength   = (uint32_t)-1;
+    attr.prebuf    = (uint32_t)-1;
+    attr.minreq    = (uint32_t)-1;
+    attr.fragsize  = frag;
+
+    int error = 0;
+    g_pa_stream = fn_pa_simple_new(
+        NULL, "WiFi Audio Streaming", PA_STREAM_RECORD,
+        g_monitor_name[0] ? g_monitor_name : NULL, "Loopback Capture",
+        &ss, NULL, &attr, &error);
+
+    g_drift_ms    = 0.0;
+    g_drift_skips = 3;
+
+    if (g_pa_stream) {
+        pulse_drain_stream();
+        fprintf(stderr, "[AudioEngine/Linux] Stream ricreato (drift azzerato).\n");
+    } else {
+        const char *msg = fn_pa_strerror ? fn_pa_strerror(error) : "unknown";
+        set_error("pa_simple_new (flush) failed: %s", msg);
+        g_pa_initialized = 0;
+    }
+}
+
+/* ── pulse_start / pulse_read / pulse_stop ──────────────────────────────── */
+
 static jboolean pulse_start(int sample_rate, int channels) {
-    pa_sample_spec ss;
+    if (!load_libpulse()) return JNI_FALSE;
+
+    if (g_pa_stream) {
+        fn_pa_simple_free(g_pa_stream);
+        g_pa_stream = NULL;
+    }
+
+    pa_sample_spec_t ss;
     ss.format   = PA_SAMPLE_S16LE;
     ss.rate     = (uint32_t)sample_rate;
     ss.channels = (uint8_t)channels;
 
-    uint32_t bytes_per_sec = sample_rate * channels * 2;
-    uint32_t target_latency_bytes = (bytes_per_sec * 10) / 1000;
+    /* ~5 ms fragment for low latency; min 256 bytes */
+    uint32_t frag = (uint32_t)((uint64_t)sample_rate * channels * 2 * 5 / 1000);
+    if (frag < 256) frag = 256;
 
-    pa_buffer_attr attr;
-    attr.maxlength = target_latency_bytes * 4;
+    pa_buffer_attr_t attr;
+    attr.maxlength = frag * 8;
     attr.tlength   = (uint32_t)-1;
     attr.prebuf    = (uint32_t)-1;
     attr.minreq    = (uint32_t)-1;
-    attr.fragsize  = target_latency_bytes;
+    attr.fragsize  = frag;
+
+    const char *device = get_default_monitor();
 
     int error = 0;
-    char *device = get_default_monitor();
-
-    g_pa_stream = pa_simple_new(
-        NULL,
-        "WiFi Audio Streaming",
-        PA_STREAM_RECORD,
-        device,
-        "Loopback Monitor",
-        &ss,
-        NULL,
-        &attr,
-        &error
-    );
+    g_pa_stream = fn_pa_simple_new(
+        NULL, "WiFi Audio Streaming", PA_STREAM_RECORD,
+        device, "Loopback Capture",
+        &ss, NULL, &attr, &error);
 
     if (!g_pa_stream) {
-        set_error("pa_simple_new failed: %s", pa_strerror(error));
+        const char *msg = fn_pa_strerror ? fn_pa_strerror(error) : "unknown";
+        set_error("pa_simple_new failed: %s (device: %s)",
+                  msg, device ? device : "default");
         return JNI_FALSE;
     }
 
+    linux_save_and_mute_sink();
+
+    g_pa_rate      = sample_rate;
+    g_pa_channels  = channels;
+    g_drift_ms     = 0.0;
+    g_drift_skips  = 3;
+    g_pa_stopping  = 0;
+    g_pa_reading   = 0;
     g_pa_initialized = 1;
-    printf("[AudioEngine/PulseAudio] Started. %d ch, %d Hz, S16LE, device: %s\n",
-           channels, sample_rate, device ? device : "default");
+
+    /* Svuota l'audio accumulato da pa_simple_new + mute setup */
+    pulse_drain_stream();
+    fprintf(stderr, "[AudioEngine/Linux] Started. %d ch, %d Hz, fragsize=%u B (~%u ms), device: %s\n",
+            channels, sample_rate, frag,
+            frag * 1000 / (uint32_t)(sample_rate * channels * 2),
+            device ? device : "default");
     return JNI_TRUE;
 }
 
-/*
- * pulse_read — bloccante ma a bassa latenza: ritorna quando ha riempito buf.
- * Restituisce JNI_TRUE in caso di successo.
- */
 static jboolean pulse_read(int16_t *buf, int num_stereo_samples) {
-    if (!g_pa_initialized || !g_pa_stream) return JNI_FALSE;
+    if (!g_pa_initialized || !g_pa_stream || g_pa_stopping) return JNI_FALSE;
+    g_pa_reading = 1;
+    if (!g_pa_stream || g_pa_stopping) { g_pa_reading = 0; return JNI_FALSE; }
+
+    size_t bytes = (size_t)num_stereo_samples * 2 * sizeof(int16_t);
+    /* Durata attesa in ms per questa chunk a tempo reale */
+    double expected_ms = (double)bytes
+                       / ((double)g_pa_rate * (double)g_pa_channels * 2.0)
+                       * 1000.0;
+
+    struct timespec t0, t1;
+    clock_gettime(CLOCK_MONOTONIC, &t0);
 
     int error = 0;
-    size_t bytes = (size_t)num_stereo_samples * 2 * sizeof(int16_t);
-    if (pa_simple_read(g_pa_stream, buf, bytes, &error) < 0) {
-        set_error("pa_simple_read failed: %s", pa_strerror(error));
+    int rc = fn_pa_simple_read(g_pa_stream, buf, bytes, &error);
+
+    clock_gettime(CLOCK_MONOTONIC, &t1);
+
+    if (rc < 0) {
+        g_pa_reading = 0;
+        if (g_pa_stopping) return JNI_FALSE;
+        const char *msg = fn_pa_strerror ? fn_pa_strerror(error) : "unknown";
+        set_error("pa_simple_read failed: %s", msg);
         return JNI_FALSE;
     }
+
+    /* Drift detection: se pa_simple_read ha impiegato meno del 50% del tempo
+     * reale atteso, significa che il buffer aveva già dati accumulati
+     * (latenza in crescita). Accumulo il debito e quando supera 200 ms
+     * ricreo il stream per azzerare. g_pa_reading rimane 1 per proteggere
+     * pulse_flush_stream da pulse_stop concorrente. */
+    if (!g_pa_stopping) {
+        if (g_drift_skips > 0) {
+            g_drift_skips--;
+        } else {
+            double elapsed_ms = (double)(t1.tv_sec - t0.tv_sec) * 1000.0
+                              + (double)(t1.tv_nsec - t0.tv_nsec) / 1e6;
+            if (elapsed_ms < expected_ms * 0.5) {
+                g_drift_ms += expected_ms - elapsed_ms;
+                if (g_drift_ms > 200.0) {
+                    fprintf(stderr,
+                        "[AudioEngine/Linux] Drift latenza %.0f ms — stream ricreato.\n",
+                        g_drift_ms);
+                    pulse_flush_stream();
+                }
+            } else {
+                g_drift_ms = 0.0;
+            }
+        }
+    }
+
+    g_pa_reading = 0;
     return JNI_TRUE;
 }
 
 static void pulse_stop(void) {
-    if (!g_pa_initialized) return;
+    if (!g_pa_initialized && !g_pa_stream) return;
+    g_pa_stopping    = 1;
     g_pa_initialized = 0;
+    g_drift_ms       = 0.0;
+
+    /* Wait for an in-progress read to finish (max ~500 ms). */
+    for (int w = 0; g_pa_reading && w < 500; w++) usleep(1000);
+
     if (g_pa_stream) {
-        pa_simple_free(g_pa_stream);
+        fn_pa_simple_free(g_pa_stream);
         g_pa_stream = NULL;
     }
-    printf("[AudioEngine/PulseAudio] Stopped.\n");
+    linux_restore_sink_mute();
+    g_pa_stopping = 0;
+    fprintf(stderr, "[AudioEngine/Linux] Stopped.\n");
 }
 
 /* ─────────────────────────────────────────────────────────────────────────────
@@ -1096,9 +1343,9 @@ static void pulse_stop(void) {
  * Su PipeWire in modalità compat i comandi pactl funzionano ugualmente.
  * ───────────────────────────────────────────────────────────────────────────*/
 
-static int             g_vsink_module_id = -1;
-static pa_simple      *g_vsink_play      = NULL;
-static const char     *g_vsink_name      = "WFAS_VirtualMic";
+static int          g_vsink_module_id = -1;
+static void        *g_vsink_play      = NULL;
+static const char  *g_vsink_name      = "WFAS_VirtualMic";
 
 static int run_pactl_load(const char *sink_name, int rate, int channels) {
     char cmd[512];
@@ -1127,6 +1374,7 @@ static void run_pactl_unload(int id) {
 
 static jboolean linux_vsink_create(int sample_rate, int channels) {
     if (g_vsink_play != NULL) return JNI_TRUE;
+    if (!load_libpulse()) return JNI_FALSE;
 
     int id = run_pactl_load(g_vsink_name, sample_rate, channels);
     if (id < 0) {
@@ -1135,43 +1383,37 @@ static jboolean linux_vsink_create(int sample_rate, int channels) {
     }
     g_vsink_module_id = id;
 
-    pa_sample_spec ss;
+    pa_sample_spec_t ss;
     ss.format   = PA_SAMPLE_S16LE;
     ss.rate     = (uint32_t)sample_rate;
     ss.channels = (uint8_t)channels;
 
     int error = 0;
-    g_vsink_play = pa_simple_new(
-        NULL,
-        "WFAS Virtual Mic",
-        PA_STREAM_PLAYBACK,
-        g_vsink_name,
-        "Mic feed",
-        &ss,
-        NULL,
-        NULL,
-        &error
-    );
+    g_vsink_play = fn_pa_simple_new(
+        NULL, "WFAS Virtual Mic", PA_STREAM_PLAYBACK,
+        g_vsink_name, "Mic feed",
+        &ss, NULL, NULL, &error);
     if (!g_vsink_play) {
-        set_error("pa_simple_new(playback) fallita: %s", pa_strerror(error));
+        const char *msg = fn_pa_strerror ? fn_pa_strerror(error) : "unknown";
+        set_error("pa_simple_new(playback) failed: %s", msg);
         run_pactl_unload(g_vsink_module_id);
         g_vsink_module_id = -1;
         return JNI_FALSE;
     }
 
-    fprintf(stderr, "[AudioEngine/Linux] Virtual sink creato: %s (module id %d)\n",
+    fprintf(stderr, "[AudioEngine/Linux] Virtual sink created: %s (module id %d)\n",
             g_vsink_name, g_vsink_module_id);
     return JNI_TRUE;
 }
 
 static void linux_vsink_destroy(void) {
     if (g_vsink_play) {
-        pa_simple_free(g_vsink_play);
+        fn_pa_simple_free(g_vsink_play);
         g_vsink_play = NULL;
     }
     if (g_vsink_module_id >= 0) {
         run_pactl_unload(g_vsink_module_id);
-        fprintf(stderr, "[AudioEngine/Linux] Virtual sink rimosso (module id %d).\n",
+        fprintf(stderr, "[AudioEngine/Linux] Virtual sink removed (module id %d).\n",
                 g_vsink_module_id);
         g_vsink_module_id = -1;
     }
@@ -1181,8 +1423,9 @@ static jboolean linux_vsink_write(const int16_t *pcm, int num_samples) {
     if (!g_vsink_play || !pcm || num_samples <= 0) return JNI_FALSE;
     int error = 0;
     size_t bytes = (size_t)num_samples * sizeof(int16_t);
-    if (pa_simple_write(g_vsink_play, pcm, bytes, &error) < 0) {
-        set_error("pa_simple_write fallita: %s", pa_strerror(error));
+    if (fn_pa_simple_write(g_vsink_play, pcm, bytes, &error) < 0) {
+        const char *msg = fn_pa_strerror ? fn_pa_strerror(error) : "unknown";
+        set_error("pa_simple_write failed: %s", msg);
         return JNI_FALSE;
     }
     return JNI_TRUE;
