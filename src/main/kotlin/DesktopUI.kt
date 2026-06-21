@@ -56,8 +56,12 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.ImageBitmap
@@ -66,6 +70,11 @@ import androidx.compose.ui.graphics.painter.BitmapPainter
 import androidx.compose.ui.graphics.painter.ColorPainter
 import androidx.compose.ui.graphics.painter.Painter
 import androidx.compose.ui.graphics.toArgb
+import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.key
+import androidx.compose.ui.input.key.onKeyEvent
+import androidx.compose.ui.input.key.type
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.res.loadImageBitmap
 import androidx.compose.ui.res.painterResource
@@ -144,6 +153,10 @@ fun AppContent(
     selectedMicMixInput: Mixer.Info? = null,
     onMicMixInputSelected: (Mixer.Info) -> Unit = {}
 ) {
+    val listState = rememberLazyListState()
+    val scrollScope = rememberCoroutineScope()
+    val focusRequester = remember { FocusRequester() }
+
     Scaffold(
         topBar = {
             TopAppBar(
@@ -189,8 +202,32 @@ fun AppContent(
                 )
             }
         }
+        LaunchedEffect(Unit) {
+            focusRequester.requestFocus()
+        }
         LazyColumn(
-            modifier = Modifier.fillMaxSize().padding(paddingValues),
+            state = listState,
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(paddingValues)
+                .focusRequester(focusRequester)
+                .onFocusChanged { /* keep focus awareness */ }
+                .onKeyEvent { keyEvent ->
+                    if (keyEvent.type != KeyEventType.KeyDown) return@onKeyEvent false
+                    scrollScope.launch {
+                        when {
+                            keyEvent.key == Key.DirectionDown -> listState.scrollBy(80f)
+                            keyEvent.key == Key.DirectionUp   -> listState.scrollBy(-80f)
+                            keyEvent.key == Key.PageDown      -> listState.scrollBy(400f)
+                            keyEvent.key == Key.PageUp        -> listState.scrollBy(-400f)
+                        }
+                    }
+                    when (keyEvent.key) {
+                        Key.DirectionDown, Key.DirectionUp, Key.PageDown, Key.PageUp -> true
+                        else -> false
+                    }
+                }
+                .pointerInput(Unit) { detectTapGestures { focusRequester.requestFocus() } },
             contentPadding = PaddingValues(16.dp),
             verticalArrangement = Arrangement.spacedBy(16.dp),
             horizontalAlignment = Alignment.CenterHorizontally
