@@ -1,4 +1,4 @@
-WiFi Audio Streaming (Desktop) — Third-Party Software & Licenses
+WiFi Audio Streaming (Desktop) - Third-Party Software & Licenses
 ================================================================
 
 This application is licensed under the EUPL v1.2.
