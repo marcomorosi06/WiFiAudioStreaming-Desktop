@@ -3068,6 +3068,7 @@ fun main(args: Array<String>) {
     if (cliArgs.printHelp)     { CliArgs.printHelp();     return }
     if (cliArgs.printVersion)  { CliArgs.printVersion();  return }
     if (cliArgs.printProtocol) { CliArgs.printProtocol(); return }
+    if (cliArgs.printLicenses) { CliArgs.printLicenses(); return }
     if (cliArgs.printFred)     { CliArgs.printFred();     return }
 
     // FIX CRASH: disabilita AVX-512/AVX3 — causa EXCEPTION_ACCESS_VIOLATION in

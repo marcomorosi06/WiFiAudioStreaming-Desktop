@@ -1,0 +1,37 @@
+WiFi Audio Streaming (Desktop) — Third-Party Software & Licenses
+================================================================
+
+This application is licensed under the EUPL v1.2.
+It uses the open-source components below, each under its own licence.
+Full details: THIRD_PARTY_LICENSES.md in the project repository.
+
+FFmpeg  (LGPL v2.1 or later; some components may be GPL)
+  Used for AAC/Opus encoding (HTTP server) and legacy audio capture.
+  Copyright (c) the FFmpeg developers.  https://ffmpeg.org
+  Native binaries are unmodified, provided by JavaCPP Presets
+  (https://github.com/bytedeco/javacpp-presets) and loaded dynamically.
+  FFmpeg source:  https://ffmpeg.org/download.html
+  LGPL v2.1 text: https://www.gnu.org/licenses/old-licenses/lgpl-2.1.html
+
+Apache License 2.0  (https://www.apache.org/licenses/LICENSE-2.0)
+  JavaCV, JavaCPP, Bytedeco FFmpeg preset  (c) Samuel Audet / Bytedeco
+  JetBrains Compose Multiplatform           (c) JetBrains s.r.o. & Google LLC
+  Kotlin standard library                   (c) JetBrains s.r.o.
+  kotlinx.coroutines / kotlinx-datetime / kotlinx-io  (c) JetBrains s.r.o.
+  Ktor                                      (c) JetBrains s.r.o.
+  dorkbox SystemTray (and Utilities, OS, Collections, Executor, Updates)
+                                            (c) dorkbox, llc
+  Java Native Access (JNA)   (c) Timothy Wall and contributors
+                             (dual Apache-2.0 / LGPL-2.1; used as Apache-2.0)
+  Java UUID Generator        (c) FasterXML, LLC
+
+Bouncy Castle Licence (MIT-style)
+  bcprov / bctls / bcpkix (jdk18on)
+  Copyright (c) 2000-2024 The Legion of the Bouncy Castle Inc.
+  https://www.bouncycastle.org
+
+MIT License
+  SLF4J (slf4j-nop)  Copyright (c) 2004-2023 QOS.ch Sarl
+  https://www.slf4j.org/license.html
+
+Each component remains the property of its respective authors. We thank them.

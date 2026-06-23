@@ -646,7 +646,40 @@ fun SettingsScreen(
     var cliInstallResult by remember { mutableStateOf<CliPathInstaller.InstallResult?>(null) }
     var cliIsInstalled by remember { mutableStateOf(CliPathInstaller.isInstalled()) }
     var cliInstalling by remember { mutableStateOf(false) }
+    var showLicensesDialog by remember { mutableStateOf(false) }
+    val licensesText = remember {
+        runCatching {
+            Strings::class.java.classLoader
+                .getResourceAsStream("third_party_licenses.txt")
+                ?.bufferedReader()?.use { it.readText() }
+        }.getOrNull() ?: "See THIRD_PARTY_LICENSES.md in the project repository."
+    }
     val settingsScope = rememberCoroutineScope()
+
+    if (showLicensesDialog) {
+        AlertDialog(
+            onDismissRequest = { showLicensesDialog = false },
+            icon = { Icon(Icons.Outlined.Gavel, contentDescription = null) },
+            title = { Text(stringResource("licenses_dialog_title")) },
+            text = {
+                OutlinedTextField(
+                    value = licensesText,
+                    onValueChange = {},
+                    readOnly = true,
+                    modifier = Modifier.fillMaxWidth().heightIn(min = 200.dp, max = 420.dp)
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    showLicensesDialog = false
+                    openUrl("https://github.com/marcomorosi06/WiFiAudioStreaming-Desktop/blob/master/THIRD_PARTY_LICENSES.md")
+                }) { Text(stringResource("license_read_full")) }
+            },
+            dismissButton = {
+                TextButton(onClick = { showLicensesDialog = false }) { Text(stringResource("close")) }
+            }
+        )
+    }
 
     if (showResetConfirmDialog) {
         AlertDialog(
@@ -1103,6 +1136,13 @@ fun SettingsScreen(
                             onClick = {
                                 openUrl("https://eupl.eu/")
                             }
+                        )
+                        HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
+                        ClickableSetting(
+                            title = stringResource("licenses_open_source"),
+                            description = stringResource("licenses_open_source_desc"),
+                            icon = Icons.Outlined.Description,
+                            onClick = { showLicensesDialog = true }
                         )
                     }
                     SettingsGroup(title = stringResource("about&help"), icon = Icons.Outlined.Info) {

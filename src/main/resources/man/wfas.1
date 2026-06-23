@@ -279,6 +279,12 @@ is a legacy alias for the same flag.
 Print an explanation of the WFAS v2 wire protocol (packet format, control
 messages, version negotiation) and exit.
 .TP
+.B --licenses
+Print the third-party open-source licenses (including the FFmpeg/LGPL notice)
+and exit. See also the
+.B LICENSING
+section below.
+.TP
 .B --help
 Print usage information and exit.
 .TP
@@ -482,6 +488,31 @@ The
 flag generates an SDP descriptor based on the configured audio settings.
 The payload type is L16 (raw PCM) over RTP.
 Most players including VLC, ffplay, and GStreamer support this format.
+.\"
+.\" ─────────────────────────────────────────────────────────────────────────────
+.SH LICENSING
+.\"
+.B wfas
+itself is licensed under the European Union Public Licence (EUPL) version 1.2.
+.PP
+It bundles third-party open-source software. In particular it uses
+.B FFmpeg
+.RI ( https://ffmpeg.org )
+for AAC/Opus audio encoding, distributed under the GNU Lesser General Public
+Licence (LGPL) version 2.1 or later; some optional FFmpeg components may be
+under the GPL. The FFmpeg native libraries are unmodified and are provided by
+the JavaCPP Presets project
+.RI ( https://github.com/bytedeco/javacpp-presets );
+their source code is available at
+.IR https://ffmpeg.org/download.html .
+.PP
+Other bundled components include JavaCV/JavaCPP, JetBrains Compose
+Multiplatform, Kotlin and kotlinx.coroutines, Ktor, Bouncy Castle, dorkbox
+SystemTray, JNA and SLF4J. Run
+.B wfas --licenses
+for the full attribution list, or see
+.B THIRD_PARTY_LICENSES.md
+in the project repository.
 .\"
 .\" ─────────────────────────────────────────────────────────────────────────────
 .SH SEE ALSO

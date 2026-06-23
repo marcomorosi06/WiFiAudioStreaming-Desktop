@@ -8,9 +8,9 @@ plugins {
 }
 
 group = "com.wifiaudiostreaming"
-version = "5.0"
+version = "6.0"
 
-val appVersion = "5.0.0"
+val appVersion = "5.1.0"
 
 tasks.register("generateVersionProperties") {
     val outFile = layout.projectDirectory.file("src/main/resources/version.properties").asFile

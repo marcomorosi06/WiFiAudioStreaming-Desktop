@@ -60,6 +60,7 @@ data class CliArgs(
     val printVersion:    Boolean         = false,
     val printProtocol:   Boolean         = false,
     val printFred:       Boolean         = false,
+    val printLicenses:   Boolean         = false,
     val debug:           Boolean         = false,
 ) {
     companion object {
@@ -117,6 +118,7 @@ data class CliArgs(
             var printVersion    = false
             var printProtocol   = false
             var printFred       = false
+            var printLicenses   = false
             var debug           = false
 
             var i = 0
@@ -240,6 +242,7 @@ data class CliArgs(
                     "--help", "-h"     -> printHelp     = true
                     "--version", "-v"  -> printVersion  = true
                     "--protocol"       -> printProtocol = true
+                    "--licenses", "--license", "--credits" -> printLicenses = true
                     "--fred", "--Fred" -> printFred     = true
                     "--debug"          -> debug         = true
 
@@ -283,6 +286,7 @@ data class CliArgs(
                 printVersion    = printVersion,
                 printProtocol   = printProtocol,
                 printFred       = printFred,
+                printLicenses   = printLicenses,
                 debug           = debug,
             )
         }
@@ -366,6 +370,7 @@ GLOBAL OPTIONS
   --debug             Live debug HUD: audio packet table + microphone
                       send/receive table (with --mic), then internal logs
   --protocol          Explain the WFAS v2 wire protocol and exit
+  --licenses          Show third-party open-source licenses and exit
   --help              Show this help
   --version           Show version
 
@@ -397,6 +402,18 @@ Licensed under the EUPL, Version 1.2
 
         fun printVersion() {
             println("wfas $VERSION")
+        }
+
+        fun printLicenses() {
+            val text = runCatching {
+                CliArgs::class.java.getResourceAsStream("/third_party_licenses.txt")
+                    ?.bufferedReader()?.use { it.readText() }
+            }.getOrNull()
+            if (text.isNullOrBlank()) {
+                println("Third-party licenses: see THIRD_PARTY_LICENSES.md in the project repository.")
+            } else {
+                println(text)
+            }
         }
 
         fun printProtocol() {

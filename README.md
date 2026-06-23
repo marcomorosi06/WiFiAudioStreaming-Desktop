@@ -217,3 +217,24 @@ It started as a personal script. Then it grew. Then I rewrote the audio engine d
 - **Attribution:** retain all copyright and trademark notices
 
 For the full legal text, see `LICENSE.md` or visit the [official EUPL website](https://joinup.ec.europa.eu/collection/eupl/eupl-text-eupl-12).
+
+---
+
+# 🧩 Third-Party Software & Licenses
+
+This application bundles and uses several open-source components, each under its
+own licence. The complete attribution list is in
+**[`THIRD_PARTY_LICENSES.md`](THIRD_PARTY_LICENSES.md)**, and is also available
+inside the app (Settings → *Open-source licenses*) and from the command line via
+`wfas --licenses`.
+
+In particular, this software uses **[FFmpeg](https://ffmpeg.org)** for AAC/Opus
+audio encoding, distributed under the **GNU LGPL v2.1 or later** (some optional
+components may be under the GPL). The FFmpeg native libraries are unmodified and
+provided by the [JavaCPP Presets](https://github.com/bytedeco/javacpp-presets)
+project; their source is available at <https://ffmpeg.org/download.html>. See
+`THIRD_PARTY_LICENSES.md` for the full FFmpeg notice and relinking information.
+
+Other bundled components include JavaCV/JavaCPP, JetBrains Compose Multiplatform,
+Kotlin and kotlinx.coroutines, Ktor, Bouncy Castle, dorkbox SystemTray, JNA and
+SLF4J — see the full list for versions, copyrights and licences.
