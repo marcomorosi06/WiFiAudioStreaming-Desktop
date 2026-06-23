@@ -221,8 +221,9 @@ object CliPathInstaller {
 
         val installDir   = File(exePath).parent ?: return InstallResult.Failure("Cannot determine install directory")
         val javaExe      = "$installDir\\runtime\\bin\\java.exe"
-        val cpWildcard   = "$installDir\\app\\*"
-        val resourcesDir = "$installDir\\app\\resources"
+        val appDir       = "$installDir\\app"
+        val cpWildcard   = "$appDir\\*"
+        val resourcesDir = "$appDir\\resources"
 
         val bat = File(wfasDir, "wfas.bat")
         runCatching {
@@ -232,10 +233,11 @@ object CliPathInstaller {
                 "set \"WFAS_JAVA=$javaExe\"\r\n" +
                 "set \"WFAS_CP=$cpWildcard\"\r\n" +
                 "set \"WFAS_RESDIR=$resourcesDir\"\r\n" +
+                "set \"WFAS_APPDIR=$appDir\"\r\n" +
                 "if \"%~1\"==\"\" (\r\n" +
-                "    \"%WFAS_JAVA%\" -Djava.net.preferIPv4Stack=true \"-Dcompose.application.resources.dir=%WFAS_RESDIR%\" -cp \"%WFAS_CP%\" MainKt --help\r\n" +
+                "    \"%WFAS_JAVA%\" -Djava.net.preferIPv4Stack=true \"-Dskiko.library.path=%WFAS_APPDIR%\" -Dcompose.application.configure.swing.globals=true \"-Dcompose.application.resources.dir=%WFAS_RESDIR%\" -cp \"%WFAS_CP%\" MainKt --help\r\n" +
                 ") else (\r\n" +
-                "    \"%WFAS_JAVA%\" -Djava.net.preferIPv4Stack=true \"-Dcompose.application.resources.dir=%WFAS_RESDIR%\" -cp \"%WFAS_CP%\" MainKt %*\r\n" +
+                "    \"%WFAS_JAVA%\" -Djava.net.preferIPv4Stack=true \"-Dskiko.library.path=%WFAS_APPDIR%\" -Dcompose.application.configure.swing.globals=true \"-Dcompose.application.resources.dir=%WFAS_RESDIR%\" -cp \"%WFAS_CP%\" MainKt %*\r\n" +
                 ")\r\n"
             )
         }.onFailure { return InstallResult.Failure("Cannot write wfas.bat: ${it.message}") }
@@ -276,6 +278,7 @@ object CliPathInstaller {
         runCatching { wfasDir.mkdirs() }
             .onFailure { return InstallResult.Failure("Cannot create ${wfasDir.absolutePath}: ${it.message}") }
 
+        val appDirPath = cpWildcard.removeSuffix("/*")
         val script = wfasScriptFile()
         runCatching {
             script.writeText(
@@ -283,10 +286,11 @@ object CliPathInstaller {
                 "WFAS_JAVA=\"$javaExe\"\n" +
                 "WFAS_CP=\"$cpWildcard\"\n" +
                 "WFAS_RESDIR=\"$resourcesDir\"\n" +
+                "WFAS_APPDIR=\"$appDirPath\"\n" +
                 "if [ \$# -eq 0 ]; then\n" +
-                "    exec \"\$WFAS_JAVA\" -Djava.net.preferIPv4Stack=true \"-Dcompose.application.resources.dir=\$WFAS_RESDIR\" -cp \"\$WFAS_CP\" MainKt --help\n" +
+                "    exec \"\$WFAS_JAVA\" -Djava.net.preferIPv4Stack=true \"-Dskiko.library.path=\$WFAS_APPDIR\" -Dcompose.application.configure.swing.globals=true \"-Dcompose.application.resources.dir=\$WFAS_RESDIR\" -cp \"\$WFAS_CP\" MainKt --help\n" +
                 "else\n" +
-                "    exec \"\$WFAS_JAVA\" -Djava.net.preferIPv4Stack=true \"-Dcompose.application.resources.dir=\$WFAS_RESDIR\" -cp \"\$WFAS_CP\" MainKt \"\$@\"\n" +
+                "    exec \"\$WFAS_JAVA\" -Djava.net.preferIPv4Stack=true \"-Dskiko.library.path=\$WFAS_APPDIR\" -Dcompose.application.configure.swing.globals=true \"-Dcompose.application.resources.dir=\$WFAS_RESDIR\" -cp \"\$WFAS_CP\" MainKt \"\$@\"\n" +
                 "fi\n"
             )
             script.setExecutable(true)

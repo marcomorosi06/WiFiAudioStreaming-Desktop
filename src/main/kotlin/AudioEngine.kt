@@ -203,7 +203,7 @@ class AudioEngine(
 
     fun virtualSinkName(): String {
         if (!libraryLoaded) return ""
-        return nativeVirtualSinkName()
+        return runCatching { nativeVirtualSinkName() }.getOrDefault("")
     }
 
     fun micSinkOpen(deviceName: String?, sampleRate: Int = this.sampleRate, channels: Int = this.channels): Boolean {
@@ -225,12 +225,12 @@ class AudioEngine(
 
     fun micSinkClose() {
         if (!libraryLoaded) return
-        nativeMicSinkClose()
+        runCatching { nativeMicSinkClose() }
     }
 
     fun micSinkDeviceName(): String {
         if (!libraryLoaded) return ""
-        return nativeMicSinkDeviceName()
+        return runCatching { nativeMicSinkDeviceName() }.getOrDefault("")
     }
 
     fun getSystemVolume(): Float {

@@ -1,4 +1,9 @@
 object AppDebug {
     var enabled: Boolean = false
-    fun log(msg: String) { if (enabled) println(msg) }
+    @Volatile var sink: ((String) -> Unit)? = null
+    fun log(msg: String) {
+        if (!enabled) return
+        val s = sink
+        if (s != null) s(msg) else println(msg)
+    }
 }

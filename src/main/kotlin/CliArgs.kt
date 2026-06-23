@@ -58,6 +58,7 @@ data class CliArgs(
     val vizTheme:        String?         = null,
     val printHelp:       Boolean         = false,
     val printVersion:    Boolean         = false,
+    val printProtocol:   Boolean         = false,
     val printFred:       Boolean         = false,
     val debug:           Boolean         = false,
 ) {
@@ -114,6 +115,7 @@ data class CliArgs(
             var vizTheme: String?           = null
             var printHelp       = false
             var printVersion    = false
+            var printProtocol   = false
             var printFred       = false
             var debug           = false
 
@@ -171,9 +173,10 @@ data class CliArgs(
                     "--http-port"   -> { httpPort = nextInt(args, i, "--http-port", 1024, 65535); i++ }
                     "--http-safari" -> httpSafari = true
 
-                    "--server" -> {
-                        serverIp = nextArg(args, i, "--server") ?: parseError("--server requires an IP address")
+                    "--connect" -> {
+                        serverIp = nextArg(args, i, "--connect") ?: parseError("--connect requires an IP address")
                         i++
+                        if (!modeExplicit) runMode = RunMode.CLI_CLIENT
                     }
                     "--output" -> {
                         outputDevice = nextArg(args, i, "--output") ?: parseError("--output requires a device name")
@@ -234,10 +237,11 @@ data class CliArgs(
                             else parseError("--viz value must be a hex color (e.g. #1e88e5) or 'rainbow', got '$nv'")
                         }
                     }
-                    "--help", "-h"     -> printHelp    = true
-                    "--version", "-v"  -> printVersion = true
-                    "--fred", "--Fred" -> printFred    = true
-                    "--debug"          -> debug        = true
+                    "--help", "-h"     -> printHelp     = true
+                    "--version", "-v"  -> printVersion  = true
+                    "--protocol"       -> printProtocol = true
+                    "--fred", "--Fred" -> printFred     = true
+                    "--debug"          -> debug         = true
 
                     else -> parseError("Unknown argument '$token'. Run 'wfas --help' for usage.")
                 }
@@ -277,6 +281,7 @@ data class CliArgs(
                 vizTheme        = vizTheme,
                 printHelp       = printHelp,
                 printVersion    = printVersion,
+                printProtocol   = printProtocol,
                 printFred       = printFred,
                 debug           = debug,
             )
@@ -284,15 +289,15 @@ data class CliArgs(
 
         fun printHelp() {
             println("""
-WiFi Audio Streaming ${VERSION} (c) stream audio over your local network.
+WiFi Audio Streaming ${VERSION} (c) 2026 Marco Morosi - Stream audio over your local network.
 
 USAGE
   wfas [--gui | --cli] [--mode server|client|discover] [OPTIONS]
-  wfas control volume <0-100> | mute | unmute | stop | status
+  wfas control <command>          (see RUNTIME CONTROL)
 
 ENTRY POINT
   (no flags)          Show this help
-  --cli               CLI mode (server by default)
+  --cli               CLI mode (audio server by default)
   --gui               GUI mode
 
 MODES
@@ -317,33 +322,37 @@ SERVER OPTIONS
                       audio engine. Native engine is the default on all platforms:
                         Windows  WASAPI loopback (no virtual driver needed)
                         macOS    ScreenCaptureKit
-                        Linux    PulseAudio/PipeWire via dlopen, ~5ms latency
+                        Linux    PulseAudio/PipeWire via dlopen
                       Use --legacy-engine on Linux if PulseAudio is unavailable
                       or for compatibility with older setups.
-  --no-native-engine  Alias for --legacy-engine.
 
 CLIENT OPTIONS
-  --server <ip>       Server IP to connect to      (auto-discover if omitted)
+  --connect <ip>      Server IP to connect to      (auto-discover if omitted;
+                      implies client mode)
   --output <name>     Audio output device name     (system default if omitted)
 
-MIC OPTIONS  (server and client)
-  --mic               Enable microphone
+MIC OPTIONS  (client-to-server return channel)
+  Sends the client's microphone back to the server (talkback), independent
+  of the main server-to-client audio stream.
+  --mic               Enable microphone return
   --mic-input <name>  Microphone device name
   --mic-routing <m>   mix | virtual | off          (default: mix when --mic)
+                        mix      blend mic into the server's captured audio
+                        virtual  expose mic on the server as a virtual device
+                        off      disable
 
 AUDIO
   --volume <0-100>    Initial volume percentage    (default: 100)
   --mute              Start muted
 
-RUNTIME CONTROL  (sends command to running instance)
-  wfas control volume <0-100>
-  wfas control mute | unmute
-  wfas control stop
-  wfas control status
+RUNTIME CONTROL  (wfas control <command>)
+  volume <0-100>      Set output volume
+  mute | unmute       Toggle audio output
+  stop                Stop the running instance
+  status              Show current streaming status
 
 DISCOVER OPTIONS
   --watch             Keep scanning (live update)
-  --json              Machine-readable JSON output
 
 GLOBAL OPTIONS
   --interface <name>  Network interface            (default: Auto)
@@ -354,36 +363,92 @@ GLOBAL OPTIONS
                       Optional theme: a hex color (e.g. #1e88e5) recolors the
                       whole view via the Material You palette, or 'rainbow'
                       for an animated dynamic rainbow.
-  --debug             Print internal debug logs
+  --debug             Live debug HUD: audio packet table + microphone
+                      send/receive table (with --mic), then internal logs
+  --protocol          Explain the WFAS v2 wire protocol and exit
   --help              Show this help
   --version           Show version
 
 EXAMPLES
-  wfas                                    # start CLI server, default settings
+  wfas --server                           # start CLI audio server, default settings
   wfas --mode server --rtp --sdp          # server + RTP, print SDP
-  wfas --mode client --server 192.168.1.5 # connect to specific server
+  wfas --connect 192.168.1.5              # connect to a specific server
   wfas --mode discover --json             # scan and output JSON
   wfas control volume 75                  # set volume on running instance
   wfas --gui --mode server --multicast    # open GUI, start server immediately
   wfas --viz rainbow                      # spectrum with animated rainbow colors
   wfas --viz "#1e88e5"                    # spectrum themed from a hex color
+  wfas --protocol                         # print the WFAS v2 protocol reference
 
 FILES
   ~/.config/wfas/settings.json    settings file (Linux/Mac)
   %APPDATA%\wfas\settings.json    settings file (Windows)
-  /tmp/wfas-<pid>.sock            IPC socket (Linux/Mac)
+  /tmp/wfas-<pid>.port            IPC control port file (Linux/Mac)
+  %TEMP%\wfas-<pid>.port          IPC control port file (Windows)
   /tmp/stream.sdp                 RTP session descriptor
 
 See 'man wfas' for the full reference manual.
 
 Licensed under the EUPL, Version 1.2
   Desktop source:  https://github.com/marcomorosi06/WiFiAudioStreaming-Desktop
-  Android app:     https://github.com/marcomorosi06/WiFiAudioStreaming-Android/releases
+  Android app:     https://github.com/marcomorosi06/WiFiAudioStreaming-Android
             """.trimIndent())
         }
 
         fun printVersion() {
             println("wfas $VERSION")
+        }
+
+        fun printProtocol() {
+            val v = NetworkHandler_v1.WFAS_PROTOCOL_VERSION
+            println("""
+WFAS - WiFi Audio Streaming protocol, version $v
+
+WFAS streams raw 16-bit PCM audio over UDP on the local network. A session has
+three phases: discovery (the server announces itself), connection (handshake in
+unicast, group join in multicast) and streaming (a continuous flow of audio
+packets, with PING/BYE control messages interleaved on the same socket).
+
+AUDIO PACKET  (10-byte header + PCM payload)
+  byte 0    0x57 'W'   magic
+  byte 1    0x46 'F'   magic
+  byte 2    version    protocol version (v$v = 0x0${v})
+  byte 3    flags      bit0 = silence frame
+  byte 4-5  seq        big-endian uint16, wraps at 0xFFFF
+  byte 6-9  samplePos  big-endian uint32, per-channel sample index
+  byte 10+  PCM        signed 16-bit little-endian, interleaved by channel
+
+  Control messages are plain ASCII and never start with 'W''F', so audio and
+  control are told apart by the two magic bytes alone. The header size is
+  unchanged from v1: the version byte reuses an already-reserved slot, so the
+  protocol stays lightweight (zero extra bytes on the wire).
+
+CONTROL MESSAGES  (ASCII over UDP)
+  MODE_PROBE                 client -> server   "are you unicast?"
+  UNICAST                    server -> client   reply to MODE_PROBE
+  HELLO_FROM_CLIENT;v=<n>    client -> server   connect, carries client version
+  HELLO_ACK;v=<n>            server -> client   accept, carries server version
+  WFAS_INCOMPATIBLE;v=<n>    server -> client   reject: version mismatch
+  PING                       server -> client   keep-alive (1s, 3s timeout)
+  BYE / CLIENT_BYE                              clean disconnect
+
+DISCOVERY  (UDP multicast 239.255.0.1:9091, every ~3s)
+  WIFI_AUDIO_STREAMER_DISCOVERY;<host>;<MULTICAST|UNICAST>;<port>;protocols=...
+  Advertises capabilities only; version is enforced at connection time.
+
+VERSION NEGOTIATION  (handles both directions)
+  Unicast: the client sends its version in HELLO; the server replies HELLO_ACK
+  on a match, or WFAS_INCOMPATIBLE otherwise (and keeps serving other clients).
+  Multicast: there is no handshake, so the client validates the version byte of
+  the first audio packet it receives (the first-packet sentinel).
+  On any mismatch the device running the newer build stops the stream and shows
+  an "update required" notice. Whether the outdated peer is the server (sender)
+  or the client (receiver), the up-to-date side is the one that reports it.
+
+  Releases:
+    Desktop  https://github.com/marcomorosi06/WiFiAudioStreaming-Desktop/releases
+    Android  https://github.com/marcomorosi06/WiFiAudioStreaming-Android/releases
+            """.trimIndent())
         }
 
         fun printFred() {

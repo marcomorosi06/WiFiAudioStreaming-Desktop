@@ -250,6 +250,7 @@ fun runCli(args: CliArgs) {
     }
 
     Runtime.getRuntime().addShutdownHook(Thread {
+        DebugHud.stop()
         runBlocking { NetworkHandler_v1.stopCurrentStream() }
         IpcServer.stop()
     })
@@ -368,6 +369,9 @@ private suspend fun runCliServer(args: CliArgs, settings: AllSettings) {
         }
     }
 
+    if (args.debug && !args.viz && !args.json)
+        DebugHud.start(sending = true, peer = "$serverIp:${args.port}")
+
     if (args.rtp && (args.sdp || args.sdpOut != null)) {
         delay(300)
         if (args.sdpOut != null) {
@@ -419,6 +423,7 @@ private suspend fun runCliServer(args: CliArgs, settings: AllSettings) {
     done.await()
     stdinThread.interrupt()
     }
+    DebugHud.stop()
     viz?.stop()
 }
 
@@ -507,11 +512,14 @@ private suspend fun runCliClient(args: CliArgs, settings: AllSettings) {
             }
             out("  $icon  $msg", args)
         }
-        if (key.contains("error") || key.contains("timeout") || key.contains("disconnect")) {
+        if (key.contains("error") || key.contains("timeout") || key.contains("disconnect") || key.contains("incompatible")) {
             if (!userStopped) cliExitCode = ExitCode.DISCONNECTED
             done.complete(Unit)
         }
     }
+
+    if (args.debug && !args.viz && !args.json)
+        DebugHud.start(sending = false, peer = "${serverInfo.ip}:${serverInfo.port}")
 
     if (viz != null) {
         done.await()
@@ -545,6 +553,7 @@ private suspend fun runCliClient(args: CliArgs, settings: AllSettings) {
     done.await()
     stdinThread.interrupt()
     }
+    DebugHud.stop()
     viz?.stop()
     if (cliExitCode != ExitCode.OK) kotlin.system.exitProcess(cliExitCode)
 }

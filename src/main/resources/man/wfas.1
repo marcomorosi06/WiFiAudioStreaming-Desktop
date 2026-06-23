@@ -29,9 +29,14 @@ transmits audio from one device (server) to one or more receivers (clients)
 on the same local network using the WFAS protocol.
 It also supports RTP and HTTP streaming as optional additional protocols.
 .PP
-By default
+Run without arguments,
 .B wfas
-starts in CLI mode without loading any graphical interface,
+prints its help and exits.
+Use
+.B --cli
+(or
+.BR --server )
+to start in CLI mode without loading any graphical interface,
 making it suitable for use on headless systems such as Raspberry Pi or in
 automation scripts.
 .PP
@@ -139,8 +144,9 @@ in addition to printing it.
 .\"
 .SS Client options
 .TP
-\fB--server\fR \fIip\fR
+\fB--connect\fR \fIip\fR
 IP address of the server to connect to.
+Implies client mode when no explicit mode is given.
 If omitted,
 .B wfas
 performs automatic discovery.
@@ -153,10 +159,12 @@ To list available devices run
 and look at
 .IR serverAudioSettings .
 .\"
-.SS Microphone options (server and client)
+.SS Microphone options (client-to-server return channel)
+These options send the client's microphone back to the server (talkback),
+independently of the main server-to-client audio stream.
 .TP
 .B --mic
-Enable microphone capture and transmission.
+Enable microphone return.
 .TP
 \fB--mic-input\fR \fIname\fR
 Name (or substring) of the microphone device.
@@ -255,7 +263,7 @@ ScreenCaptureKit \[em] system audio capture.
 .B Linux
 PulseAudio/PipeWire via
 .BR dlopen (3),
-~5\~ms fragment latency, automatically mutes the default speaker sink
+automatically mutes the default speaker sink
 while streaming and restores it on exit.
 .RE
 .PP
@@ -266,6 +274,10 @@ on Linux when PulseAudio or PipeWire is not available
 engine fails to initialise.
 .B --no-native-engine
 is a legacy alias for the same flag.
+.TP
+.B --protocol
+Print an explanation of the WFAS v2 wire protocol (packet format, control
+messages, version negotiation) and exit.
 .TP
 .B --help
 Print usage information and exit.
@@ -332,7 +344,13 @@ General error (bad arguments, port conflict, device not found, etc.).
 Start a CLI server on the default port:
 .PP
 .RS
-.B wfas
+.B wfas --cli
+.RE
+.PP
+Print the WFAS v2 protocol reference:
+.PP
+.RS
+.B wfas --protocol
 .RE
 .PP
 Start a server with RTP enabled and print the SDP to stdout:
@@ -356,13 +374,13 @@ Write the SDP to a file for later use:
 Connect as a client to a specific server:
 .PP
 .RS
-.B wfas --mode client --server 192.168.1.42
+.B wfas --connect 192.168.1.42
 .RE
 .PP
 Connect and specify the output device:
 .PP
 .RS
-.B wfas --mode client --server 192.168.1.42 --output "Built-in Audio"
+.B wfas --connect 192.168.1.42 --output "Built-in Audio"
 .RE
 .PP
 Discover servers and output JSON (useful for scripts):
@@ -386,7 +404,7 @@ Open the GUI and start the server immediately:
 Open the GUI and connect to a specific server immediately:
 .PP
 .RS
-.B wfas --gui --mode client --server 192.168.1.42
+.B wfas --gui --mode client --connect 192.168.1.42
 .RE
 .PP
 Set volume to 60% on a running instance:
@@ -456,7 +474,7 @@ On Windows, some firewalls block multicast packets.
 If clients cannot discover the server, try disabling multicast with
 .B --multicast
 omitted and providing the server IP explicitly via
-.B --server
+.B --connect
 on the client side.
 .PP
 The

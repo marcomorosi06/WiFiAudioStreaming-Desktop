@@ -727,6 +727,10 @@ static IMMDevice *wasapi_sink_find_device(IMMDeviceEnumerator *enumerator, const
 
     IMMDevice *found = NULL;
     IMMDevice *auto_pick = NULL;
+    int auto_rank = 0x7fffffff;
+
+    int n_keywords = 0;
+    while (auto_keywords[n_keywords]) n_keywords++;
 
     for (UINT i = 0; i < count; i++) {
         IMMDevice *dev = NULL;
@@ -743,27 +747,34 @@ static IMMDevice *wasapi_sink_find_device(IMMDeviceEnumerator *enumerator, const
             }
         }
 
+        int exact = 0;
         int matched = 0;
         if (name_hint && name_hint[0] != L'\0' && fname) {
-            if (wcsstr(fname, name_hint) != NULL) matched = 1;
+            if (_wcsicmp(fname, name_hint) == 0) { exact = 1; matched = 1; }
+            else if (wcsstr(fname, name_hint) != NULL) matched = 1;
         }
 
-        int auto_match = 0;
-        if (!matched && !auto_pick && fname) {
-            for (int k = 0; auto_keywords[k]; k++) {
-                if (wcsstr(fname, auto_keywords[k])) { auto_match = 1; break; }
+        int kw_rank = 0x7fffffff;
+        if (fname) {
+            for (int k = 0; k < n_keywords; k++) {
+                if (wcsstr(fname, auto_keywords[k])) { kw_rank = k; break; }
             }
         }
 
         PropVariantClear(&pv);
         if (props) IUnknown_Release((IUnknown *)props);
 
-        if (matched) {
+        if (exact) {
             if (found) IUnknown_Release((IUnknown *)found);
             found = dev;
             break;
-        } else if (auto_match) {
+        } else if (matched) {
+            if (found) IUnknown_Release((IUnknown *)found);
+            found = dev;
+        } else if (kw_rank < auto_rank) {
+            if (auto_pick) IUnknown_Release((IUnknown *)auto_pick);
             auto_pick = dev;
+            auto_rank = kw_rank;
         } else {
             IUnknown_Release((IUnknown *)dev);
         }
@@ -1347,8 +1358,23 @@ static int          g_vsink_module_id = -1;
 static void        *g_vsink_play      = NULL;
 static const char  *g_vsink_name      = "WFAS_VirtualMic";
 
-static int run_pactl_load(const char *sink_name, int rate, int channels) {
+static int pactl_available(void) {
+    return system("command -v pactl >/dev/null 2>&1") == 0;
+}
+
+static void unload_stale_vsinks(const char *sink_name) {
     char cmd[512];
+    snprintf(cmd, sizeof(cmd),
+        "for id in $(pactl list short modules 2>/dev/null | "
+        "awk '/module-null-sink/ && /sink_name=%s/ {print $1}'); do "
+        "pactl unload-module $id 2>/dev/null; done",
+        sink_name);
+    int rc = system(cmd);
+    (void)rc;
+}
+
+static int run_pactl_load(const char *sink_name, int rate, int channels) {
+    char cmd[640];
     snprintf(cmd, sizeof(cmd),
         "pactl load-module module-null-sink "
         "sink_name=%s rate=%d channels=%d "
@@ -1376,9 +1402,16 @@ static jboolean linux_vsink_create(int sample_rate, int channels) {
     if (g_vsink_play != NULL) return JNI_TRUE;
     if (!load_libpulse()) return JNI_FALSE;
 
+    if (!pactl_available()) {
+        set_error("'pactl' non trovato. Installa pulseaudio-utils (o pipewire-pulse) per il microfono virtuale.");
+        return JNI_FALSE;
+    }
+
+    unload_stale_vsinks(g_vsink_name);
+
     int id = run_pactl_load(g_vsink_name, sample_rate, channels);
     if (id < 0) {
-        set_error("Impossibile creare null-sink PulseAudio (pactl non trovato o errore).");
+        set_error("Impossibile creare null-sink PulseAudio/PipeWire (pactl ha restituito un errore).");
         return JNI_FALSE;
     }
     g_vsink_module_id = id;
@@ -1690,6 +1723,16 @@ Java_AudioEngine_nativeMicSinkClose(JNIEnv *env, jobject thiz) {
 (void)env; (void)thiz;
 #if defined(_WIN32)
 wasapi_sink_close_internal();
+#endif
+}
+
+JNIEXPORT jstring JNICALL
+Java_AudioEngine_nativeMicSinkDeviceName(JNIEnv *env, jobject thiz) {
+    (void)thiz;
+#if defined(_WIN32)
+    return (*env)->NewStringUTF(env, g_ws.device_name[0] ? g_ws.device_name : "");
+#else
+    return (*env)->NewStringUTF(env, "");
 #endif
 }
 

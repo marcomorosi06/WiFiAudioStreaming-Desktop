@@ -28,6 +28,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Minimize
 import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -231,6 +232,96 @@ data class AudioSettings_V1(
     fun toAudioFormat(): AudioFormat = AudioFormat(sampleRate, bitDepth, channels, true, false)
 }
 
+data class ProtocolMismatch(val localVersion: Int, val remoteVersion: Int)
+
+object WfasStats {
+    enum class Cat { AUDIO, SILENCE, PING, BYE, HELLO, PROBE, OTHER }
+
+    @Volatile var active = false
+        private set
+    @Volatile var sending = true
+        private set
+    @Volatile var peer: String = "-"
+    @Volatile private var startNanos = 0L
+
+    private val nCat = Cat.entries.size
+    private val pkts = java.util.concurrent.atomic.AtomicLongArray(nCat)
+    private val byts = java.util.concurrent.atomic.AtomicLongArray(nCat)
+
+    fun begin(sending: Boolean, peer: String) {
+        this.sending = sending
+        this.peer = peer
+        for (i in 0 until nCat) { pkts.set(i, 0); byts.set(i, 0) }
+        startNanos = System.nanoTime()
+        active = true
+    }
+
+    fun stop() { active = false }
+
+    fun add(cat: Cat, bytes: Int) {
+        if (!active) return
+        pkts.incrementAndGet(cat.ordinal)
+        if (bytes > 0) byts.addAndGet(cat.ordinal, bytes.toLong())
+    }
+
+    fun elapsedSeconds(): Double {
+        val s = startNanos
+        return if (s == 0L) 0.0 else (System.nanoTime() - s) / 1e9
+    }
+
+    fun pkts(cat: Cat): Long = pkts.get(cat.ordinal)
+    fun bytes(cat: Cat): Long = byts.get(cat.ordinal)
+    fun totalPkts(): Long { var s = 0L; for (i in 0 until nCat) s += pkts.get(i); return s }
+    fun totalBytes(): Long { var s = 0L; for (i in 0 until nCat) s += byts.get(i); return s }
+}
+
+object MicStats {
+    enum class Dir { OFF, SENDING, RECEIVING }
+
+    @Volatile var dir: Dir = Dir.OFF
+        private set
+    @Volatile var detail: String = "-"
+        private set
+
+    private val audioPkts   = java.util.concurrent.atomic.AtomicLong(0)
+    private val audioBytes  = java.util.concurrent.atomic.AtomicLong(0)
+    private val silentPkts  = java.util.concurrent.atomic.AtomicLong(0)
+    private val silentBytes = java.util.concurrent.atomic.AtomicLong(0)
+    @Volatile private var lastNanos = 0L
+
+    fun begin(dir: Dir, detail: String) {
+        audioPkts.set(0); audioBytes.set(0); silentPkts.set(0); silentBytes.set(0)
+        this.detail = detail
+        this.dir = dir
+        lastNanos = System.nanoTime()
+    }
+
+    fun off() { dir = Dir.OFF }
+
+    fun addAudio(bytes: Int) {
+        if (dir == Dir.OFF) return
+        audioPkts.incrementAndGet()
+        if (bytes > 0) audioBytes.addAndGet(bytes.toLong())
+    }
+
+    fun addSilence(bytes: Int) {
+        if (dir == Dir.OFF) return
+        silentPkts.incrementAndGet()
+        if (bytes > 0) silentBytes.addAndGet(bytes.toLong())
+    }
+
+    fun audioPkts(): Long  = audioPkts.get()
+    fun audioBytes(): Long = audioBytes.get()
+    fun silentPkts(): Long  = silentPkts.get()
+    fun silentBytes(): Long = silentBytes.get()
+    fun totalPkts(): Long  = audioPkts.get() + silentPkts.get()
+    fun totalBytes(): Long = audioBytes.get() + silentBytes.get()
+    fun secondsSinceStart(): Double {
+        val s = lastNanos
+        return if (s == 0L) 0.0 else (System.nanoTime() - s) / 1e9
+    }
+}
+
 sealed class VirtualDriverStatus {
     object Ok : VirtualDriverStatus()
     data class Missing(val driverName: String, val downloadUrl: String) : VirtualDriverStatus()
@@ -333,6 +424,28 @@ object NetworkHandler_v1 {
     private const val MULTICAST_GROUP_IP   = "239.255.0.1"
     private const val DISCOVERY_MESSAGE    = "WIFI_AUDIO_STREAMER_DISCOVERY"
     private const val DISCOVERY_VERSION    = 2
+
+    const val WFAS_PROTOCOL_VERSION = 2
+    private const val INCOMPATIBLE_PREFIX = "WFAS_INCOMPATIBLE"
+    private const val HELLO_ACK_PREFIX    = "HELLO_ACK"
+
+    private fun clientHelloMessage(): String = "$CLIENT_HELLO_MESSAGE;v=$WFAS_PROTOCOL_VERSION"
+    private fun helloAckMessage():    String = "$HELLO_ACK_PREFIX;v=$WFAS_PROTOCOL_VERSION"
+    private fun incompatibleMessage(): String = "$INCOMPATIBLE_PREFIX;v=$WFAS_PROTOCOL_VERSION"
+
+    private fun parseProtocolVersion(message: String): Int =
+        message.split(";").firstOrNull { it.startsWith("v=") }
+            ?.removePrefix("v=")?.trim()?.toIntOrNull() ?: 0
+
+    val protocolMismatch = MutableStateFlow<ProtocolMismatch?>(null)
+
+    private fun signalProtocolMismatch(remoteVersion: Int) {
+        if (protocolMismatch.value == null) {
+            protocolMismatch.value = ProtocolMismatch(WFAS_PROTOCOL_VERSION, remoteVersion)
+        }
+    }
+
+    fun clearProtocolMismatch() { protocolMismatch.value = null }
 
     // ── Network helpers ────────────────────────────────────────────────────────
     fun getLocalIpAddress(): String = try {
@@ -439,8 +552,18 @@ object NetworkHandler_v1 {
     // e non matchano mai il magic 0x57 0x46, quindi la distinzione è inequivoca.
     private val AUDIO_MAGIC_0: Byte = 0x57   // 'W'
     private val AUDIO_MAGIC_1: Byte = 0x46   // 'F'
-    private val AUDIO_VERSION: Byte = 0x01
+    private val AUDIO_VERSION: Byte = WFAS_PROTOCOL_VERSION.toByte()
     private val AUDIO_HEADER_SIZE = 10
+
+    private fun writeMicHeader(dst: ByteArray, seq: Int, silence: Boolean) {
+        dst[0] = AUDIO_MAGIC_0
+        dst[1] = AUDIO_MAGIC_1
+        dst[2] = AUDIO_VERSION
+        dst[3] = if (silence) 0x01 else 0x00
+        dst[4] = ((seq shr 8) and 0xFF).toByte()
+        dst[5] = (seq and 0xFF).toByte()
+        dst[6] = 0; dst[7] = 0; dst[8] = 0; dst[9] = 0
+    }
 
     @Volatile private var audioSeqNum:   Int  = 0
     @Volatile private var audioSamplePos: Long = 0L
@@ -717,9 +840,15 @@ object NetworkHandler_v1 {
         routingMode: MicRoutingMode,
         micOutputMixerInfo: Mixer.Info?,
         micPort: Int,
-        micMixInputInfo: Mixer.Info? = null
+        micMixInputInfo: Mixer.Info? = null,
+        onStatusUpdate: ((key: String, args: Array<out Any>) -> Unit)? = null
     ) = launch {
         if (routingMode == MicRoutingMode.OFF) return@launch
+
+        fun reportMicError(msg: String) {
+            AppDebug.log("[MicReceiver] $msg")
+            onStatusUpdate?.invoke("status_mic_route_failed", arrayOf(msg))
+        }
 
         val osName = System.getProperty("os.name").lowercase()
         val isLinux   = osName.contains("linux")
@@ -745,7 +874,7 @@ object NetworkHandler_v1 {
                             audioSettings.channels
                         )
                         if (!created) {
-                            AppDebug.log("[MicReceiver] createVirtualSink fallita: ${engine.lastError}")
+                            reportMicError("createVirtualSink fallita: ${engine.lastError}")
                             return@launch
                         }
                         activeVirtualSinkEngine = engine
@@ -765,13 +894,17 @@ object NetworkHandler_v1 {
                             val fallback = micOutputMixerInfo
                                 ?: VirtualMicAutodetect.detectManualCable(outputs)?.mixerInfo
                                 ?: run {
-                                    AppDebug.log("[MicReceiver] Nessun cable selezionato/rilevato.")
+                                    reportMicError("Nessun dispositivo cable (VB-Cable) selezionato o rilevato. Installa VB-Cable e selezionalo.")
                                     return@launch
                                 }
-                            val mixer = runCatching { AudioSystem.getMixer(fallback) }.getOrNull() ?: return@launch
+                            val mixer = runCatching { AudioSystem.getMixer(fallback) }.getOrNull()
+                                ?: run { reportMicError("Mixer '${fallback.name}' non apribile."); return@launch }
                             val format   = audioSettings.toAudioFormat()
                             val lineInfo = DataLine.Info(SourceDataLine::class.java, format)
-                            if (!mixer.isLineSupported(lineInfo)) return@launch
+                            if (!mixer.isLineSupported(lineInfo)) {
+                                reportMicError("'${fallback.name}' non supporta ${format.sampleRate.toInt()}Hz/${format.channels}ch.")
+                                return@launch
+                            }
                             line = (mixer.getLine(lineInfo) as SourceDataLine).also {
                                 it.open(format, audioSettings.bufferSize * 8)
                                 it.start()
@@ -786,18 +919,18 @@ object NetworkHandler_v1 {
                         val mixerInfo = micOutputMixerInfo
                             ?: VirtualMicAutodetect.detectManualCable(outputs)?.mixerInfo
                             ?: run {
-                                AppDebug.log("[MicReceiver] VIRTUAL_MIC su ${osName}: nessun cable selezionato/rilevato.")
+                                reportMicError("Nessun dispositivo virtuale (BlackHole) selezionato o rilevato. Installa BlackHole e selezionalo.")
                                 return@launch
                             }
                         AppDebug.log("[MicReceiver] Apertura SourceDataLine verso '${mixerInfo.name}'")
                         val mixer = runCatching { AudioSystem.getMixer(mixerInfo) }.getOrNull() ?: run {
-                            AppDebug.log("[MicReceiver] getMixer() fallita per ${mixerInfo.name}")
+                            reportMicError("Mixer '${mixerInfo.name}' non apribile.")
                             return@launch
                         }
                         val format   = audioSettings.toAudioFormat()
                         val lineInfo = DataLine.Info(SourceDataLine::class.java, format)
                         if (!mixer.isLineSupported(lineInfo)) {
-                            AppDebug.log("[MicReceiver] Mixer ${mixerInfo.name} non supporta il formato ${format.sampleRate}Hz/${format.channels}ch/${format.sampleSizeInBits}bit.")
+                            reportMicError("'${mixerInfo.name}' non supporta ${format.sampleRate.toInt()}Hz/${format.channels}ch/${format.sampleSizeInBits}bit.")
                             return@launch
                         }
                         line = (mixer.getLine(lineInfo) as SourceDataLine).also {
@@ -843,10 +976,14 @@ object NetworkHandler_v1 {
                     receiveBufferSize = 1 shl 20
                 }
                 AppDebug.log("[MicReceiver] In ascolto su porta $micPort (mode=$routingMode) rcvbuf=${socket.receiveBufferSize}")
+                MicStats.begin(MicStats.Dir.RECEIVING, ":$micPort ($routingMode)")
 
                 val reusableShorts = ShortArray(buf.size / 2)
+                val lineOutBytes   = ByteArray(buf.size)
                 var totalPackets = 0L
                 var totalBytes   = 0L
+                var micVersionChecked = false
+                var lastPayloadShorts = 0
 
                 while (isActive) {
                     try {
@@ -855,51 +992,65 @@ object NetworkHandler_v1 {
                         val len = packet.length
                         if (len <= 0) continue
 
+                        var dataOff = 0
+                        var dataLen = len
+                        var silence = false
+                        if (len >= AUDIO_HEADER_SIZE && packet.data[0] == AUDIO_MAGIC_0 && packet.data[1] == AUDIO_MAGIC_1) {
+                            if (!micVersionChecked) {
+                                micVersionChecked = true
+                                val ver = packet.data[2].toInt() and 0xFF
+                                if (ver != WFAS_PROTOCOL_VERSION) {
+                                    signalProtocolMismatch(ver)
+                                    onStatusUpdate?.invoke("status_protocol_incompatible", emptyArray())
+                                    AppDebug.log("[MicReceiver] mic v=$ver incompatibile (mio v=$WFAS_PROTOCOL_VERSION)")
+                                    break
+                                }
+                            }
+                            silence = (packet.data[3].toInt() and 0x01) != 0
+                            dataOff = AUDIO_HEADER_SIZE
+                            dataLen = len - AUDIO_HEADER_SIZE
+                        }
+
+                        val effSilence = silence || isMicMuted.value
+                        if (effSilence) MicStats.addSilence(len) else MicStats.addAudio(len)
+
                         totalPackets++
                         totalBytes += len
                         if (totalPackets == 1L || totalPackets % 200L == 0L) {
-                            AppDebug.log("[MicReceiver] pkt #$totalPackets from ${packet.address.hostAddress}:${packet.port} len=$len totalBytes=$totalBytes")
+                            AppDebug.log("[MicReceiver] pkt #$totalPackets from ${packet.address.hostAddress}:${packet.port} len=$len silence=$effSilence mode=$routingMode")
                         }
+
+                        val numShorts: Int
+                        if (effSilence) {
+                            numShorts = (if (dataLen >= 2) dataLen / 2 else lastPayloadShorts).coerceAtMost(reusableShorts.size)
+                            for (i in 0 until numShorts) reusableShorts[i] = 0
+                        } else {
+                            val evenLen = dataLen - (dataLen % 2)
+                            numShorts = (evenLen / 2).coerceAtMost(reusableShorts.size)
+                            val bb = java.nio.ByteBuffer.wrap(packet.data, dataOff, evenLen)
+                                .order(java.nio.ByteOrder.LITTLE_ENDIAN)
+                            var i = 0
+                            while (bb.remaining() >= 2 && i < numShorts) reusableShorts[i++] = bb.short
+                            lastPayloadShorts = numShorts
+                        }
+                        if (numShorts <= 0) continue
 
                         when (routingMode) {
                             MicRoutingMode.VIRTUAL_MIC -> {
-                                if (nativeVirtualSinkActive) {
-                                    val engine = activeVirtualSinkEngine ?: continue
-                                    val numShorts = len / 2
-                                    val bb = java.nio.ByteBuffer.wrap(packet.data, 0, len)
-                                        .order(java.nio.ByteOrder.LITTLE_ENDIAN)
-                                    var i = 0
-                                    while (bb.remaining() >= 2 && i < reusableShorts.size) {
-                                        reusableShorts[i++] = bb.short
+                                when {
+                                    nativeVirtualSinkActive -> activeVirtualSinkEngine?.writeToVirtualSink(reusableShorts, numShorts)
+                                    wasapiSinkEngine != null -> wasapiSinkEngine!!.micSinkWrite(reusableShorts, numShorts)
+                                    line != null -> {
+                                        val outBytes = numShorts * 2
+                                        java.nio.ByteBuffer.wrap(lineOutBytes, 0, outBytes)
+                                            .order(java.nio.ByteOrder.LITTLE_ENDIAN)
+                                            .asShortBuffer().put(reusableShorts, 0, numShorts)
+                                        line!!.write(lineOutBytes, 0, outBytes)
                                     }
-                                    engine.writeToVirtualSink(reusableShorts, numShorts)
-                                } else if (wasapiSinkEngine != null) {
-                                    val numShorts = len / 2
-                                    val bb = java.nio.ByteBuffer.wrap(packet.data, 0, len)
-                                        .order(java.nio.ByteOrder.LITTLE_ENDIAN)
-                                    var i = 0
-                                    while (bb.remaining() >= 2 && i < reusableShorts.size) {
-                                        reusableShorts[i++] = bb.short
-                                    }
-                                    wasapiSinkEngine.micSinkWrite(reusableShorts, numShorts)
-                                } else {
-                                    val currentLine = line
-                                    if (currentLine != null) {
-                                        val evenLen = len - (len % 2)
-                                        currentLine.write(packet.data, 0, evenLen)
-                                    } else {
-                                        if (totalPackets == 1L) AppDebug.log("[MicReceiver] ERRORE: SourceDataLine null, mixer non selezionato")
-                                    }
+                                    else -> if (totalPackets == 1L) AppDebug.log("[MicReceiver] ERRORE: nessuna destinazione mic attiva")
                                 }
                             }
                             MicRoutingMode.MIX_INTO_STREAM -> {
-                                val numShorts = len / 2
-                                val bb = java.nio.ByteBuffer.wrap(packet.data, 0, len)
-                                    .order(java.nio.ByteOrder.LITTLE_ENDIAN)
-                                var i = 0
-                                while (bb.remaining() >= 2 && i < reusableShorts.size) {
-                                    reusableShorts[i++] = bb.short
-                                }
                                 serverEngine?.pushMicPcm(reusableShorts, numShorts)
                                 softwareMicMixer.pushPcm(reusableShorts, numShorts)
                             }
@@ -913,6 +1064,7 @@ object NetworkHandler_v1 {
         } catch (e: Exception) {
             if (e !is CancellationException) AppDebug.log("[MicReceiver] errore: ${e.message}")
         } finally {
+            MicStats.off()
             muteCollectorJob?.cancel()
             if (mixActive && localMicMixJob?.isActive != true) {
                 serverEngine?.setMicMixEnabled(false)
@@ -1138,18 +1290,46 @@ object NetworkHandler_v1 {
             socket = DatagramSocket()
             val dest = if (serverInfo.isMulticast) InetAddress.getByName(MULTICAST_GROUP_IP)
             else InetAddress.getByName(serverInfo.ip)
+            MicStats.begin(MicStats.Dir.SENDING, "${serverInfo.ip}:$micPort")
+            val chunkBytes = 1200
             val buf = ByteArray(audioSettings.bufferSize)
-            val silenceBuf = ByteArray(audioSettings.bufferSize)
+            val packetBuffer = ByteArray(AUDIO_HEADER_SIZE + chunkBytes)
+            var seq = 0
+            var lastMutedSent = false
             while (isActive) {
+                if (isMicMuted.value) {
+                    if (!lastMutedSent) {
+                        writeMicHeader(packetBuffer, seq, silence = true)
+                        seq = (seq + 1) and 0xFFFF
+                        runCatching { socket!!.send(DatagramPacket(packetBuffer, AUDIO_HEADER_SIZE, dest, micPort)) }
+                        MicStats.addSilence(AUDIO_HEADER_SIZE)
+                        lastMutedSent = true
+                    }
+                    line.read(buf, 0, buf.size)
+                    continue
+                }
+                lastMutedSent = false
                 val n = line.read(buf, 0, buf.size)
                 if (n > 0) {
-                    val dataToSend = if (isMicMuted.value) silenceBuf else buf
-                    socket.send(DatagramPacket(dataToSend, n, dest, micPort))
+                    var offset = 0
+                    while (offset < n) {
+                        val remaining = n - offset
+                        var chunk = if (remaining > chunkBytes) chunkBytes else remaining
+                        chunk -= chunk % 2
+                        if (chunk <= 0) break
+                        writeMicHeader(packetBuffer, seq, silence = false)
+                        seq = (seq + 1) and 0xFFFF
+                        System.arraycopy(buf, offset, packetBuffer, AUDIO_HEADER_SIZE, chunk)
+                        runCatching { socket!!.send(DatagramPacket(packetBuffer, AUDIO_HEADER_SIZE + chunk, dest, micPort)) }
+                        MicStats.addAudio(AUDIO_HEADER_SIZE + chunk)
+                        offset += chunk
+                    }
                 }
             }
         } catch (e: Exception) {
             if (e !is CancellationException) AppDebug.log("Mic sender error: ${e.message}")
         } finally {
+            MicStats.off()
             socket?.close()
             line.stop(); line.close()
         }
@@ -1973,9 +2153,9 @@ object NetworkHandler_v1 {
         onAudioFrame: ((ShortArray) -> Unit)? = null,
         onStatusUpdate: (key: String, args: Array<out Any>) -> Unit
     ) {
-        if (micRoutingMode != MicRoutingMode.OFF && !isMulticast) {
+        if (micRoutingMode != MicRoutingMode.OFF) {
             micReceiverJob = scope.launchMicReceiver(
-                audioSettings, false, micRoutingMode, micOutputMixerInfo, micPort, micMixInputInfo
+                audioSettings, isMulticast, micRoutingMode, micOutputMixerInfo, micPort, micMixInputInfo, onStatusUpdate
             )
         }
 
@@ -2056,6 +2236,7 @@ object NetworkHandler_v1 {
                                     processEngineFrame(samples, chunkArray, byteBuffer, maxShortsPerPacket, nCh) { bytesToSend ->
                                         byteBuffer.array().copyInto(packetArray, 0, 0, bytesToSend)
                                         runCatching { socket.send(DatagramPacket(packetArray, bytesToSend, group, port)) }
+                                        WfasStats.add(if ((packetArray[3].toInt() and 0x01) != 0) WfasStats.Cat.SILENCE else WfasStats.Cat.AUDIO, bytesToSend)
                                         if (aacPcmQueue != null || opusPcmQueue != null || rtpPcmQueue != null)
                                             distributeToSidecars(byteBuffer.array().copyOfRange(AUDIO_HEADER_SIZE, bytesToSend))
                                     }
@@ -2079,6 +2260,7 @@ object NetworkHandler_v1 {
                                             legacySeq = (legacySeq + 1) and 0xFFFF
                                             val totalBytes = AUDIO_HEADER_SIZE + bytesToSend
                                             runCatching { socket.send(DatagramPacket(packetArray, totalBytes, group, port)) }
+                                            WfasStats.add(WfasStats.Cat.AUDIO, totalBytes)
                                             if (aacPcmQueue != null || opusPcmQueue != null || rtpPcmQueue != null)
                                                 distributeToSidecars(byteBuffer.array().copyOf(bytesToSend))
                                         }
@@ -2091,6 +2273,7 @@ object NetworkHandler_v1 {
                                     val bye = "BYE".toByteArray()
                                     repeat(3) {
                                         socket.send(DatagramPacket(bye, bye.size, group, port))
+                                        WfasStats.add(WfasStats.Cat.BYE, bye.size)
                                     }
                                     AppDebug.log("---Sent BYE to multicast group ---")
                                 }
@@ -2122,10 +2305,20 @@ object NetworkHandler_v1 {
 
                             if (msg == "MODE_PROBE") {
                                 socket.send(Datagram(buildPacket { writeText("UNICAST") }, clientAddress))
+                                WfasStats.add(WfasStats.Cat.PROBE, 7)
                                 continue
                             }
 
-                            if (msg != CLIENT_HELLO_MESSAGE) continue
+                            if (!msg.startsWith(CLIENT_HELLO_MESSAGE)) continue
+
+                            val clientVersion = parseProtocolVersion(msg)
+                            if (clientVersion != WFAS_PROTOCOL_VERSION) {
+                                AppDebug.log("[SERVER][UNICAST] client incompatibile v=$clientVersion (mio v=$WFAS_PROTOCOL_VERSION), rifiuto $clientAddress")
+                                socket.send(Datagram(buildPacket { writeText(incompatibleMessage()) }, clientAddress))
+                                WfasStats.add(WfasStats.Cat.HELLO, incompatibleMessage().length)
+                                signalProtocolMismatch(clientVersion)
+                                continue
+                            }
 
                             onStatusUpdate("Client Connected: %s", arrayOf(clientAddress.toString()))
                             stopAnnouncingPresence()
@@ -2144,7 +2337,8 @@ object NetworkHandler_v1 {
                                 }
                             }
 
-                            socket.send(Datagram(buildPacket { writeText("HELLO_ACK") }, clientAddress))
+                            socket.send(Datagram(buildPacket { writeText(helloAckMessage()) }, clientAddress))
+                            WfasStats.add(WfasStats.Cat.HELLO, helloAckMessage().length)
 
                             val clientAlive = java.util.concurrent.atomic.AtomicBoolean(true)
 
@@ -2154,6 +2348,7 @@ object NetworkHandler_v1 {
                                     delay(1000)
                                     try {
                                         socket.send(Datagram(buildPacket { writeText("PING") }, clientAddress))
+                                        WfasStats.add(WfasStats.Cat.PING, 4)
                                         failures = 0
                                     } catch (_: Exception) {
                                         if (++failures >= 3) {
@@ -2207,6 +2402,7 @@ object NetworkHandler_v1 {
                                             val packet = buildPacket { writeFully(packetArray, 0, bytesToSend) }
                                             try {
                                                 socket.send(Datagram(packet, clientAddress))
+                                                WfasStats.add(if ((packetArray[3].toInt() and 0x01) != 0) WfasStats.Cat.SILENCE else WfasStats.Cat.AUDIO, bytesToSend)
                                             } catch (_: Exception) {
                                                 clientAlive.set(false)
                                             }
@@ -2249,6 +2445,7 @@ object NetworkHandler_v1 {
                                                 val packet = buildPacket { writeFully(packetArray, 0, totalBytes) }
                                                 try {
                                                     socket.send(Datagram(packet, clientAddress))
+                                                    WfasStats.add(WfasStats.Cat.AUDIO, totalBytes)
                                                 } catch (_: Exception) {
                                                     clientAlive.set(false)
                                                 }
@@ -2266,6 +2463,7 @@ object NetworkHandler_v1 {
                                     withContext(NonCancellable) {
                                         runCatching {
                                             socket.send(Datagram(buildPacket { writeText("BYE") }, clientAddress))
+                                            WfasStats.add(WfasStats.Cat.BYE, 3)
                                             AppDebug.log("---Sent BYE to $clientAddress ---")
                                         }
                                     }
@@ -2358,17 +2556,35 @@ object NetworkHandler_v1 {
                         AppDebug.log("[CLIENT][UNICAST] SourceDataLine avviata, invio HELLO a $remoteAddress")
 
                         onStatusUpdate("status_contacting_server", arrayOf(remoteAddress))
-                        socket.send(Datagram(buildPacket { writeText(CLIENT_HELLO_MESSAGE) }, remoteAddress))
+                        socket.send(Datagram(buildPacket { writeText(clientHelloMessage()) }, remoteAddress))
                         AppDebug.log("[CLIENT][UNICAST] HELLO inviato, attendo ACK (timeout 15s)...")
 
                         onStatusUpdate("status_waiting_ack", emptyArray())
                         val ackDatagram = withTimeout(15000) { socket.receive() }
                         val ackText = ackDatagram.packet.readText().trim()
                         AppDebug.log("[CLIENT][UNICAST] ACK ricevuto da ${ackDatagram.address}: '$ackText'")
-                        if (ackText != "HELLO_ACK") {
-                            AppDebug.log("[CLIENT][UNICAST] ERRORE handshake: risposta inattesa '$ackText'")
-                            onStatusUpdate("status_handshake_failed", emptyArray())
-                            return@use
+                        when {
+                            ackText.startsWith(INCOMPATIBLE_PREFIX) -> {
+                                val serverVersion = parseProtocolVersion(ackText)
+                                AppDebug.log("[CLIENT][UNICAST] server incompatibile v=$serverVersion (mio v=$WFAS_PROTOCOL_VERSION)")
+                                signalProtocolMismatch(serverVersion)
+                                onStatusUpdate("status_protocol_incompatible", emptyArray())
+                                return@use
+                            }
+                            ackText.startsWith(HELLO_ACK_PREFIX) -> {
+                                val serverVersion = parseProtocolVersion(ackText)
+                                if (serverVersion != WFAS_PROTOCOL_VERSION) {
+                                    AppDebug.log("[CLIENT][UNICAST] versione ACK incompatibile v=$serverVersion (mio v=$WFAS_PROTOCOL_VERSION)")
+                                    signalProtocolMismatch(serverVersion)
+                                    onStatusUpdate("status_protocol_incompatible", emptyArray())
+                                    return@use
+                                }
+                            }
+                            else -> {
+                                AppDebug.log("[CLIENT][UNICAST] ERRORE handshake: risposta inattesa '$ackText'")
+                                onStatusUpdate("status_handshake_failed", emptyArray())
+                                return@use
+                            }
                         }
                         AppDebug.log("[CLIENT][UNICAST] handshake OK, streaming avviato da $remoteAddress")
                         onStatusUpdate("status_connected_streaming_from", arrayOf(remoteAddress))
@@ -2381,6 +2597,7 @@ object NetworkHandler_v1 {
                         var audioPackets     = 0L
                         var totalAudioBytes  = 0L
                         var pingCount        = 0L
+                        var versionChecked   = false
 
                         val watchdogJob = launch {
                             while (isActive && serverAlive.get()) {
@@ -2405,6 +2622,18 @@ object NetworkHandler_v1 {
                                 receivedPackets++
 
                                 if (bytes.size >= AUDIO_HEADER_SIZE && bytes[0] == AUDIO_MAGIC_0 && bytes[1] == AUDIO_MAGIC_1) {
+                                    if (!versionChecked) {
+                                        versionChecked = true
+                                        val packetVersion = bytes[2].toInt() and 0xFF
+                                        if (packetVersion != WFAS_PROTOCOL_VERSION) {
+                                            AppDebug.log("[CLIENT][UNICAST] pacchetto v=$packetVersion incompatibile (mio v=$WFAS_PROTOCOL_VERSION)")
+                                            signalProtocolMismatch(packetVersion)
+                                            onStatusUpdate("status_protocol_incompatible", emptyArray())
+                                            serverAlive.set(false)
+                                            break
+                                        }
+                                    }
+                                    WfasStats.add(if ((bytes[3].toInt() and 0x01) != 0) WfasStats.Cat.SILENCE else WfasStats.Cat.AUDIO, bytes.size)
                                     val pcmLen = bytes.size - AUDIO_HEADER_SIZE
                                     audioPackets++
                                     totalAudioBytes += pcmLen
@@ -2421,6 +2650,14 @@ object NetworkHandler_v1 {
                                     }
                                 } else {
                                     val text = bytes.toString(Charsets.UTF_8).trim()
+                                    WfasStats.add(
+                                        when (text) {
+                                            "PING" -> WfasStats.Cat.PING
+                                            "BYE"  -> WfasStats.Cat.BYE
+                                            else   -> WfasStats.Cat.OTHER
+                                        },
+                                        bytes.size
+                                    )
                                     when (text) {
                                         "PING" -> {
                                             lastPingReceived = System.currentTimeMillis()
@@ -2479,6 +2716,7 @@ object NetworkHandler_v1 {
                         val frameSize = effectiveAudioSettings.channels * (effectiveAudioSettings.bitDepth / 8)
                         var mcAudioPkts = 0L
                         var mcTotalBytes = 0L
+                        var mcVersionChecked = false
                         while (isActive) {
                             try {
                                 socket.receive(packet)
@@ -2486,6 +2724,17 @@ object NetworkHandler_v1 {
                                 continue
                             }
                             if (packet.length >= AUDIO_HEADER_SIZE && packet.data[0] == AUDIO_MAGIC_0 && packet.data[1] == AUDIO_MAGIC_1) {
+                                if (!mcVersionChecked) {
+                                    mcVersionChecked = true
+                                    val packetVersion = packet.data[2].toInt() and 0xFF
+                                    if (packetVersion != WFAS_PROTOCOL_VERSION) {
+                                        AppDebug.log("[CLIENT][MULTICAST] pacchetto v=$packetVersion incompatibile (mio v=$WFAS_PROTOCOL_VERSION)")
+                                        signalProtocolMismatch(packetVersion)
+                                        onStatusUpdate("status_protocol_incompatible", emptyArray())
+                                        break
+                                    }
+                                }
+                                WfasStats.add(if ((packet.data[3].toInt() and 0x01) != 0) WfasStats.Cat.SILENCE else WfasStats.Cat.AUDIO, packet.length)
                                 val pcmLen = packet.length - AUDIO_HEADER_SIZE
                                 val aligned = pcmLen - (pcmLen % frameSize)
                                 mcAudioPkts++
@@ -2504,6 +2753,7 @@ object NetworkHandler_v1 {
                                     }
                                 }
                             } else if (packet.length >= 3 && String(packet.data, 0, minOf(packet.length, 3), Charsets.UTF_8) == "BYE") {
+                                WfasStats.add(WfasStats.Cat.BYE, packet.length)
                                 AppDebug.log("---Received BYE from multicast server ---")
                                 AppDebug.log("[CLIENT][MULTICAST] BYE ricevuto dopo $mcAudioPkts pacchetti audio ($mcTotalBytes bytes totali)")
                                 onStatusUpdate("status_server_disconnected", emptyArray())
@@ -2815,9 +3065,10 @@ fun main(args: Array<String>) {
 
     val cliArgs = CliArgs.parse(args)
 
-    if (cliArgs.printHelp)    { CliArgs.printHelp();    return }
-    if (cliArgs.printVersion) { CliArgs.printVersion(); return }
-    if (cliArgs.printFred)    { CliArgs.printFred();    return }
+    if (cliArgs.printHelp)     { CliArgs.printHelp();     return }
+    if (cliArgs.printVersion)  { CliArgs.printVersion();  return }
+    if (cliArgs.printProtocol) { CliArgs.printProtocol(); return }
+    if (cliArgs.printFred)     { CliArgs.printFred();     return }
 
     // FIX CRASH: disabilita AVX-512/AVX3 — causa EXCEPTION_ACCESS_VIOLATION in
     // StubRoutines::jlong_disjoint_arraycopy_avx3 durante la copia di buffer audio
@@ -3053,7 +3304,28 @@ fun startGuiApplication(cliArgs: CliArgs) = application {
                     setOf(
                         "status_server_disconnected",
                         "status_server_no_response",
-                        "status_handshake_failed"
+                        "status_handshake_failed",
+                        "status_protocol_incompatible"
+                    )
+                }
+
+                val protocolMismatch by NetworkHandler_v1.protocolMismatch.collectAsState()
+                if (protocolMismatch != null) {
+                    val mm = protocolMismatch!!
+                    AlertDialog(
+                        onDismissRequest = { NetworkHandler_v1.clearProtocolMismatch() },
+                        icon  = { Icon(Icons.Default.Warning, contentDescription = null) },
+                        title = { Text(Strings.get("protocol_incompatible_title")) },
+                        text  = { Text(Strings.get("protocol_incompatible_body", mm.localVersion, mm.remoteVersion)) },
+                        confirmButton = {
+                            Button(onClick = {
+                                runCatching { openUrl("https://github.com/marcomorosi06/WiFiAudioStreaming-Desktop/releases") }
+                                NetworkHandler_v1.clearProtocolMismatch()
+                            }) { Text(Strings.get("protocol_incompatible_update")) }
+                        },
+                        dismissButton = {
+                            TextButton(onClick = { NetworkHandler_v1.clearProtocolMismatch() }) { Text(Strings.get("close")) }
+                        }
                     )
                 }
 
