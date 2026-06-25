@@ -29,6 +29,7 @@ import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Minimize
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Warning
+import androidx.compose.material.icons.outlined.Update
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -3071,6 +3072,14 @@ fun main(args: Array<String>) {
     if (cliArgs.printLicenses) { CliArgs.printLicenses(); return }
     if (cliArgs.printFred)     { CliArgs.printFred();     return }
 
+    if (cliArgs.autoCheckUpdate != null) {
+        val on = cliArgs.autoCheckUpdate == "on"
+        SettingsRepository.setAutoUpdateCheckEnabled(on)
+        println(if (on) "Automatic update check enabled." else "Automatic update check disabled.")
+        return
+    }
+    if (cliArgs.checkUpdate) { printUpdateCheck(); return }
+
     // FIX CRASH: disabilita AVX-512/AVX3 — causa EXCEPTION_ACCESS_VIOLATION in
     // StubRoutines::jlong_disjoint_arraycopy_avx3 durante la copia di buffer audio
     // nativi su alcune CPU Windows con la JVM Temurin 17.
@@ -3119,6 +3128,24 @@ fun startGuiApplication(cliArgs: CliArgs) = application {
     }
 
     var showWelcome        by remember { mutableStateOf(!SettingsRepository.hasSeenWelcome()) }
+    var showChangelog      by remember {
+        mutableStateOf(
+            SettingsRepository.hasSeenWelcome() &&
+                SettingsRepository.lastSeenChangelog() != Changelog.latest.version
+        )
+    }
+    var changelogStandalone by remember { mutableStateOf(SettingsRepository.hasSeenWelcome()) }
+    var updateBanner        by remember { mutableStateOf<UpdateChecker.Result.Available?>(null) }
+    var manualUpdateResult  by remember { mutableStateOf<UpdateChecker.Result?>(null) }
+    var checkingForUpdate   by remember { mutableStateOf(false) }
+
+    LaunchedEffect(Unit) {
+        if (SettingsRepository.isAutoUpdateCheckEnabled()) {
+            val r = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) { UpdateChecker.check() }
+            if (r is UpdateChecker.Result.Available) updateBanner = r
+        }
+    }
+
     var showSettings       by remember { mutableStateOf(false) }
     var isServer           by remember { mutableStateOf(true) }
     val discoveredDevices  = remember { mutableStateMapOf<String, ServerInfo>() }
@@ -3285,7 +3312,8 @@ fun startGuiApplication(cliArgs: CliArgs) = application {
         onCloseRequest = hideOrQuit,
         state      = windowState,
         visible    = isWindowVisible,
-        undecorated = true,
+        undecorated = false,
+        title      = "WiFi Audio Streaming",
         icon       = trayIcon
     ) {
         // Enforce a minimum window size so content is always reachable on low-res displays.
@@ -3320,7 +3348,11 @@ fun startGuiApplication(cliArgs: CliArgs) = application {
                         text  = { Text(Strings.get("protocol_incompatible_body", mm.localVersion, mm.remoteVersion)) },
                         confirmButton = {
                             Button(onClick = {
-                                runCatching { openUrl("https://github.com/marcomorosi06/WiFiAudioStreaming-Desktop/releases") }
+                                val updateUrl = if (mm.localVersion < mm.remoteVersion)
+                                    "https://github.com/marcomorosi06/WiFiAudioStreaming-Desktop/releases"
+                                else
+                                    "https://github.com/marcomorosi06/WiFiAudioStreaming-Android/releases"
+                                runCatching { openUrl(updateUrl) }
                                 NetworkHandler_v1.clearProtocolMismatch()
                             }) { Text(Strings.get("protocol_incompatible_update")) }
                         },
@@ -3529,11 +3561,6 @@ fun startGuiApplication(cliArgs: CliArgs) = application {
                     }
                 }
                 Column(Modifier.fillMaxSize()) {
-                    CustomTitleBar(
-                        windowState = windowState,
-                        onMinimize  = { windowState.isMinimized = true },
-                        onClose     = hideOrQuit
-                    )
                     Box(Modifier.fillMaxSize()) {
                         AppContent(
                             appSettings               = appSettings,
@@ -3690,7 +3717,18 @@ fun startGuiApplication(cliArgs: CliArgs) = application {
                             onMicPortChange        = { micPort        = it },
                             onClose                = { showSettings   = false },
                             onCustomColorChange    = { color -> appSettings = appSettings.copy(customThemeColor = color) },
-                            onShowWelcome          = { showSettings = false; showWelcome = true }
+                            onShowWelcome          = { showSettings = false; showWelcome = true },
+                            checkingForUpdate      = checkingForUpdate,
+                            onCheckForUpdates      = {
+                                if (!checkingForUpdate) {
+                                    checkingForUpdate = true
+                                    scope.launch {
+                                        val r = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) { UpdateChecker.check() }
+                                        checkingForUpdate = false
+                                        manualUpdateResult = r
+                                    }
+                                }
+                            }
                         )
 
                         WelcomeScreen(
@@ -3698,8 +3736,91 @@ fun startGuiApplication(cliArgs: CliArgs) = application {
                             onDismiss = {
                                 showWelcome = false
                                 SettingsRepository.markWelcomeSeen()
+                                changelogStandalone = false
+                                showChangelog = true
                             }
                         )
+
+                        ChangelogScreen(
+                            visible    = showChangelog,
+                            standalone = changelogStandalone,
+                            onContinue = {
+                                showChangelog = false
+                                SettingsRepository.setLastSeenChangelog(Changelog.latest.version)
+                            }
+                        )
+
+                        updateBanner?.let { info ->
+                            AlertDialog(
+                                onDismissRequest = { updateBanner = null },
+                                icon  = { Icon(Icons.Outlined.Update, contentDescription = null) },
+                                title = { Text(Bilingual("Update available", "Aggiornamento disponibile").get()) },
+                                text  = {
+                                    Text(
+                                        Bilingual(
+                                            "Version ${info.latest} is available. You have ${info.current}.",
+                                            "La versione ${info.latest} è disponibile. Tu hai la ${info.current}."
+                                        ).get()
+                                    )
+                                },
+                                confirmButton = {
+                                    Button(onClick = {
+                                        runCatching { openUrl(info.url) }
+                                        updateBanner = null
+                                    }) { Text(Bilingual("Download", "Scarica").get()) }
+                                },
+                                dismissButton = {
+                                    TextButton(onClick = { updateBanner = null }) {
+                                        Text(Bilingual("Later", "Più tardi").get())
+                                    }
+                                }
+                            )
+                        }
+
+                        manualUpdateResult?.let { res ->
+                            val message = when (res) {
+                                is UpdateChecker.Result.Available ->
+                                    Bilingual(
+                                        "Version ${res.latest} is available. You have ${res.current}.",
+                                        "La versione ${res.latest} è disponibile. Tu hai la ${res.current}."
+                                    ).get()
+                                is UpdateChecker.Result.UpToDate ->
+                                    Bilingual(
+                                        "You are on the latest version (${res.current}).",
+                                        "Sei all'ultima versione (${res.current})."
+                                    ).get()
+                                is UpdateChecker.Result.Failed ->
+                                    Bilingual(
+                                        "Could not check for updates. Please try again later.",
+                                        "Impossibile controllare gli aggiornamenti. Riprova più tardi."
+                                    ).get()
+                            }
+                            AlertDialog(
+                                onDismissRequest = { manualUpdateResult = null },
+                                icon  = { Icon(Icons.Outlined.Update, contentDescription = null) },
+                                title = { Text(Bilingual("Check for updates", "Controllo aggiornamenti").get()) },
+                                text  = { Text(message) },
+                                confirmButton = {
+                                    if (res is UpdateChecker.Result.Available) {
+                                        Button(onClick = {
+                                            runCatching { openUrl(res.url) }
+                                            manualUpdateResult = null
+                                        }) { Text(Bilingual("Download", "Scarica").get()) }
+                                    } else {
+                                        TextButton(onClick = { manualUpdateResult = null }) {
+                                            Text(Strings.get("close"))
+                                        }
+                                    }
+                                },
+                                dismissButton = {
+                                    if (res is UpdateChecker.Result.Available) {
+                                        TextButton(onClick = { manualUpdateResult = null }) {
+                                            Text(Strings.get("close"))
+                                        }
+                                    }
+                                }
+                            )
+                        }
                     }
                 }
             }
@@ -3707,72 +3828,3 @@ fun startGuiApplication(cliArgs: CliArgs) = application {
     }
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Custom title bar
-// ─────────────────────────────────────────────────────────────────────────────
-
-@Composable
-fun WindowScope.CustomTitleBar(
-    windowState: WindowState,
-    onMinimize: () -> Unit,
-    onClose: () -> Unit
-) {
-    val onSurfaceColor = MaterialTheme.colorScheme.onSurface
-    val surfaceColor   = MaterialTheme.colorScheme.surface
-
-    var preMaximizeSize     by remember { mutableStateOf(windowState.size) }
-    var preMaximizePosition by remember { mutableStateOf(windowState.position) }
-
-    val maxBounds           = GraphicsEnvironment.getLocalGraphicsEnvironment().maximumWindowBounds
-    val density             = LocalDensity.current.density
-    val maximizedWidth      = (maxBounds.width  / density).dp
-    val maximizedHeight     = (maxBounds.height / density).dp
-    val maximizedPositionX  = (maxBounds.x / density).dp
-    val maximizedPositionY  = (maxBounds.y / density).dp
-    val isManuallyMaximized = windowState.size == DpSize(maximizedWidth, maximizedHeight)
-
-    WindowDraggableArea {
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .height(32.dp)
-                .background(surfaceColor)
-                .padding(horizontal = 8.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Text(
-                text     = "WiFi Audio Streaming",
-                style    = MaterialTheme.typography.titleSmall,
-                color    = onSurfaceColor,
-                modifier = Modifier.weight(1f)
-            )
-            Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                IconButton(onClick = onMinimize, modifier = Modifier.size(24.dp)) {
-                    Icon(Icons.Default.Minimize, "Minimize", tint = onSurfaceColor)
-                }
-                IconButton(
-                    onClick = {
-                        if (isManuallyMaximized) {
-                            windowState.size     = preMaximizeSize
-                            windowState.position = preMaximizePosition
-                        } else {
-                            preMaximizeSize     = windowState.size
-                            preMaximizePosition = windowState.position
-                            windowState.size     = DpSize(maximizedWidth, maximizedHeight)
-                            windowState.position = WindowPosition(maximizedPositionX, maximizedPositionY)
-                        }
-                    },
-                    modifier = Modifier.size(24.dp)
-                ) {
-                    Icon(
-                        if (isManuallyMaximized) Icons.Filled.FullscreenExit else Icons.Filled.Fullscreen,
-                        "Maximize/Restore", tint = onSurfaceColor
-                    )
-                }
-                IconButton(onClick = onClose, modifier = Modifier.size(24.dp)) {
-                    Icon(Icons.Default.Close, "Close", tint = onSurfaceColor)
-                }
-            }
-        }
-    }
-}

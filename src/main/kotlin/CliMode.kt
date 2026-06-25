@@ -228,6 +228,28 @@ private fun printCliWelcome() {
     println()
 }
 
+fun printUpdateCheck() {
+    println(dim("Checking for updates..."))
+    when (val r = UpdateChecker.check()) {
+        is UpdateChecker.Result.Available ->
+            println(yellow("→ ") + bold("Update available: v${r.latest}") + dim(" (you have v${r.current})") + "\n  ${r.url}")
+        is UpdateChecker.Result.UpToDate ->
+            println(green("✓") + " You are on the latest version (v${r.current}).")
+        is UpdateChecker.Result.Failed ->
+            err(yellow("!") + " Could not check for updates: ${r.reason}")
+    }
+}
+
+private fun maybeNotifyUpdate(args: CliArgs) {
+    if (args.quiet || args.json || args.controlCmd != null) return
+    if (!SettingsRepository.isAutoUpdateCheckEnabled()) return
+    val r = UpdateChecker.check(timeoutMs = 2500)
+    if (r is UpdateChecker.Result.Available) {
+        println(yellow("→ ") + "Update available: v${r.latest} (you have v${r.current})  ${dim(r.url)}")
+        println(dim("  Disable this with: wfas --auto-check-update off"))
+    }
+}
+
 fun runCli(args: CliArgs) {
     AppDebug.enabled = args.debug
     val settings = SettingsRepository.loadSettings()
@@ -236,6 +258,8 @@ fun runCli(args: CliArgs) {
         printCliWelcome()
         SettingsRepository.markCliWelcomeSeen()
     }
+
+    maybeNotifyUpdate(args)
 
     if (args.controlCmd != null) {
         IpcClient.send(args.controlCmd, args)

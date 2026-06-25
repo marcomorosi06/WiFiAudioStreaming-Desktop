@@ -47,7 +47,8 @@ data class AppSettings(
     val disconnectionSoundEnabled: Boolean = true,
     val useNativeEngine: Boolean = true,
     val startMinimizedToTray: Boolean = false,
-    val closeToTray: Boolean = true
+    val closeToTray: Boolean = true,
+    val autoUpdateCheckEnabled: Boolean = true
 )
 
 object SettingsRepository {
@@ -83,11 +84,17 @@ object SettingsRepository {
     private const val CLOSE_TO_TRAY_KEY       = "close_to_tray"
     private const val HAS_SEEN_WELCOME_KEY     = "has_seen_welcome"
     private const val HAS_SEEN_CLI_WELCOME_KEY = "has_seen_cli_welcome"
+    private const val LAST_SEEN_CHANGELOG_KEY  = "last_seen_changelog_version"
+    private const val AUTO_UPDATE_CHECK_KEY    = "auto_update_check"
 
     fun hasSeenWelcome(): Boolean    = prefs.getBoolean(HAS_SEEN_WELCOME_KEY,     false)
     fun markWelcomeSeen()            { prefs.putBoolean(HAS_SEEN_WELCOME_KEY,     true); runCatching { prefs.flush() } }
     fun hasSeenCliWelcome(): Boolean = prefs.getBoolean(HAS_SEEN_CLI_WELCOME_KEY, false)
     fun markCliWelcomeSeen()         { prefs.putBoolean(HAS_SEEN_CLI_WELCOME_KEY, true); runCatching { prefs.flush() } }
+    fun lastSeenChangelog(): String  = prefs.get(LAST_SEEN_CHANGELOG_KEY, "")
+    fun setLastSeenChangelog(v: String) { prefs.put(LAST_SEEN_CHANGELOG_KEY, v); runCatching { prefs.flush() } }
+    fun isAutoUpdateCheckEnabled(): Boolean = prefs.getBoolean(AUTO_UPDATE_CHECK_KEY, true)
+    fun setAutoUpdateCheckEnabled(b: Boolean) { prefs.putBoolean(AUTO_UPDATE_CHECK_KEY, b); runCatching { prefs.flush() } }
 
     fun saveSettings(settings: AllSettings) {
         try {
@@ -125,6 +132,7 @@ object SettingsRepository {
             prefs.put(MIC_ROUTING_MODE_KEY, settings.micRoutingMode)
             prefs.putBoolean(START_MINIMIZED_TRAY_KEY, settings.app.startMinimizedToTray)
             prefs.putBoolean(CLOSE_TO_TRAY_KEY, settings.app.closeToTray)
+            prefs.putBoolean(AUTO_UPDATE_CHECK_KEY, settings.app.autoUpdateCheckEnabled)
             prefs.flush()
         } catch (e: BackingStoreException) {}
     }
@@ -162,6 +170,7 @@ object SettingsRepository {
         val micRoutingMode = prefs.get(MIC_ROUTING_MODE_KEY, "OFF")
         val startMinimizedToTray = prefs.getBoolean(START_MINIMIZED_TRAY_KEY, false)
         val closeToTray = prefs.getBoolean(CLOSE_TO_TRAY_KEY, true)
+        val autoUpdateCheckEnabled = prefs.getBoolean(AUTO_UPDATE_CHECK_KEY, true)
 
         val appSettings = AppSettings(
             theme = theme,
@@ -184,7 +193,8 @@ object SettingsRepository {
             disconnectionSoundEnabled = disconnectionSoundEnabled,
             useNativeEngine = useNativeEngine,
             startMinimizedToTray = startMinimizedToTray,
-            closeToTray = closeToTray
+            closeToTray = closeToTray,
+            autoUpdateCheckEnabled = autoUpdateCheckEnabled
         )
         return AllSettings(appSettings, audioSettings, streamingPort, micPort, micRoutingMode)
     }

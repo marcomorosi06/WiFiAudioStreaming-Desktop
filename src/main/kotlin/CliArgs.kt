@@ -62,6 +62,8 @@ data class CliArgs(
     val printFred:       Boolean         = false,
     val printLicenses:   Boolean         = false,
     val debug:           Boolean         = false,
+    val checkUpdate:     Boolean         = false,
+    val autoCheckUpdate: String?         = null,
 ) {
     companion object {
 
@@ -120,6 +122,8 @@ data class CliArgs(
             var printFred       = false
             var printLicenses   = false
             var debug           = false
+            var checkUpdate     = false
+            var autoCheckUpdate: String?    = null
 
             var i = 0
             while (i < args.size) {
@@ -245,6 +249,16 @@ data class CliArgs(
                     "--licenses", "--license", "--credits" -> printLicenses = true
                     "--fred", "--Fred" -> printFred     = true
                     "--debug"          -> debug         = true
+                    "--check-update", "--check-updates" -> checkUpdate = true
+                    "--auto-check-update", "--auto-check-updates" -> {
+                        val v = nextArg(args, i, "--auto-check-update") ?: parseError("--auto-check-update requires a value: on or off")
+                        i++
+                        autoCheckUpdate = when (v.lowercase()) {
+                            "on", "true", "enable", "enabled"   -> "on"
+                            "off", "false", "disable", "disabled" -> "off"
+                            else -> parseError("--auto-check-update value must be 'on' or 'off', got '$v'")
+                        }
+                    }
 
                     else -> parseError("Unknown argument '$token'. Run 'wfas --help' for usage.")
                 }
@@ -288,6 +302,8 @@ data class CliArgs(
                 printFred       = printFred,
                 printLicenses   = printLicenses,
                 debug           = debug,
+                checkUpdate     = checkUpdate,
+                autoCheckUpdate = autoCheckUpdate,
             )
         }
 
@@ -371,6 +387,9 @@ GLOBAL OPTIONS
                       send/receive table (with --mic), then internal logs
   --protocol          Explain the WFAS v2 wire protocol and exit
   --licenses          Show third-party open-source licenses and exit
+  --check-update      Check GitHub for a newer release and exit
+  --auto-check-update on|off
+                      Enable or disable the automatic update check at startup
   --help              Show this help
   --version           Show version
 

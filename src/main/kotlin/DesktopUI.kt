@@ -639,7 +639,9 @@ fun SettingsScreen(
     onMicPortChange: (String) -> Unit,
     onCustomColorChange: (Long?) -> Unit,
     onClose: () -> Unit,
-    onShowWelcome: () -> Unit = {}
+    onShowWelcome: () -> Unit = {},
+    onCheckForUpdates: () -> Unit = {},
+    checkingForUpdate: Boolean = false
 ) {
     var linuxAutostartInfo by remember { mutableStateOf<String?>(null) }
     var showResetConfirmDialog by remember { mutableStateOf(false) }
@@ -1178,6 +1180,33 @@ fun SettingsScreen(
                             }
                         )
                     }
+                }
+                item {
+                    SwitchSetting(
+                        title = Bilingual("Check for updates automatically", "Controlla aggiornamenti automaticamente").get(),
+                        description = Bilingual(
+                            "On startup, check GitHub for a newer release.",
+                            "All'avvio, controlla su GitHub se c'è una nuova versione."
+                        ).get(),
+                        icon = Icons.Outlined.Update,
+                        checked = appSettings.autoUpdateCheckEnabled,
+                        onCheckedChange = { onAppSettingsChange(appSettings.copy(autoUpdateCheckEnabled = it)) }
+                    )
+                    Spacer(Modifier.height(8.dp))
+                    OutlinedButton(
+                        onClick = onCheckForUpdates,
+                        enabled = !checkingForUpdate,
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        if (checkingForUpdate) {
+                            CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp)
+                        } else {
+                            Icon(Icons.Outlined.Update, contentDescription = null, modifier = Modifier.size(18.dp))
+                        }
+                        Spacer(Modifier.width(8.dp))
+                        Text(Bilingual("Check for updates now", "Controlla aggiornamenti ora").get())
+                    }
+                    Spacer(Modifier.height(8.dp))
                 }
                 item {
                     OutlinedButton(
