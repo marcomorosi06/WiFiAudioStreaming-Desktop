@@ -30,9 +30,28 @@ set(CMAKE_C_STANDARD 11)
 set(CMAKE_C_STANDARD_REQUIRED ON)
 
 # ── Trova JNI ─────────────────────────────────────────────────────────────────
-# JAVA_HOME deve essere impostato al JDK usato da Gradle (JDK 17).
-# Gradle passa -DJAVA_HOME=... tramite il task cmake nel build.gradle.kts.
-find_package(JNI REQUIRED)
+# JAVA_HOME è passato da Gradle come variabile cmake (-DJAVA_HOME=...).
+# Usiamo find_package solo come fallback: costruiamo prima i path da JAVA_HOME
+# per evitare che CMake prelevi header da un JRE di sistema incompleto.
+if(NOT DEFINED JAVA_HOME AND DEFINED ENV{JAVA_HOME})
+    set(JAVA_HOME "$ENV{JAVA_HOME}")
+endif()
+
+if(DEFINED JAVA_HOME)
+    if(WIN32)
+        set(_jni_platform "win32")
+    elseif(APPLE)
+        set(_jni_platform "darwin")
+    else()
+        set(_jni_platform "linux")
+    endif()
+    set(JNI_INCLUDE_DIRS "${JAVA_HOME}/include" "${JAVA_HOME}/include/${_jni_platform}")
+    if(NOT EXISTS "${JAVA_HOME}/include/jni.h")
+        message(FATAL_ERROR "jni.h non trovato in ${JAVA_HOME}/include — controlla JAVA_HOME")
+    endif()
+else()
+    find_package(JNI REQUIRED)
+endif()
 message(STATUS "JNI include dirs: ${JNI_INCLUDE_DIRS}")
 
 # ── Sorgenti ──────────────────────────────────────────────────────────────────
