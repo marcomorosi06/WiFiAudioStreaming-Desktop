@@ -5,6 +5,12 @@ This application is licensed under the EUPL v1.2.
 It uses the open-source components below, each under its own licence.
 Full details: THIRD_PARTY_LICENSES.md in the project repository.
 
+WFAS v2 protocol  (MIT License)
+  The WiFi Audio Streaming (WFAS) wire protocol is this project's own protocol;
+  its C reference implementation is released separately under the MIT License,
+  so anyone can adopt WFAS v2 freely (e.g. on microcontrollers).
+  Copyright (c) 2026 Marco Morosi.  https://github.com/marcomorosi06/wfas-protocol
+
 FFmpeg  (LGPL v2.1 or later; some components may be GPL)
   Used for AAC/Opus encoding (HTTP server) and legacy audio capture.
   Copyright (c) the FFmpeg developers.  https://ffmpeg.org

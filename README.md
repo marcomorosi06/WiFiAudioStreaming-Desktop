@@ -218,6 +218,8 @@ It started as a personal script. Then it grew. Then I rewrote the audio engine d
 
 For the full legal text, see `LICENSE.md` or visit the [official EUPL website](https://joinup.ec.europa.eu/collection/eupl/eupl-text-eupl-12).
 
+The **app** is EUPL, but the **WFAS v2 wire protocol** is not locked up: a C reference implementation is published separately under the permissive **MIT License** ([`wfas-protocol`](https://github.com/marcomorosi06/wfas-protocol), © 2026 Marco Morosi), so anyone — including embedded/firmware projects — can implement WFAS v2 freely. The copyleft protects this application; the protocol stays open.
+
 ---
 
 # 🧩 Third-Party Software & Licenses

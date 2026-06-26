@@ -391,6 +391,9 @@ private suspend fun runCliServer(args: CliArgs, settings: AllSettings) {
             }
             out("  $icon  $msg", args)
         }
+        if (key.contains("disconnect")) {
+            if (!done.isCompleted) done.complete(Unit)
+        }
     }
 
     if (args.debug && !args.viz && !args.json)
