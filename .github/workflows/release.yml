@@ -49,20 +49,27 @@ jobs:
       - name: Build Packages
         run: ./gradlew packageDistributionForCurrentOS
 
-      # Upload built binaries as arficats for later use in the release job
+      # Fix: Move files to a smaller directory depth to prevent hitting Windows MAX_PATH limits
+      - name: Stage Desktop Artifacts for Upload
+        shell: bash
+        run: |
+          mkdir -p ./artifacts-staging
+          # Safely copy any built binaries out of the deep nesting
+          cp -r build/compose/binaries/main/**/*.msi ./artifacts-staging/ 2>/dev/null || true
+          cp -r build/compose/binaries/main/**/*.deb ./artifacts-staging/ 2>/dev/null || true
+          cp -r build/compose/binaries/main/**/*.rpm ./artifacts-staging/ 2>/dev/null || true
+          cp -r build/compose/binaries/main/**/*.dmg ./artifacts-staging/ 2>/dev/null || true
+          cp -r build/compose/binaries/main/**/*.zip ./artifacts-staging/ 2>/dev/null || true
+          cp -r build/compose/binaries/main/**/*.tar.gz ./artifacts-staging/ 2>/dev/null || true
+
       - name: Upload Desktop Artifacts
         uses: actions/upload-artifact@v6
         with:
           name: desktop-artifacts-${{ matrix.os }}
-          path: |
-            build/compose/binaries/main/msi/*.msi
-            build/compose/binaries/main/deb/*.deb
-            build/compose/binaries/main/rpm/*.rpm
-            build/compose/binaries/main/dmg/*.dmg
-            build/compose/binaries/main/app/*.zip
-            build/compose/binaries/main/app/*.tar.gz
+          # Upload from the shallow, safe staging folder
+          path: ./artifacts-staging/
           retention-days: 30
-          if-no-files-found: ignore # Matrix platforms only compile their relative target outputs
+          if-no-files-found: ignore
 
   # Download assets, fake draft release
   release:
