@@ -459,6 +459,13 @@ AUDIO PACKET  (10-byte header + PCM payload)
   unchanged from v1: the version byte reuses an already-reserved slot, so the
   protocol stays lightweight (zero extra bytes on the wire).
 
+  Payload length is chosen by the server, per packet: a whole number of frames
+  (channels x 2 bytes), never more than MTU - 10 bytes (~1390 on a 1500 MTU). A
+  receiver must accept any size within these bounds; it can be tuned smaller, e.g.
+  for constrained / embedded receivers. Every server must fill seq and samplePos
+  on every packet (monotonic), so receivers detect loss / reorder and conceal
+  gaps by the exact missing duration.
+
 CONTROL MESSAGES  (ASCII over UDP)
   MODE_PROBE                 client -> server   "are you unicast?"
   UNICAST                    server -> client   reply to MODE_PROBE

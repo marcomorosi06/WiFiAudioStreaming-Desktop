@@ -228,7 +228,9 @@ data class AudioSettings_V1(
     val sampleRate: Float,
     val bitDepth: Int,
     val channels: Int,
-    val bufferSize: Int
+    val bufferSize: Int,
+    val latencyMs: Int = 120,
+    val maxPayloadBytes: Int = 1390
 ) {
     fun toAudioFormat(): AudioFormat = AudioFormat(sampleRate, bitDepth, channels, true, false)
 }
@@ -484,7 +486,7 @@ object NetworkHandler_v1 {
         return try {
             var isUnicast = false
             withTimeout(1000) {
-                aSocket(SelectorManager(Dispatchers.IO)).udp().bind().use { sock ->
+                aSocket(selectorManager).udp().bind().use { sock ->
                     val remoteAddress = InetSocketAddress(ip, port)
                     // Bussa alla porta con una richiesta speciale
                     sock.send(Datagram(buildPacket { writeText("MODE_PROBE") }, remoteAddress))
@@ -504,7 +506,7 @@ object NetworkHandler_v1 {
         return try {
             var online = false
             withTimeout(1000) {
-                aSocket(SelectorManager(Dispatchers.IO)).udp().bind().use { sock ->
+                aSocket(selectorManager).udp().bind().use { sock ->
                     val remoteAddress = InetSocketAddress(ip, port)
                     sock.send(Datagram(buildPacket { writeText("MODE_PROBE") }, remoteAddress))
                     val ack = sock.receive()
@@ -525,6 +527,7 @@ object NetworkHandler_v1 {
     fun setServerVolume(volume: Float) { currentServerVolume = volume }
 
     private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
+    private val selectorManager = SelectorManager(Dispatchers.IO)
 
     val isMicMuted = MutableStateFlow(false)
 
@@ -907,7 +910,7 @@ object NetworkHandler_v1 {
                                 return@launch
                             }
                             line = (mixer.getLine(lineInfo) as SourceDataLine).also {
-                                it.open(format, audioSettings.bufferSize * 8)
+                                it.open(format, (audioSettings.sampleRate.toInt() * audioSettings.latencyMs / 1000) * audioSettings.channels * 2)
                                 it.start()
                             }
                             AppDebug.log("[MicReceiver] Fallback SourceDataLine su '${fallback.name}'")
@@ -935,7 +938,7 @@ object NetworkHandler_v1 {
                             return@launch
                         }
                         line = (mixer.getLine(lineInfo) as SourceDataLine).also {
-                            it.open(format, audioSettings.bufferSize * 8)
+                            it.open(format, (audioSettings.sampleRate.toInt() * audioSettings.latencyMs / 1000) * audioSettings.channels * 2)
                             it.start()
                         }
                         AppDebug.log("[MicReceiver] SourceDataLine aperta: buffer=${line?.bufferSize} bytes, format=$format")
@@ -1292,7 +1295,7 @@ object NetworkHandler_v1 {
             val dest = if (serverInfo.isMulticast) InetAddress.getByName(MULTICAST_GROUP_IP)
             else InetAddress.getByName(serverInfo.ip)
             MicStats.begin(MicStats.Dir.SENDING, "${serverInfo.ip}:$micPort")
-            val chunkBytes = 1200
+            val chunkBytes = audioSettings.maxPayloadBytes.coerceIn(256, 1400 - AUDIO_HEADER_SIZE)
             val buf = ByteArray(audioSettings.bufferSize)
             val packetBuffer = ByteArray(AUDIO_HEADER_SIZE + chunkBytes)
             var seq = 0
@@ -2206,7 +2209,7 @@ object NetworkHandler_v1 {
 
                     val nCh               = audioSettings.channels
                     val safeMtuSize        = 1400
-                    var maxShortsPerPacket = (safeMtuSize - AUDIO_HEADER_SIZE) / 2
+                    var maxShortsPerPacket = (audioSettings.maxPayloadBytes.coerceIn(256, safeMtuSize - AUDIO_HEADER_SIZE)) / 2
                     maxShortsPerPacket    -= (maxShortsPerPacket % nCh)
                     val exactPayloadBytes  = AUDIO_HEADER_SIZE + (maxShortsPerPacket * 2)
                     val chunkArray         = ShortArray(maxShortsPerPacket)
@@ -2295,7 +2298,7 @@ object NetworkHandler_v1 {
 
                 } else { // Unicast
                     val localAddress = InetSocketAddress("0.0.0.0", port)
-                    aSocket(SelectorManager(Dispatchers.IO)).udp().bind(localAddress) { reuseAddress = true }.use { socket ->
+                    aSocket(selectorManager).udp().bind(localAddress) { reuseAddress = true }.use { socket ->
                         while (isActive) {
                             startAnnouncingPresence(isMulticast = false, port = port, capabilities = capabilities, audioSettings = audioSettings)
                             onStatusUpdate("Waiting for Unicast Client on Port %d...", arrayOf(port))
@@ -2382,7 +2385,7 @@ object NetworkHandler_v1 {
                             try {
                                 if (useNativeEngine) {
                                     val safeMtuSize = 1400
-                                    var maxShortsPerPacket = (safeMtuSize - AUDIO_HEADER_SIZE) / 2
+                                    var maxShortsPerPacket = (audioSettings.maxPayloadBytes.coerceIn(256, safeMtuSize - AUDIO_HEADER_SIZE)) / 2
                                     maxShortsPerPacket -= (maxShortsPerPacket % audioSettings.channels)
                                     val exactPayloadBytes = AUDIO_HEADER_SIZE + (maxShortsPerPacket * 2)
                                     val chunkArray = ShortArray(maxShortsPerPacket)
@@ -2414,7 +2417,7 @@ object NetworkHandler_v1 {
                                     }
                                 } else {
                                     val safeMtuSize = 1400
-                                    var maxShortsPerPacket = (safeMtuSize - AUDIO_HEADER_SIZE) / 2
+                                    var maxShortsPerPacket = (audioSettings.maxPayloadBytes.coerceIn(256, safeMtuSize - AUDIO_HEADER_SIZE)) / 2
                                     maxShortsPerPacket -= (maxShortsPerPacket % audioSettings.channels)
                                     val exactPayloadBytes  = AUDIO_HEADER_SIZE + (maxShortsPerPacket * 2)
                                     val chunkArray         = ShortArray(maxShortsPerPacket)
@@ -2546,14 +2549,19 @@ object NetworkHandler_v1 {
 
         streamingJob = scope.launch {
             var sourceDataLine: SourceDataLine? = null
+            var player: JitterAudioPlayer? = null
+            val playbackState = ClientPlaybackState()
             AppDebug.log("[CLIENT] launchClientInstance avviato: server=${serverInfo.ip}:${serverInfo.port} isMulticast=${serverInfo.isMulticast} sendMic=$sendMicrophone mixer='${selectedMixerInfo.name}'")
             try {
                 if (!serverInfo.isMulticast) { // Unicast
                     val remoteAddress = InetSocketAddress(serverInfo.ip, serverInfo.port)
                     AppDebug.log("[CLIENT][UNICAST] connessione unicast verso $remoteAddress")
-                    aSocket(SelectorManager(Dispatchers.IO)).udp().bind().use { socket ->
+                    aSocket(selectorManager).udp().bind().use { socket ->
                         sourceDataLine = prepareSourceDataLine(selectedMixerInfo, audioSettings)
-                        sourceDataLine?.start()
+                        player = sourceDataLine?.let {
+                            JitterAudioPlayer(it, audioSettings.sampleRate.toInt(), audioSettings.channels,
+                                prebufferMs = audioSettings.latencyMs, maxBufferMs = audioSettings.latencyMs + 280).also { p -> p.start() }
+                        }
                         AppDebug.log("[CLIENT][UNICAST] SourceDataLine avviata, invio HELLO a $remoteAddress")
 
                         onStatusUpdate("status_contacting_server", arrayOf(remoteAddress))
@@ -2641,14 +2649,7 @@ object NetworkHandler_v1 {
                                     if (audioPackets == 1L || audioPackets % 500L == 0L) {
                                         AppDebug.log("[CLIENT][UNICAST] audioPkt #$audioPackets size=${bytes.size} pcmLen=$pcmLen totalAudioBytes=$totalAudioBytes SDL=${sourceDataLine?.isActive}")
                                     }
-                                    sourceDataLine?.write(bytes, AUDIO_HEADER_SIZE, pcmLen)
-                                    if (onAudioFrame != null && pcmLen >= 2) {
-                                        val shorts = ShortArray(pcmLen / 2)
-                                        java.nio.ByteBuffer.wrap(bytes, AUDIO_HEADER_SIZE, pcmLen)
-                                            .order(java.nio.ByteOrder.LITTLE_ENDIAN)
-                                            .asShortBuffer().get(shorts)
-                                        onAudioFrame.invoke(shorts)
-                                    }
+                                    player?.let { handleAudioPacket(it, bytes, bytes.size, audioSettings.channels, playbackState, onAudioFrame) }
                                 } else {
                                     val text = bytes.toString(Charsets.UTF_8).trim()
                                     WfasStats.add(
@@ -2707,7 +2708,10 @@ object NetworkHandler_v1 {
                         val effectiveAudioSettings = serverInfo.serverAudioSettings ?: audioSettings
                         AppDebug.log("[CLIENT][MULTICAST] effectiveAudioSettings: sr=${effectiveAudioSettings.sampleRate} ch=${effectiveAudioSettings.channels} bd=${effectiveAudioSettings.bitDepth}")
                         sourceDataLine = prepareSourceDataLine(selectedMixerInfo, effectiveAudioSettings)
-                        sourceDataLine?.start()
+                        player = sourceDataLine?.let {
+                            JitterAudioPlayer(it, effectiveAudioSettings.sampleRate.toInt(), effectiveAudioSettings.channels,
+                                prebufferMs = audioSettings.latencyMs, maxBufferMs = audioSettings.latencyMs + 280).also { p -> p.start() }
+                        }
                         AppDebug.log("[CLIENT][MULTICAST] SourceDataLine avviata, attendo pacchetti multicast...")
                         onStatusUpdate("status_multicast_streaming", arrayOf(serverInfo.port))
                         if (connectionSoundEnabled) playConnectionSound()
@@ -2744,14 +2748,7 @@ object NetworkHandler_v1 {
                                     AppDebug.log("[CLIENT][MULTICAST] audioPkt #$mcAudioPkts len=${packet.length} pcmLen=$pcmLen aligned=$aligned totalBytes=$mcTotalBytes")
                                 }
                                 if (aligned > 0) {
-                                    sourceDataLine?.write(packet.data, AUDIO_HEADER_SIZE, aligned)
-                                    if (onAudioFrame != null) {
-                                        val shorts = ShortArray(aligned / 2)
-                                        java.nio.ByteBuffer.wrap(packet.data, AUDIO_HEADER_SIZE, aligned)
-                                            .order(java.nio.ByteOrder.LITTLE_ENDIAN)
-                                            .asShortBuffer().get(shorts)
-                                        onAudioFrame.invoke(shorts)
-                                    }
+                                    player?.let { handleAudioPacket(it, packet.data, packet.length, effectiveAudioSettings.channels, playbackState, onAudioFrame) }
                                 }
                             } else if (packet.length >= 3 && String(packet.data, 0, minOf(packet.length, 3), Charsets.UTF_8) == "BYE") {
                                 WfasStats.add(WfasStats.Cat.BYE, packet.length)
@@ -2774,11 +2771,179 @@ object NetworkHandler_v1 {
                     onStatusUpdate("Error: %s", arrayOf(e.message ?: e.toString()))
                 }
             } finally {
-                AppDebug.log("[CLIENT] finally: chiusura SourceDataLine")
-                sourceDataLine?.drain()
-                sourceDataLine?.stop()
-                sourceDataLine?.close()
+                AppDebug.log("[CLIENT] finally: chiusura player/SourceDataLine")
+                val p = player
+                if (p != null) {
+                    p.stop()
+                } else {
+                    runCatching { sourceDataLine?.stop() }
+                    runCatching { sourceDataLine?.close() }
+                }
                 AppDebug.log("[CLIENT] launchClientInstance terminato")
+            }
+        }
+    }
+
+    private val MAX_CONCEAL_FRAMES = 9600L
+
+    private class ClientPlaybackState {
+        var expectedSeq = -1
+        var expectedSamplePos = -1L
+        var lastGoodPcm: ByteArray? = null
+    }
+
+    private class JitterAudioPlayer(
+        private val line: SourceDataLine,
+        sampleRate: Int,
+        channels: Int,
+        prebufferMs: Int = 120,
+        maxBufferMs: Int = 400
+    ) {
+        private val frameBytes = (channels * 2).coerceAtLeast(2)
+        private val bytesPerSec = sampleRate * frameBytes
+        private val prebufferBytes =
+            ((bytesPerSec.toLong() * prebufferMs) / 1000L).toInt().let { it - (it % frameBytes) }.coerceAtLeast(frameBytes)
+        private val maxBytes =
+            ((bytesPerSec.toLong() * maxBufferMs) / 1000L).toInt().let { it - (it % frameBytes) }.coerceAtLeast(prebufferBytes + frameBytes)
+        private val silenceChunk =
+            ByteArray(((bytesPerSec / 100).let { it - (it % frameBytes) }).coerceAtLeast(frameBytes))
+        private val queue = java.util.concurrent.LinkedBlockingQueue<ByteArray>()
+        private val queuedBytes = java.util.concurrent.atomic.AtomicInteger(0)
+        @Volatile private var running = false
+        @Volatile private var primed = false
+        private var thread: Thread? = null
+
+        fun start() {
+            if (running) return
+            running = true
+            runCatching { line.start() }
+            thread = Thread {
+                while (running) {
+                    if (!primed) {
+                        if (queuedBytes.get() >= prebufferBytes) primed = true
+                        else {
+                            try { Thread.sleep(3) } catch (_: InterruptedException) { break }
+                            continue
+                        }
+                    }
+                    val chunk = try {
+                        queue.poll(15, java.util.concurrent.TimeUnit.MILLISECONDS)
+                    } catch (_: InterruptedException) { break }
+                    if (chunk != null) {
+                        queuedBytes.addAndGet(-chunk.size)
+                        runCatching { line.write(chunk, 0, chunk.size) }
+                    } else {
+                        runCatching { line.write(silenceChunk, 0, silenceChunk.size) }
+                    }
+                }
+            }.apply { isDaemon = true; name = "wfas-jitter-player"; start() }
+        }
+
+        fun submit(pcm: ByteArray, offset: Int, len: Int) {
+            if (len <= 0) return
+            val chunk = pcm.copyOfRange(offset, offset + len)
+            while (queuedBytes.get() + chunk.size > maxBytes) {
+                val dropped = queue.poll() ?: break
+                queuedBytes.addAndGet(-dropped.size)
+            }
+            queue.offer(chunk)
+            queuedBytes.addAndGet(chunk.size)
+        }
+
+        fun submitSilence(bytes: Int) {
+            val n = bytes - (bytes % frameBytes)
+            if (n <= 0) return
+            submit(ByteArray(n), 0, n)
+        }
+
+        fun stop() {
+            running = false
+            runCatching { line.stop() }
+            runCatching { line.flush() }
+            thread?.interrupt()
+            runCatching { thread?.join(300) }
+            thread = null
+            runCatching { line.close() }
+        }
+    }
+
+    private fun concealGap(player: JitterAudioPlayer, lastGood: ByteArray?, totalBytes: Int, frameBytes: Int) {
+        var remaining = totalBytes - (totalBytes % frameBytes)
+        if (remaining <= 0) return
+        val ref = lastGood
+        if (ref != null && ref.isNotEmpty()) {
+            var factor = 0.6f
+            var iter = 0
+            while (remaining > 0 && iter < 2) {
+                val n = minOf(ref.size, remaining)
+                val faded = ByteArray(n)
+                val inB  = java.nio.ByteBuffer.wrap(ref, 0, n).order(java.nio.ByteOrder.LITTLE_ENDIAN)
+                val outB = java.nio.ByteBuffer.wrap(faded).order(java.nio.ByteOrder.LITTLE_ENDIAN)
+                while (inB.remaining() >= 2) {
+                    val s = (inB.short * factor).toInt().coerceIn(Short.MIN_VALUE.toInt(), Short.MAX_VALUE.toInt())
+                    outB.putShort(s.toShort())
+                }
+                player.submit(faded, 0, n)
+                remaining -= n
+                factor *= 0.5f
+                iter++
+            }
+        }
+        if (remaining > 0) player.submitSilence(remaining)
+    }
+
+    private fun handleAudioPacket(
+        player: JitterAudioPlayer,
+        data: ByteArray,
+        len: Int,
+        channels: Int,
+        state: ClientPlaybackState,
+        onAudioFrame: ((ShortArray) -> Unit)?
+    ) {
+        if (len < AUDIO_HEADER_SIZE) return
+        val frameBytes = (channels * 2).coerceAtLeast(2)
+        val silence = (data[3].toInt() and 0x01) != 0
+        val seq = ((data[4].toInt() and 0xFF) shl 8) or (data[5].toInt() and 0xFF)
+        val samplePos = ((data[6].toInt() and 0xFF).toLong() shl 24) or
+                        ((data[7].toInt() and 0xFF).toLong() shl 16) or
+                        ((data[8].toInt() and 0xFF).toLong() shl 8) or
+                        (data[9].toInt() and 0xFF).toLong()
+
+        var pcmLen = len - AUDIO_HEADER_SIZE
+        if (pcmLen > 0) pcmLen -= pcmLen % frameBytes
+
+        if (state.expectedSeq >= 0) {
+            val delta = (seq - state.expectedSeq) and 0xFFFF
+            when {
+                delta == 0 -> { }
+                delta < 0x8000 -> {
+                    val exactBytes = if (state.expectedSamplePos in 0L until samplePos) {
+                        val frames = samplePos - state.expectedSamplePos
+                        if (frames in 1L..MAX_CONCEAL_FRAMES) frames.toInt() * frameBytes else -1
+                    } else -1
+                    val concealBytes = if (exactBytes >= 0) exactBytes
+                        else state.lastGoodPcm?.let { delta.coerceAtMost(8) * it.size } ?: 0
+                    concealGap(player, state.lastGoodPcm, concealBytes.coerceAtMost(MAX_CONCEAL_FRAMES.toInt() * frameBytes), frameBytes)
+                }
+                else -> return
+            }
+        }
+
+        state.expectedSeq = (seq + 1) and 0xFFFF
+        state.expectedSamplePos = samplePos + (if (pcmLen > 0) (pcmLen / frameBytes).toLong() else 0L)
+
+        if (silence || pcmLen <= 0) {
+            player.submitSilence(state.lastGoodPcm?.size ?: (frameBytes * 480))
+        } else {
+            player.submit(data, AUDIO_HEADER_SIZE, pcmLen)
+            val lg = state.lastGoodPcm
+            if (lg == null || lg.size != pcmLen) state.lastGoodPcm = ByteArray(pcmLen)
+            System.arraycopy(data, AUDIO_HEADER_SIZE, state.lastGoodPcm!!, 0, pcmLen)
+            if (onAudioFrame != null && pcmLen >= 2) {
+                val shorts = ShortArray(pcmLen / 2)
+                java.nio.ByteBuffer.wrap(data, AUDIO_HEADER_SIZE, pcmLen)
+                    .order(java.nio.ByteOrder.LITTLE_ENDIAN).asShortBuffer().get(shorts)
+                onAudioFrame.invoke(shorts)
             }
         }
     }
@@ -2824,20 +2989,6 @@ object NetworkHandler_v1 {
             }
 
             sdl.start()
-            val sr = audioSettings.sampleRate.toInt()
-            val ch = audioSettings.channels
-            val beepDurationMs = 300
-            val beepHz = 880.0
-            val numFrames = sr * beepDurationMs / 1000
-            val beepBuf = ShortArray(numFrames * ch)
-            for (i in 0 until numFrames) {
-                val sample = (Short.MAX_VALUE * 0.3 * Math.sin(2.0 * Math.PI * beepHz * i / sr)).toInt().toShort()
-                for (c in 0 until ch) beepBuf[i * ch + c] = sample
-            }
-            val beepBytes = ByteArray(beepBuf.size * 2)
-            java.nio.ByteBuffer.wrap(beepBytes).order(java.nio.ByteOrder.LITTLE_ENDIAN).asShortBuffer().put(beepBuf)
-            val written = sdl.write(beepBytes, 0, beepBytes.size)
-            AppDebug.log("[CLIENT] SDL beep di test: ${beepDurationMs}ms a ${beepHz}Hz, scritti=$written bytes — SE SENTI UN BIP IL DEVICE E' CORRETTO")
         }
     }
 
@@ -2883,7 +3034,10 @@ object NetworkHandler_v1 {
         }
     }
 
-    fun terminateAllServices() { scope.cancel() }
+    fun terminateAllServices() {
+        scope.cancel()
+        runCatching { selectorManager.close() }
+    }
 
     fun playConnectionSound() {
         scope.launch(Dispatchers.IO) {
@@ -3090,6 +3244,10 @@ fun main(args: Array<String>) {
     NetworkHandler_v1.setupLinuxVirtualCable(loadedSettingsForInit.app.useNativeEngine)
     org.bytedeco.javacv.FFmpegLogCallback.set()
     org.bytedeco.ffmpeg.global.avdevice.avdevice_register_all()
+
+    Runtime.getRuntime().addShutdownHook(Thread {
+        runCatching { NetworkHandler_v1.terminateAllServices() }
+    })
 
     val isHeadless = java.awt.GraphicsEnvironment.isHeadless()
 

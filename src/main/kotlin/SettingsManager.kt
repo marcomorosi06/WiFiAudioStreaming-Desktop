@@ -66,6 +66,8 @@ object SettingsRepository {
     private const val BIT_DEPTH_KEY = "audio_bit_depth"
     private const val CHANNELS_KEY = "audio_channels"
     private const val BUFFER_SIZE_KEY = "audio_buffer_size"
+    private const val LATENCY_MS_KEY = "audio_latency_ms"
+    private const val MAX_PAYLOAD_KEY = "audio_max_payload"
     private const val STREAMING_PORT_KEY = "net_streaming_port"
     private const val MIC_PORT_KEY = "net_mic_port"
     private const val NETWORK_INTERFACE_KEY = "net_interface"
@@ -116,6 +118,8 @@ object SettingsRepository {
             prefs.putInt(BIT_DEPTH_KEY, settings.audio.bitDepth)
             prefs.putInt(CHANNELS_KEY, settings.audio.channels)
             prefs.putInt(BUFFER_SIZE_KEY, settings.audio.bufferSize)
+            prefs.putInt(LATENCY_MS_KEY, settings.audio.latencyMs)
+            prefs.putInt(MAX_PAYLOAD_KEY, settings.audio.maxPayloadBytes)
             prefs.put(STREAMING_PORT_KEY, settings.streamingPort)
             prefs.put(MIC_PORT_KEY, settings.micPort)
             prefs.put(NETWORK_INTERFACE_KEY, settings.app.networkInterface)
@@ -149,10 +153,12 @@ object SettingsRepository {
         val httpPort = prefs.get(HTTP_PORT_KEY, "8080")
         val httpSafariMode = prefs.getBoolean(HTTP_SAFARI_MODE_KEY, false)
         val sampleRate = prefs.getFloat(SAMPLE_RATE_KEY, 48000f)
-        val bitDepth = prefs.getInt(BIT_DEPTH_KEY, 16)
+        val bitDepth = prefs.getInt(BIT_DEPTH_KEY, 16).let { if (it == 16) it else 16 }
         val channels = prefs.getInt(CHANNELS_KEY, 2)
         val bufferSize = prefs.getInt(BUFFER_SIZE_KEY, 512)
-        val audioSettings = AudioSettings_V1(sampleRate, bitDepth, channels, bufferSize)
+        val latencyMs = prefs.getInt(LATENCY_MS_KEY, 120)
+        val maxPayloadBytes = prefs.getInt(MAX_PAYLOAD_KEY, 1390)
+        val audioSettings = AudioSettings_V1(sampleRate, bitDepth, channels, bufferSize, latencyMs, maxPayloadBytes)
         val streamingPort = prefs.get(STREAMING_PORT_KEY, "9090")
         val micPort = prefs.get(MIC_PORT_KEY, "9092")
         val netInterface = prefs.get(NETWORK_INTERFACE_KEY, "Auto")

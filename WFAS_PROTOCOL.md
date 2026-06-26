@@ -48,6 +48,17 @@ already reserved, so the protocol stays lightweight (zero extra bytes on the wir
 | 6–9    | 4    | Sample position  | Big‑endian uint32, monotonic per‑channel sample index.       |
 | 10…    | n    | PCM payload      | Signed 16‑bit **little‑endian**, interleaved by channel.     |
 
+**Payload length** is chosen by the server, per packet. It is always a whole
+number of frames (`channels × 2` bytes) and never exceeds `MTU − 10` bytes
+(≈ 1390 on a standard 1500‑byte MTU). A receiver **must** accept any payload
+length within these bounds — the length is not fixed and may be tuned smaller,
+for example so a constrained or embedded receiver can request small packets.
+
+**`seq` and `samplePosition` are mandatory.** Every server **must** stamp `seq`
+(incrementing, wrapping at 0xFFFF) and `samplePosition` (the monotonic per‑channel
+sample index) on **every** audio packet, including silence frames, so a receiver
+can detect loss and reordering and conceal gaps by the exact missing duration.
+
 Control messages (Section 4) are plain ASCII and never begin with the bytes
 `0x57 0x46`, so a receiver distinguishes audio from control unambiguously by the
 two magic bytes.

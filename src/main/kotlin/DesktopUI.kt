@@ -2056,7 +2056,7 @@ fun SettingsGroup(title: String, icon: ImageVector, content: @Composable ColumnS
 @Composable
 fun AudioSettingsContent(settings: AudioSettings_V1, onSettingsChange: (AudioSettings_V1) -> Unit) {
     val sampleRates = listOf(44100f, 48000f, 96000f)
-    val bitDepths = listOf(8, 16)
+    val bitDepths = listOf(16)
     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
         ExposedDropdown(
             stringResource("sample_rate"), "${settings.sampleRate.toInt()} Hz",
@@ -2082,13 +2082,33 @@ fun AudioSettingsContent(settings: AudioSettings_V1, onSettingsChange: (AudioSet
             shape = RoundedCornerShape(topEndPercent = 50, bottomEndPercent = 50)
         ) { Text(stringResource("stereo")) }
     }
-    Text(stringResource("buffer_size_label", settings.bufferSize), style = MaterialTheme.typography.labelLarge)
+    val latencyWord = when {
+        settings.latencyMs < 80   -> stringResource("latency_responsive")
+        settings.latencyMs <= 180 -> stringResource("latency_balanced")
+        else                      -> stringResource("latency_stable")
+    }
+    Text(stringResource("latency_label", settings.latencyMs, latencyWord), style = MaterialTheme.typography.labelLarge)
     Slider(
-        settings.bufferSize.toFloat(),
-        { onSettingsChange(settings.copy(bufferSize = it.roundToInt())) },
-        valueRange = 512f..8192f,
-        steps = ((8192f - 512f) / 256f).toInt() - 1
+        settings.latencyMs.toFloat(),
+        { onSettingsChange(settings.copy(latencyMs = it.roundToInt())) },
+        valueRange = 40f..400f,
+        steps = ((400f - 40f) / 20f).toInt() - 1
     )
+
+    var showAdvancedAudio by remember { mutableStateOf(false) }
+    TextButton(onClick = { showAdvancedAudio = !showAdvancedAudio }) {
+        Text(stringResource("advanced_audio"))
+    }
+    if (showAdvancedAudio) {
+        Text(stringResource("packet_size_label", settings.maxPayloadBytes), style = MaterialTheme.typography.labelLarge)
+        Text(stringResource("packet_size_hint"), style = MaterialTheme.typography.bodySmall)
+        Slider(
+            settings.maxPayloadBytes.toFloat(),
+            { onSettingsChange(settings.copy(maxPayloadBytes = it.roundToInt())) },
+            valueRange = 256f..1390f,
+            steps = ((1390f - 256f) / 32f).toInt() - 1
+        )
+    }
 }
 
 @Composable
