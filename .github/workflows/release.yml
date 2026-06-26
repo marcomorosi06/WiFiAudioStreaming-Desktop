@@ -1,10 +1,19 @@
 name: Desktop Multi-Platform Build
+
 on:
   push:
     tags:
       - 'v*'
+  # Allows manual triggering from the GitHub Actions tab
+  workflow_dispatch:
+
+# Ensure only one build workflow runs at a time for the same reference
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
+  # Compile and package the desktop applications across OS platforms
   build:
     name: Build on ${{ matrix.os }}
     strategy:
@@ -12,23 +21,115 @@ jobs:
       matrix:
         os: [windows-latest, ubuntu-latest, macos-latest]
     runs-on: ${{ matrix.os }}
+
+    # Minimal token permissions for the job. Everyone not defined here is dropped
+    permissions:
+      contents: read
+
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-java@v4
+      - name: Checkout Repository
+        uses: actions/checkout@v6
+
+      # Set up Java 17 using updated core actions
+      - name: Setup Java 17
+        uses: actions/setup-java@v5
         with:
           distribution: 'zulu'
           java-version: '17'
 
+      # Establish isolated Gradle build environment with security validation
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v6
+        with:
+          validate-wrappers: true # Verifies integrity of the wrapper file to prevent malicious dependency injection
+          cache-provider: basic   # Abides by standard open-source caching rules
+          # Prevents cache poisoning if workflow ever runs on external/forked PR contexts
+          cache-read-only: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository }}
+
       - name: Build Packages
         run: ./gradlew packageDistributionForCurrentOS
 
-      - name: Upload to Release
-        uses: softprops/action-gh-release@v1
+      # Upload built binaries as arficats for later use in the release job
+      - name: Upload Desktop Artifacts
+        uses: actions/upload-artifact@v6
         with:
-          files: |
+          name: desktop-artifacts-${{ matrix.os }}
+          path: |
             build/compose/binaries/main/msi/*.msi
             build/compose/binaries/main/deb/*.deb
             build/compose/binaries/main/rpm/*.rpm
             build/compose/binaries/main/dmg/*.dmg
             build/compose/binaries/main/app/*.zip
             build/compose/binaries/main/app/*.tar.gz
+          retention-days: 30
+          if-no-files-found: ignore # Matrix platforms only compile their relative target outputs
+
+  # Download assets, fake draft release
+  release:
+    name: Create Release
+    runs-on: ubuntu-latest
+    needs: build
+    if: ${{ success() }}
+
+    # Explicitly granted scopes required for secure artifact attestation and drafting releases
+    permissions:
+      contents: write         # Required to construct releases and append assets
+      id-token: write         # Required to map OIDC identity tokens for provenance signatures
+      attestations: write      # Required to attach the final build provenance claims
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v6
+
+      - name: Prepare Release Workspace
+        run: mkdir -p ./release-assets
+
+      # Aggregate the outputs from all matrix configurations safely into a single collection directory
+      - name: Download Windows Artifacts
+        uses: actions/download-artifact@v7
+        continue-on-error: true
+        with:
+          name: desktop-artifacts-windows-latest
+          path: ./release-assets/windows
+
+      - name: Download Ubuntu Artifacts
+        uses: actions/download-artifact@v7
+        continue-on-error: true
+        with:
+          name: desktop-artifacts-ubuntu-latest
+          path: ./release-assets/ubuntu
+
+      - name: Download macOS Artifacts
+        uses: actions/download-artifact@v7
+        continue-on-error: true
+        with:
+          name: desktop-artifacts-macos-latest
+          path: ./release-assets/macos
+
+      # Generates Sigstore-backed build certificates asserting where and how your desktop binaries were built
+      - name: Generate Build Provenance Attestation
+        uses: actions/attest-build-provenance@v3
+        with:
+          subject-path: |
+            ./release-assets/**/*.msi
+            ./release-assets/**/*.deb
+            ./release-assets/**/*.rpm
+            ./release-assets/**/*.dmg
+            ./release-assets/**/*.zip
+            ./release-assets/**/*.tar.gz
+
+      # Create Draft release
+      - name: Create Draft Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_VERSION: ${{ github.ref_name }}
+        shell: bash
+        run: |
+          # Turn on recursive globbing for this shell execution
+          shopt -s globstar 
+          
+          gh release create "${RELEASE_VERSION}" \
+            --draft \
+            --title "Desktop Release ${RELEASE_VERSION}" \
+            --generate-notes \
+            ./release-assets/**/*.*
