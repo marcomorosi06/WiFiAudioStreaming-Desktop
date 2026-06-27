@@ -25,6 +25,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxHeight
@@ -43,9 +44,13 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Computer
 import androidx.compose.material.icons.outlined.GraphicEq
 import androidx.compose.material.icons.outlined.History
+import androidx.compose.material.icons.outlined.Https
+import androidx.compose.material.icons.outlined.Lock
 import androidx.compose.material.icons.outlined.NewReleases
+import androidx.compose.material.icons.outlined.PhoneAndroid
 import androidx.compose.material.icons.outlined.Sync
 import androidx.compose.material.icons.outlined.Terminal
+import androidx.compose.material.icons.outlined.VpnKey
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ElevatedCard
@@ -74,11 +79,17 @@ data class Bilingual(val en: String, val it: String) {
     fun get(): String = if (isItalian()) it else en
 }
 
+enum class ChangelogAccent { PRIMARY, SECONDARY, TERTIARY }
+
 data class ChangelogItem(
     val icon: ImageVector,
     val title: Bilingual,
-    val body: Bilingual
+    val body: Bilingual,
+    val linkLabel: Bilingual? = null,
+    val linkUrl: String? = null
 )
+
+private const val ANDROID_RELEASES_URL = "https://github.com/marcomorosi06/WiFiAudioStreaming-Android/releases"
 
 data class ChangelogEntry(
     val version: String,
@@ -94,10 +105,34 @@ object Changelog {
             version = "1.1",
             date = Bilingual("June 2026", "Giugno 2026"),
             headline = Bilingual(
-                "Terminal control, a live visualizer, and broader OS support.",
-                "Controllo da terminale, visualizzatore live e supporto più ampio ai sistemi operativi."
+                "Terminal control, a live visualizer, broader OS support — and connection security with end-to-end encryption.",
+                "Controllo da terminale, visualizzatore live, supporto più ampio ai sistemi operativi — e sicurezza delle connessioni con cifratura end-to-end."
             ),
             items = listOf(
+                ChangelogItem(
+                    icon = Icons.Outlined.Lock,
+                    title = Bilingual("Protect your server", "Proteggi il tuo server"),
+                    body = Bilingual(
+                        "Right in the server panel, choose who can connect: approve every device by hand, or require a shared key. Mutual verification keeps out unknown clients and rogue servers alike.",
+                        "Direttamente nel pannello server, scegli chi può connettersi: approva ogni dispositivo a mano, oppure richiedi una chiave condivisa. La verifica reciproca tiene fuori sia i client sconosciuti sia i server malevoli."
+                    )
+                ),
+                ChangelogItem(
+                    icon = Icons.Outlined.VpnKey,
+                    title = Bilingual("Connect with a key", "Connessione con chiave"),
+                    body = Bilingual(
+                        "When a server is locked, just type its key when prompted — nothing to set up in advance, and you're told right away if the key is wrong.",
+                        "Quando un server è protetto, basta digitare la sua chiave quando richiesto — niente da configurare prima, e ti viene detto subito se la chiave è sbagliata."
+                    )
+                ),
+                ChangelogItem(
+                    icon = Icons.Outlined.Https,
+                    title = Bilingual("End-to-end encryption", "Cifratura end-to-end"),
+                    body = Bilingual(
+                        "Your audio travels encrypted from end to end, so only your paired devices can decode the stream — no one else on the network can listen in.",
+                        "Il tuo audio viaggia cifrato da un capo all'altro: solo i tuoi dispositivi accoppiati possono decodificare lo stream — nessun altro sulla rete può ascoltare."
+                    )
+                ),
                 ChangelogItem(
                     icon = Icons.Outlined.Terminal,
                     title = Bilingual("Command-line control", "Controllo da terminale"),
@@ -129,6 +164,16 @@ object Changelog {
                         "The app checks that your desktop and phone speak the same version, and tells you exactly which one to update if they don't match.",
                         "L'app verifica che desktop e telefono parlino la stessa versione e ti dice esattamente quale aggiornare se non combaciano."
                     )
+                ),
+                ChangelogItem(
+                    icon = Icons.Outlined.PhoneAndroid,
+                    title = Bilingual("Update the Android app too", "Aggiorna anche l'app Android"),
+                    body = Bilingual(
+                        "WiFi Audio Streaming for Android has been updated as well. Update it too so both ends stay compatible.",
+                        "Anche WiFi Audio Streaming per Android è stata aggiornata. Aggiornala anche tu, così i due lati restano compatibili."
+                    ),
+                    linkLabel = Bilingual("Open on GitHub", "Apri su GitHub"),
+                    linkUrl = ANDROID_RELEASES_URL
                 )
             )
         )
@@ -234,7 +279,7 @@ private fun ChangelogBody(
                 style = MaterialTheme.typography.bodyLarge,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
-            shown.items.forEach { item -> ChangelogItemCard(item) }
+            shown.items.forEachIndexed { i, item -> ChangelogItemCard(item, accentForIndex(i)) }
             Spacer(modifier = Modifier.height(4.dp))
         }
 
@@ -261,41 +306,68 @@ private fun ChangelogBody(
     }
 }
 
+private fun accentForIndex(i: Int): ChangelogAccent = when (i % 3) {
+    0 -> ChangelogAccent.PRIMARY
+    1 -> ChangelogAccent.SECONDARY
+    else -> ChangelogAccent.TERTIARY
+}
+
 @Composable
-private fun ChangelogItemCard(item: ChangelogItem) {
-    ElevatedCard(
+private fun ChangelogItemCard(item: ChangelogItem, accent: ChangelogAccent) {
+    val cs = MaterialTheme.colorScheme
+    val (container, onContainer, badge, onBadge) = when (accent) {
+        ChangelogAccent.PRIMARY -> listOf(cs.primaryContainer, cs.onPrimaryContainer, cs.primary, cs.onPrimary)
+        ChangelogAccent.SECONDARY -> listOf(cs.secondaryContainer, cs.onSecondaryContainer, cs.secondary, cs.onSecondary)
+        ChangelogAccent.TERTIARY -> listOf(cs.tertiaryContainer, cs.onTertiaryContainer, cs.tertiary, cs.onTertiary)
+    }
+    Surface(
         modifier = Modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(16.dp)
+        shape = RoundedCornerShape(24.dp),
+        color = container
     ) {
         Row(
             modifier = Modifier.padding(18.dp),
-            horizontalArrangement = Arrangement.spacedBy(14.dp)
+            horizontalArrangement = Arrangement.spacedBy(16.dp),
+            verticalAlignment = Alignment.CenterVertically
         ) {
             Box(
                 modifier = Modifier
-                    .size(44.dp)
-                    .clip(RoundedCornerShape(12.dp))
-                    .background(MaterialTheme.colorScheme.primaryContainer),
+                    .size(52.dp)
+                    .clip(RoundedCornerShape(16.dp))
+                    .background(badge),
                 contentAlignment = Alignment.Center
             ) {
                 Icon(
                     imageVector = item.icon,
                     contentDescription = null,
-                    tint = MaterialTheme.colorScheme.onPrimaryContainer,
-                    modifier = Modifier.size(24.dp)
+                    tint = onBadge,
+                    modifier = Modifier.size(28.dp)
                 )
             }
             Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
                 Text(
                     text = item.title.get(),
                     style = MaterialTheme.typography.titleMedium,
-                    fontWeight = FontWeight.SemiBold
+                    fontWeight = FontWeight.Bold,
+                    color = onContainer
                 )
                 Text(
                     text = item.body.get(),
                     style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                    color = onContainer.copy(alpha = 0.85f)
                 )
+                if (item.linkUrl != null && item.linkLabel != null) {
+                    TextButton(
+                        onClick = { runCatching { openUrl(item.linkUrl) } },
+                        contentPadding = PaddingValues(0.dp)
+                    ) {
+                        Text(
+                            item.linkLabel.get(),
+                            color = onContainer,
+                            fontWeight = FontWeight.Bold
+                        )
+                    }
+                }
             }
         }
     }

@@ -1542,29 +1542,54 @@ fun ServerConfigCard(
             HorizontalDivider()
 
             val mode = securityMode.uppercase()
-            val modeLabel = when (mode) {
-                "ASK" -> stringResource("security_ask")
-                "KEY" -> stringResource("security_key")
-                else  -> stringResource("security_off")
+
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                Icon(
+                    Icons.Outlined.Security,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary
+                )
+                Text(stringResource("security_section"), style = MaterialTheme.typography.titleMedium)
             }
-            Text(stringResource("security_section"), style = MaterialTheme.typography.titleMedium)
-            ExposedDropdown(
-                stringResource("security_mode_label"),
-                modeLabel,
-                listOf(
-                    stringResource("security_off") to "OFF",
-                    stringResource("security_ask") to "ASK",
-                    stringResource("security_key") to "KEY"
-                ),
-                onSecurityModeChange,
-                Modifier.fillMaxWidth()
-            )
+
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                FilterChip(
+                    selected = mode == "OFF",
+                    onClick = { onSecurityModeChange("OFF") },
+                    label = { Text(stringResource("sec_mode_off"), maxLines = 1) },
+                    leadingIcon = { Icon(Icons.Outlined.LockOpen, contentDescription = null, modifier = Modifier.size(18.dp)) },
+                    modifier = Modifier.weight(1f)
+                )
+                FilterChip(
+                    selected = mode == "ASK",
+                    onClick = { onSecurityModeChange("ASK") },
+                    label = { Text(stringResource("sec_mode_ask"), maxLines = 1) },
+                    leadingIcon = { Icon(Icons.Outlined.PersonAdd, contentDescription = null, modifier = Modifier.size(18.dp)) },
+                    modifier = Modifier.weight(1f)
+                )
+                FilterChip(
+                    selected = mode == "KEY",
+                    onClick = { onSecurityModeChange("KEY") },
+                    label = { Text(stringResource("sec_mode_key"), maxLines = 1) },
+                    leadingIcon = { Icon(Icons.Outlined.Key, contentDescription = null, modifier = Modifier.size(18.dp)) },
+                    modifier = Modifier.weight(1f)
+                )
+            }
+
             if (mode == "KEY") {
                 OutlinedTextField(
                     value = authKey,
                     onValueChange = onAuthKeyChange,
                     label = { Text(stringResource("auth_key_label")) },
+                    leadingIcon = { Icon(Icons.Outlined.VpnKey, contentDescription = null) },
                     singleLine = true,
+                    shape = RoundedCornerShape(16.dp),
                     modifier = Modifier.fillMaxWidth()
                 )
                 Text(
@@ -1573,17 +1598,32 @@ fun ServerConfigCard(
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
             }
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Column(Modifier.weight(1f)) {
-                    Text(stringResource("encryption_label"))
-                    Text(
-                        stringResource("encryption_hint"),
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
+
+            Surface(
+                shape = RoundedCornerShape(16.dp),
+                color = MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.4f),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Row(
+                    modifier = Modifier.padding(14.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    Icon(
+                        Icons.Outlined.EnhancedEncryption,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.primary
                     )
+                    Column(Modifier.weight(1f)) {
+                        Text(stringResource("encryption_label"))
+                        Text(
+                            stringResource("encryption_hint"),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                    Switch(checked = false, onCheckedChange = null, enabled = false)
                 }
-                Spacer(Modifier.width(12.dp))
-                Switch(checked = false, onCheckedChange = null, enabled = false)
             }
         }
     }
