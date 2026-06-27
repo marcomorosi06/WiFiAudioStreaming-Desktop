@@ -19,10 +19,10 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [windows-latest, ubuntu-latest, macos-latest]
+        os: [windows-latest, ubuntu-latest, macos-latest, ubuntu-24.04-arm]
     runs-on: ${{ matrix.os }}
 
-    # Minimal token permissions for the job. Everyone not defined here is dropped
+    # Minimal token permissions for the job. Everything not defined here is dropped
     permissions:
       contents: read
 
@@ -46,10 +46,64 @@ jobs:
           # Prevents cache poisoning if workflow ever runs on external/forked PR contexts
           cache-read-only: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository }}
 
-      - name: Build Packages
-        run: ./gradlew packageDistributionForCurrentOS
+      # Native audio engine is built from source via CMake; ensure a toolchain on Linux
+      - name: Install build tools (Linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y cmake build-essential
 
-      # Upload built binaries as arficats for later use in the release job
+      # Builds the native installers AND the portable .zip / .tar.gz archives
+      - name: Build Packages
+        run: ./gradlew packageDistributionForCurrentOS packagePortableArchives
+
+      # Build a portable AppImage from the unpacked distributable (Linux only)
+      - name: Build AppImage (Linux)
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          set -e
+          export APPIMAGE_EXTRACT_AND_RUN=1
+          APP_VER="$(grep -E 'val appVersion' build.gradle.kts | head -1 | sed -E 's/.*"([^"]+)".*/\1/')"
+          OUT="build/packages"; mkdir -p "$OUT"
+          APPDIR="$RUNNER_TEMP/AppDir"; rm -rf "$APPDIR"; mkdir -p "$APPDIR"
+
+          # Copy the unpacked app (folder name resolved dynamically)
+          APP_SRC="$(find build/compose/binaries/main/app -maxdepth 1 -mindepth 1 -type d | head -n1)"
+          cp -r "$APP_SRC/." "$APPDIR/"
+          LAUNCHER_NAME="$(ls "$APPDIR/bin" | head -n1)"
+
+          # Icon
+          cp src/main/resources/app_icon.png "$APPDIR/wifi-audio-streaming.png"
+          cp src/main/resources/app_icon.png "$APPDIR/.DirIcon"
+
+          # Desktop entry
+          cat > "$APPDIR/wifi-audio-streaming.desktop" <<EOF
+          [Desktop Entry]
+          Type=Application
+          Name=WiFi Audio Streaming
+          Exec=AppRun
+          Icon=wifi-audio-streaming
+          Categories=AudioVideo;
+          Terminal=false
+          EOF
+
+          # AppRun launcher
+          cat > "$APPDIR/AppRun" <<EOF
+          #!/bin/sh
+          HERE="\$(dirname "\$(readlink -f "\$0")")"
+          exec "\$HERE/bin/$LAUNCHER_NAME" "\$@"
+          EOF
+          chmod +x "$APPDIR/AppRun"
+
+          # Pick appimagetool for the runner architecture
+          case "$(uname -m)" in
+            aarch64|arm64) AITARCH=aarch64 ;;
+            *) AITARCH=x86_64 ;;
+          esac
+          curl -fL -o appimagetool "https://github.com/AppImage/appimagetool/releases/download/continuous/appimagetool-${AITARCH}.AppImage"
+          chmod +x appimagetool
+          ARCH=$AITARCH ./appimagetool "$APPDIR" "$OUT/WiFi-Audio-Streaming-${APP_VER}-linux-${AITARCH}.AppImage"
+
+      # Upload built binaries as artifacts for later use in the release job
       - name: Upload Desktop Artifacts
         uses: actions/upload-artifact@v6
         with:
@@ -59,12 +113,13 @@ jobs:
             build/compose/binaries/main/deb/*.deb
             build/compose/binaries/main/rpm/*.rpm
             build/compose/binaries/main/dmg/*.dmg
-            build/compose/binaries/main/app/*.zip
-            build/compose/binaries/main/app/*.tar.gz
+            build/packages/*.zip
+            build/packages/*.tar.gz
+            build/packages/*.AppImage
           retention-days: 30
           if-no-files-found: ignore # Matrix platforms only compile their relative target outputs
 
-  # Download assets, fake draft release
+  # Download assets, make draft release
   release:
     name: Create Release
     runs-on: ubuntu-latest
@@ -75,36 +130,19 @@ jobs:
     permissions:
       contents: write         # Required to construct releases and append assets
       id-token: write         # Required to map OIDC identity tokens for provenance signatures
-      attestations: write      # Required to attach the final build provenance claims
+      attestations: write     # Required to attach the final build provenance claims
 
     steps:
       - name: Checkout Repository
         uses: actions/checkout@v6
 
-      - name: Prepare Release Workspace
-        run: mkdir -p ./release-assets
-
-      # Aggregate the outputs from all matrix configurations safely into a single collection directory
-      - name: Download Windows Artifacts
+      # Aggregate the outputs from every matrix configuration into one directory
+      - name: Download All Artifacts
         uses: actions/download-artifact@v7
-        continue-on-error: true
         with:
-          name: desktop-artifacts-windows-latest
-          path: ./release-assets/windows
-
-      - name: Download Ubuntu Artifacts
-        uses: actions/download-artifact@v7
-        continue-on-error: true
-        with:
-          name: desktop-artifacts-ubuntu-latest
-          path: ./release-assets/ubuntu
-
-      - name: Download macOS Artifacts
-        uses: actions/download-artifact@v7
-        continue-on-error: true
-        with:
-          name: desktop-artifacts-macos-latest
-          path: ./release-assets/macos
+          path: ./release-assets
+          pattern: desktop-artifacts-*
+          merge-multiple: true
 
       # Generates Sigstore-backed build certificates asserting where and how your desktop binaries were built
       - name: Generate Build Provenance Attestation
@@ -117,6 +155,7 @@ jobs:
             ./release-assets/**/*.dmg
             ./release-assets/**/*.zip
             ./release-assets/**/*.tar.gz
+            ./release-assets/**/*.AppImage
 
       # Create Draft release
       - name: Create Draft Release
@@ -126,8 +165,8 @@ jobs:
         shell: bash
         run: |
           # Turn on recursive globbing for this shell execution
-          shopt -s globstar 
-          
+          shopt -s globstar
+
           gh release create "${RELEASE_VERSION}" \
             --draft \
             --title "Desktop Release ${RELEASE_VERSION}" \

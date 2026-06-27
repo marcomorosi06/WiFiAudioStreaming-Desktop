@@ -1,4 +1,5 @@
 import org.jetbrains.compose.desktop.application.dsl.TargetFormat
+import org.gradle.api.tasks.bundling.Compression
 import java.io.ByteArrayOutputStream
 
 plugins {
@@ -230,7 +231,7 @@ dependencies {
     val targetPlatform = when {
         isWindows -> if (osArch.contains("64")) "windows-x86_64" else "windows-x86"
         isMac     -> if (osArch.contains("aarch64") || osArch.contains("arm64")) "macosx-arm64" else "macosx-x86_64"
-        else      -> "linux-x86_64"
+        else      -> if (osArch.contains("aarch64") || osArch.contains("arm64")) "linux-arm64" else "linux-x86_64"
     }
     implementation("org.bytedeco:javacv:$javacvVersion")
     implementation("org.bytedeco:ffmpeg:$javacvVersion:$targetPlatform")
@@ -297,6 +298,39 @@ compose.desktop {
 
 kotlin {
     jvmToolchain(17)
+}
+
+// ─── Archivi portabili (.zip / .tar.gz) ───────────────────────────────────────
+// Compose Desktop produce solo gli installer nativi (msi/deb/rpm/dmg) e una
+// cartella scompattata in build/compose/binaries/main/app/. Queste task ne
+// creano archivi portabili, etichettati per OS e architettura.
+val portableLabel = "$nativeOsDir-$nativeArchDir"
+val portableAppDir = layout.buildDirectory.dir("compose/binaries/main/app")
+val portableOutDir = layout.buildDirectory.dir("packages")
+
+val packageZip by tasks.registering(Zip::class) {
+    group = "distribution"
+    description = "Crea uno .zip portabile dell'app"
+    dependsOn("createDistributable")
+    from(portableAppDir)
+    destinationDirectory.set(portableOutDir)
+    archiveFileName.set("WiFi-Audio-Streaming-$appVersion-$portableLabel.zip")
+}
+
+val packageTarGz by tasks.registering(Tar::class) {
+    group = "distribution"
+    description = "Crea un .tar.gz portabile dell'app"
+    dependsOn("createDistributable")
+    from(portableAppDir)
+    destinationDirectory.set(portableOutDir)
+    archiveFileName.set("WiFi-Audio-Streaming-$appVersion-$portableLabel.tar.gz")
+    compression = Compression.GZIP
+}
+
+val packagePortableArchives by tasks.registering {
+    group = "distribution"
+    description = "Crea sia lo .zip sia il .tar.gz portabili"
+    dependsOn(packageZip, packageTarGz)
 }
 
 // ─── Man page installation ────────────────────────────────────────────────────
