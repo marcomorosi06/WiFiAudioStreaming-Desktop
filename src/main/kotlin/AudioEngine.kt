@@ -141,7 +141,7 @@ class AudioEngine(
 
     suspend fun readFrame(): ShortArray? = withContext(Dispatchers.IO) {
         if (!started) {
-            lastError = "AudioEngine non avviato"
+            lastError = "AudioEngine not started"
             return@withContext null
         }
 

@@ -203,3 +203,112 @@ handshake and cannot be fixed without changing already‑released v1 builds.
   token) do **not** require a bump.
 * The two apps must always ship the same `WFAS_PROTOCOL_VERSION` value for a
   given release wave.
+
+---
+
+## 7. Security (connection authorization)
+
+An **optional** server-side toggle gates who may connect. It has three modes:
+
+* **Off** — current behaviour: any client that completes the handshake streams.
+* **Ask** — the server asks its user to approve each incoming client.
+* **Key** — the client must prove it knows a pre-shared key.
+
+Security applies to **unicast only**: multicast has no per-client handshake or
+back-channel, so a multicast server cannot authorize individual receivers.
+
+The audio packet format (Section 2) is **unchanged**. Security lives entirely in
+the handshake (Section 5), as additional ASCII control messages. The extension is
+additive: an old server ignores the extra HELLO tokens; an old client that
+receives one of the new replies treats it as an unexpected response and falls back
+to its generic "handshake failed" path.
+
+### 7.1 New control messages
+
+| Message                                   | Direction        | Meaning                                          |
+|-------------------------------------------|------------------|--------------------------------------------------|
+| `HELLO_FROM_CLIENT;v=<n>;cnonce=<hex>`    | client → server  | HELLO carrying a fresh client nonce.             |
+| `HELLO_FROM_CLIENT;v=<n>;cnonce=<hex>;cproof=<hex>` | client → server | HELLO answering a key challenge.       |
+| `WFAS_PENDING`                            | server → client  | Awaiting the server user's approval. Resent ~2 s.|
+| `WFAS_AUTH_REQUIRED;snonce=<hex>;sproof=<hex>` | server → client | A key is required; server proves it too.    |
+| `WFAS_UNAUTHORIZED`                       | server → client  | Denied (wrong key, user denied, or timed out).   |
+
+`cnonce` / `snonce` are fresh random 16-byte values, lowercase hex (32 chars).
+An optional `;name=<value>` token in HELLO carries a human-friendly device name
+for the approval dialog.
+
+### 7.2 Ask mode (interactive approval)
+
+```
+client                                   server
+  | --- HELLO_FROM_CLIENT;v=2;name=… --->  |
+  |  <------- WFAS_PENDING --------------- |  (UI dialog opens; resent every ~2 s)
+  |               …user decides…           |
+  |  <------- HELLO_ACK;v=2 -------------- |  (Allow)   → stream
+  |    or  <-- WFAS_UNAUTHORIZED --------- |  (Deny / server-side timeout)
+```
+
+* The server **re-sends `WFAS_PENDING` every ~2 s** while the dialog is open
+  (keep-alive). The client resets a watchdog on each one and **aborts if it sees
+  neither `WFAS_PENDING` nor a final reply within ~6 s** — so a server that dies
+  mid-prompt never leaves the client hanging.
+* The client also enforces an **absolute cap** (e.g. 120 s) and offers the user a
+  cancel, which sends `CLIENT_BYE` so the server can dismiss the dialog.
+* If the server user ignores the dialog past the server's own timeout (e.g. 60 s),
+  the server sends `WFAS_UNAUTHORIZED` so the client gets a clean answer.
+
+### 7.3 Key mode (mutual challenge-response)
+
+Both ends share a secret key `K`. The exchange authenticates **both** sides and
+the key never travels on the wire:
+
+```
+client                                                server
+  | --- HELLO_FROM_CLIENT;v=2;cnonce=C --------------->  |
+  |  <-- WFAS_AUTH_REQUIRED;snonce=S;sproof=HMAC(K,…S) - |
+  |     verify sproof  (authenticates the server)        |
+  | --- HELLO_FROM_CLIENT;v=2;cnonce=C;cproof=HMAC(K,…C)>|
+  |                              verify cproof            |
+  |  <-- HELLO_ACK;v=2  or  WFAS_UNAUTHORIZED ---------- |
+```
+
+Proofs are HMAC-SHA256 over domain-separated, nonce-bound ASCII inputs:
+
+```
+sproof = hex( HMAC-SHA256(K, "WFAS-S:" + cnonce_hex + ":" + snonce_hex) )
+cproof = hex( HMAC-SHA256(K, "WFAS-C:" + cnonce_hex + ":" + snonce_hex) )
+```
+
+* The `"WFAS-S:"` / `"WFAS-C:"` prefixes are **domain separation**: a server proof
+  can never be replayed as a client proof.
+* Both nonces appear in both proofs, binding the exchange and preventing replay
+  and reflection.
+* Verifying `sproof` lets the **client authenticate the server** — a rogue server
+  that does not hold `K` cannot produce it, so it cannot be impersonated.
+* This is authentication only: it decides **who** connects. It does **not** encrypt
+  the audio (see Section 7.5).
+
+### 7.4 The discovery beacon is not trusted
+
+Discovery (Section 3) is unauthenticated multicast that anyone can spoof, so **no
+security decision may depend on it**. The beacon carries at most a generic
+`secure=1` hint (so the client can show a lock icon); it never advertises which
+mode is in use.
+
+Protection against a **downgrade attack** (a spoofed beacon or rogue server
+claiming "no security") is enforced **client-side**: if the user configured the
+client to require a key for a server, the client **must abort** unless the
+handshake actually performed the key exchange — even if the server replied
+`HELLO_ACK` directly. Pin the expectation per server (trust-on-first-use): once a
+server is known to require a key, a later claim of "none" is ignored.
+
+### 7.5 Encryption (reserved — optional future layer)
+
+> **Not yet implemented — reserved.** Authentication (7.2–7.3) controls who
+> connects but leaves the PCM payload in clear, so on a LAN the audio is still
+> sniffable. A future **optional** layer may encrypt the payload: a session key
+> derived from a shared password via a KDF (e.g. PBKDF2/Argon2) and a symmetric
+> AEAD cipher (e.g. ChaCha20-Poly1305) — no asymmetric crypto required. It will be
+> negotiated in the handshake and flagged per packet; **minimal/embedded peers may
+> skip it** and remain conformant for the unencrypted profile. The wire details
+> are intentionally left unspecified here until the layer is designed.

@@ -27,6 +27,10 @@ object Strings {
         val loader = Strings::class.java.classLoader
         loader.getResourceAsStream("strings.properties")
             ?.use { props.load(InputStreamReader(it, Charsets.UTF_8)) }
+        if (java.util.Locale.getDefault().language == "it") {
+            loader.getResourceAsStream("strings_it.properties")
+                ?.use { props.load(InputStreamReader(it, Charsets.UTF_8)) }
+        }
     }
 
     fun get(key: String): String = props.getProperty(key, key)

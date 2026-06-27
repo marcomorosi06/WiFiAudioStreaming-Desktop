@@ -431,6 +431,15 @@ object NetworkHandler_v1 {
     const val WFAS_PROTOCOL_VERSION = 2
     private const val INCOMPATIBLE_PREFIX = "WFAS_INCOMPATIBLE"
     private const val HELLO_ACK_PREFIX    = "HELLO_ACK"
+    private const val PENDING_MESSAGE       = "WFAS_PENDING"
+    private const val AUTH_REQUIRED_PREFIX  = "WFAS_AUTH_REQUIRED"
+    private const val UNAUTHORIZED_MESSAGE  = "WFAS_UNAUTHORIZED"
+
+    @Volatile var securityMode: String = "OFF"
+    @Volatile var authKey: String = ""
+    fun configureSecurity(mode: String, key: String) { securityMode = mode; authKey = key }
+    var onAuthRequest: ((peer: String) -> Boolean)? = null
+    var onKeyRequest: (suspend (wrong: Boolean) -> String?)? = null
 
     private fun clientHelloMessage(): String = "$CLIENT_HELLO_MESSAGE;v=$WFAS_PROTOCOL_VERSION"
     private fun helloAckMessage():    String = "$HELLO_ACK_PREFIX;v=$WFAS_PROTOCOL_VERSION"
@@ -763,7 +772,7 @@ object NetworkHandler_v1 {
 
                         val isMulticast = parts[2].equals("MULTICAST", ignoreCase = true)
                         val port        = parts[3].toIntOrNull() ?: continue
-                        AppDebug.log("[DISCOVERY] Server trovato: hostname=$hostname ip=$remoteIp isMulticast=$isMulticast port=$port")
+                        AppDebug.log("[DISCOVERY] Server found: hostname=$hostname ip=$remoteIp isMulticast=$isMulticast port=$port")
 
                         val capabilities = if (parts.size >= 5) {
                             val protoStr = parts.firstOrNull { it.startsWith("protocols=") }
@@ -878,7 +887,7 @@ object NetworkHandler_v1 {
                             audioSettings.channels
                         )
                         if (!created) {
-                            reportMicError("createVirtualSink fallita: ${engine.lastError}")
+                            reportMicError("createVirtualSink failed: ${engine.lastError}")
                             return@launch
                         }
                         activeVirtualSinkEngine = engine
@@ -893,20 +902,20 @@ object NetworkHandler_v1 {
                         val hint = micOutputMixerInfo?.name
                         val opened = engine.micSinkOpen(hint, audioSettings.sampleRate.toInt(), audioSettings.channels)
                         if (!opened) {
-                            AppDebug.log("[MicReceiver] WASAPI micSinkOpen fallita: ${engine.lastError}")
+                            AppDebug.log("[MicReceiver] WASAPI micSinkOpen failed: ${engine.lastError}")
                             val outputs = runCatching { findAvailableOutputMixers() }.getOrDefault(emptyList())
                             val fallback = micOutputMixerInfo
                                 ?: VirtualMicAutodetect.detectManualCable(outputs)?.mixerInfo
                                 ?: run {
-                                    reportMicError("Nessun dispositivo cable (VB-Cable) selezionato o rilevato. Installa VB-Cable e selezionalo.")
+                                    reportMicError("No cable device (VB-Cable) selected or detected. Install VB-Cable and select it.")
                                     return@launch
                                 }
                             val mixer = runCatching { AudioSystem.getMixer(fallback) }.getOrNull()
-                                ?: run { reportMicError("Mixer '${fallback.name}' non apribile."); return@launch }
+                                ?: run { reportMicError("Mixer '${fallback.name}' cannot be opened."); return@launch }
                             val format   = audioSettings.toAudioFormat()
                             val lineInfo = DataLine.Info(SourceDataLine::class.java, format)
                             if (!mixer.isLineSupported(lineInfo)) {
-                                reportMicError("'${fallback.name}' non supporta ${format.sampleRate.toInt()}Hz/${format.channels}ch.")
+                                reportMicError("'${fallback.name}' does not support ${format.sampleRate.toInt()}Hz/${format.channels}ch.")
                                 return@launch
                             }
                             line = (mixer.getLine(lineInfo) as SourceDataLine).also {
@@ -923,25 +932,25 @@ object NetworkHandler_v1 {
                         val mixerInfo = micOutputMixerInfo
                             ?: VirtualMicAutodetect.detectManualCable(outputs)?.mixerInfo
                             ?: run {
-                                reportMicError("Nessun dispositivo virtuale (BlackHole) selezionato o rilevato. Installa BlackHole e selezionalo.")
+                                reportMicError("No virtual device (BlackHole) selected or detected. Install BlackHole and select it.")
                                 return@launch
                             }
-                        AppDebug.log("[MicReceiver] Apertura SourceDataLine verso '${mixerInfo.name}'")
+                        AppDebug.log("[MicReceiver] Opening SourceDataLine to '${mixerInfo.name}'")
                         val mixer = runCatching { AudioSystem.getMixer(mixerInfo) }.getOrNull() ?: run {
-                            reportMicError("Mixer '${mixerInfo.name}' non apribile.")
+                            reportMicError("Mixer '${mixerInfo.name}' cannot be opened.")
                             return@launch
                         }
                         val format   = audioSettings.toAudioFormat()
                         val lineInfo = DataLine.Info(SourceDataLine::class.java, format)
                         if (!mixer.isLineSupported(lineInfo)) {
-                            reportMicError("'${mixerInfo.name}' non supporta ${format.sampleRate.toInt()}Hz/${format.channels}ch/${format.sampleSizeInBits}bit.")
+                            reportMicError("'${mixerInfo.name}' does not support ${format.sampleRate.toInt()}Hz/${format.channels}ch/${format.sampleSizeInBits}bit.")
                             return@launch
                         }
                         line = (mixer.getLine(lineInfo) as SourceDataLine).also {
                             it.open(format, (audioSettings.sampleRate.toInt() * audioSettings.latencyMs / 1000) * audioSettings.channels * 2)
                             it.start()
                         }
-                        AppDebug.log("[MicReceiver] SourceDataLine aperta: buffer=${line?.bufferSize} bytes, format=$format")
+                        AppDebug.log("[MicReceiver] SourceDataLine opened: buffer=${line?.bufferSize} bytes, format=$format")
                     }
                 }
                 MicRoutingMode.MIX_INTO_STREAM -> {
@@ -979,7 +988,7 @@ object NetworkHandler_v1 {
                     soTimeout = 1000
                     receiveBufferSize = 1 shl 20
                 }
-                AppDebug.log("[MicReceiver] In ascolto su porta $micPort (mode=$routingMode) rcvbuf=${socket.receiveBufferSize}")
+                AppDebug.log("[MicReceiver] Listening on port $micPort (mode=$routingMode) rcvbuf=${socket.receiveBufferSize}")
                 MicStats.begin(MicStats.Dir.RECEIVING, ":$micPort ($routingMode)")
 
                 val reusableShorts = ShortArray(buf.size / 2)
@@ -1006,7 +1015,7 @@ object NetworkHandler_v1 {
                                 if (ver != WFAS_PROTOCOL_VERSION) {
                                     signalProtocolMismatch(ver)
                                     onStatusUpdate?.invoke("status_protocol_incompatible", emptyArray())
-                                    AppDebug.log("[MicReceiver] mic v=$ver incompatibile (mio v=$WFAS_PROTOCOL_VERSION)")
+                                    AppDebug.log("[MicReceiver] mic v=$ver incompatible (mine v=$WFAS_PROTOCOL_VERSION)")
                                     break
                                 }
                             }
@@ -1051,7 +1060,7 @@ object NetworkHandler_v1 {
                                             .asShortBuffer().put(reusableShorts, 0, numShorts)
                                         line!!.write(lineOutBytes, 0, outBytes)
                                     }
-                                    else -> if (totalPackets == 1L) AppDebug.log("[MicReceiver] ERRORE: nessuna destinazione mic attiva")
+                                    else -> if (totalPackets == 1L) AppDebug.log("[MicReceiver] ERROR: no active mic destination")
                                 }
                             }
                             MicRoutingMode.MIX_INTO_STREAM -> {
@@ -1066,7 +1075,7 @@ object NetworkHandler_v1 {
                 socket?.close()
             }
         } catch (e: Exception) {
-            if (e !is CancellationException) AppDebug.log("[MicReceiver] errore: ${e.message}")
+            if (e !is CancellationException) AppDebug.log("[MicReceiver] error: ${e.message}")
         } finally {
             MicStats.off()
             muteCollectorJob?.cancel()
@@ -2170,7 +2179,7 @@ object NetworkHandler_v1 {
             if (vol >= 0f) {
                 macOriginalVolume = vol
                 helperEngine.setSystemVolume(0f)
-                AppDebug.log("[Server] macOS: volume salvato ($vol), abbassato a 0")
+                AppDebug.log("[Server] macOS: volume saved ($vol), lowered to 0")
             }
         }
 
@@ -2299,6 +2308,8 @@ object NetworkHandler_v1 {
                 } else { // Unicast
                     val localAddress = InetSocketAddress("0.0.0.0", port)
                     aSocket(selectorManager).udp().bind(localAddress) { reuseAddress = true }.use { socket ->
+                        var pendCnonce = ""
+                        var pendSnonce = ""
                         while (isActive) {
                             startAnnouncingPresence(isMulticast = false, port = port, capabilities = capabilities, audioSettings = audioSettings)
                             onStatusUpdate("Waiting for Unicast Client on Port %d...", arrayOf(port))
@@ -2317,11 +2328,41 @@ object NetworkHandler_v1 {
 
                             val clientVersion = parseProtocolVersion(msg)
                             if (clientVersion != WFAS_PROTOCOL_VERSION) {
-                                AppDebug.log("[SERVER][UNICAST] client incompatibile v=$clientVersion (mio v=$WFAS_PROTOCOL_VERSION), rifiuto $clientAddress")
+                                AppDebug.log("[SERVER][UNICAST] incompatible client v=$clientVersion (mine v=$WFAS_PROTOCOL_VERSION), rejecting $clientAddress")
                                 socket.send(Datagram(buildPacket { writeText(incompatibleMessage()) }, clientAddress))
                                 WfasStats.add(WfasStats.Cat.HELLO, incompatibleMessage().length)
                                 signalProtocolMismatch(clientVersion)
                                 continue
+                            }
+
+                            when (SecurityMode.fromStringSafe(securityMode)) {
+                                SecurityMode.KEY -> {
+                                    val cproof = WfasAuth.getToken(msg, "cproof")
+                                    val cnonce = WfasAuth.getToken(msg, "cnonce") ?: ""
+                                    if (cproof == null) {
+                                        pendCnonce = cnonce
+                                        pendSnonce = WfasAuth.nonceHex()
+                                        val sproof = WfasAuth.proof(authKey, 'S', pendCnonce, pendSnonce)
+                                        socket.send(Datagram(buildPacket { writeText("$AUTH_REQUIRED_PREFIX;snonce=$pendSnonce;sproof=$sproof") }, clientAddress))
+                                        continue
+                                    }
+                                    val expected = WfasAuth.proof(authKey, 'C', pendCnonce.ifEmpty { cnonce }, pendSnonce)
+                                    if (!WfasAuth.constantTimeEquals(cproof, expected)) {
+                                        AppDebug.log("[SERVER][UNICAST] auth failed for $clientAddress")
+                                        socket.send(Datagram(buildPacket { writeText(UNAUTHORIZED_MESSAGE) }, clientAddress))
+                                        continue
+                                    }
+                                    AppDebug.log("[SERVER][UNICAST] auth OK for $clientAddress")
+                                }
+                                SecurityMode.ASK -> {
+                                    socket.send(Datagram(buildPacket { writeText(PENDING_MESSAGE) }, clientAddress))
+                                    val allow = onAuthRequest?.invoke(clientAddress.toString()) ?: true
+                                    if (!allow) {
+                                        socket.send(Datagram(buildPacket { writeText(UNAUTHORIZED_MESSAGE) }, clientAddress))
+                                        continue
+                                    }
+                                }
+                                SecurityMode.OFF -> { }
                             }
 
                             onStatusUpdate("Client Connected: %s", arrayOf(clientAddress.toString()))
@@ -2551,51 +2592,114 @@ object NetworkHandler_v1 {
             var sourceDataLine: SourceDataLine? = null
             var player: JitterAudioPlayer? = null
             val playbackState = ClientPlaybackState()
-            AppDebug.log("[CLIENT] launchClientInstance avviato: server=${serverInfo.ip}:${serverInfo.port} isMulticast=${serverInfo.isMulticast} sendMic=$sendMicrophone mixer='${selectedMixerInfo.name}'")
+            AppDebug.log("[CLIENT] launchClientInstance started: server=${serverInfo.ip}:${serverInfo.port} isMulticast=${serverInfo.isMulticast} sendMic=$sendMicrophone mixer='${selectedMixerInfo.name}'")
             try {
                 if (!serverInfo.isMulticast) { // Unicast
                     val remoteAddress = InetSocketAddress(serverInfo.ip, serverInfo.port)
-                    AppDebug.log("[CLIENT][UNICAST] connessione unicast verso $remoteAddress")
+                    AppDebug.log("[CLIENT][UNICAST] unicast connection to $remoteAddress")
                     aSocket(selectorManager).udp().bind().use { socket ->
                         sourceDataLine = prepareSourceDataLine(selectedMixerInfo, audioSettings)
                         player = sourceDataLine?.let {
                             JitterAudioPlayer(it, audioSettings.sampleRate.toInt(), audioSettings.channels,
                                 prebufferMs = audioSettings.latencyMs, maxBufferMs = audioSettings.latencyMs + 280).also { p -> p.start() }
                         }
-                        AppDebug.log("[CLIENT][UNICAST] SourceDataLine avviata, invio HELLO a $remoteAddress")
+                        AppDebug.log("[CLIENT][UNICAST] SourceDataLine started, sending HELLO to $remoteAddress")
 
                         onStatusUpdate("status_contacting_server", arrayOf(remoteAddress))
-                        socket.send(Datagram(buildPacket { writeText(clientHelloMessage()) }, remoteAddress))
-                        AppDebug.log("[CLIENT][UNICAST] HELLO inviato, attendo ACK (timeout 15s)...")
-
+                        val cnonce = WfasAuth.nonceHex()
+                        var helloMsg = "${clientHelloMessage()};cnonce=$cnonce"
+                        var proved = false
+                        socket.send(Datagram(buildPacket { writeText(helloMsg) }, remoteAddress))
+                        AppDebug.log("[CLIENT][UNICAST] HELLO sent, waiting for reply...")
                         onStatusUpdate("status_waiting_ack", emptyArray())
-                        val ackDatagram = withTimeout(15000) { socket.receive() }
-                        val ackText = ackDatagram.packet.readText().trim()
-                        AppDebug.log("[CLIENT][UNICAST] ACK ricevuto da ${ackDatagram.address}: '$ackText'")
-                        when {
-                            ackText.startsWith(INCOMPATIBLE_PREFIX) -> {
-                                val serverVersion = parseProtocolVersion(ackText)
-                                AppDebug.log("[CLIENT][UNICAST] server incompatibile v=$serverVersion (mio v=$WFAS_PROTOCOL_VERSION)")
-                                signalProtocolMismatch(serverVersion)
-                                onStatusUpdate("status_protocol_incompatible", emptyArray())
-                                return@use
+
+                        var handshakeDeadline = System.currentTimeMillis() + 30000
+                        var handshakeOk = false
+
+                        suspend fun promptKeyAndRestart(wrong: Boolean): Boolean {
+                            val k = onKeyRequest?.invoke(wrong) ?: return false
+                            if (k.isBlank()) return false
+                            authKey = k
+                            proved = false
+                            helloMsg = "${clientHelloMessage()};cnonce=$cnonce"
+                            socket.send(Datagram(buildPacket { writeText(helloMsg) }, remoteAddress))
+                            handshakeDeadline = System.currentTimeMillis() + 30000
+                            return true
+                        }
+
+                        while (System.currentTimeMillis() < handshakeDeadline) {
+                            val ackText = try {
+                                withTimeout(2000) { socket.receive() }.packet.readText().trim()
+                            } catch (_: TimeoutCancellationException) {
+                                socket.send(Datagram(buildPacket { writeText(helloMsg) }, remoteAddress))
+                                continue
                             }
-                            ackText.startsWith(HELLO_ACK_PREFIX) -> {
-                                val serverVersion = parseProtocolVersion(ackText)
-                                if (serverVersion != WFAS_PROTOCOL_VERSION) {
-                                    AppDebug.log("[CLIENT][UNICAST] versione ACK incompatibile v=$serverVersion (mio v=$WFAS_PROTOCOL_VERSION)")
-                                    signalProtocolMismatch(serverVersion)
+                            AppDebug.log("[CLIENT][UNICAST] reply: '$ackText'")
+                            when {
+                                ackText.startsWith(INCOMPATIBLE_PREFIX) -> {
+                                    signalProtocolMismatch(parseProtocolVersion(ackText))
                                     onStatusUpdate("status_protocol_incompatible", emptyArray())
                                     return@use
                                 }
+                                ackText == UNAUTHORIZED_MESSAGE -> {
+                                    AppDebug.log("[CLIENT][UNICAST] unauthorized")
+                                    if (!promptKeyAndRestart(true)) {
+                                        onStatusUpdate("status_unauthorized", emptyArray())
+                                        return@use
+                                    }
+                                }
+                                ackText == PENDING_MESSAGE -> {
+                                    onStatusUpdate("status_awaiting_approval", emptyArray())
+                                }
+                                ackText.startsWith(AUTH_REQUIRED_PREFIX) -> {
+                                    if (authKey.isEmpty()) {
+                                        AppDebug.log("[CLIENT][UNICAST] server requires a key")
+                                        val k = onKeyRequest?.invoke(false)
+                                        if (k.isNullOrBlank()) {
+                                            onStatusUpdate("status_key_required", emptyArray())
+                                            return@use
+                                        }
+                                        authKey = k
+                                        handshakeDeadline = System.currentTimeMillis() + 30000
+                                    }
+                                    val snonce = WfasAuth.getToken(ackText, "snonce") ?: ""
+                                    val sproof = WfasAuth.getToken(ackText, "sproof") ?: ""
+                                    if (!WfasAuth.constantTimeEquals(sproof, WfasAuth.proof(authKey, 'S', cnonce, snonce))) {
+                                        AppDebug.log("[CLIENT][UNICAST] server proof invalid (rogue server or wrong key)")
+                                        if (!promptKeyAndRestart(true)) {
+                                            onStatusUpdate("status_unauthorized", emptyArray())
+                                            return@use
+                                        }
+                                    } else {
+                                        val cproof = WfasAuth.proof(authKey, 'C', cnonce, snonce)
+                                        helloMsg = "${clientHelloMessage()};cnonce=$cnonce;cproof=$cproof"
+                                        proved = true
+                                        socket.send(Datagram(buildPacket { writeText(helloMsg) }, remoteAddress))
+                                    }
+                                }
+                                ackText.startsWith(HELLO_ACK_PREFIX) -> {
+                                    val serverVersion = parseProtocolVersion(ackText)
+                                    if (serverVersion != WFAS_PROTOCOL_VERSION) {
+                                        signalProtocolMismatch(serverVersion)
+                                        onStatusUpdate("status_protocol_incompatible", emptyArray())
+                                        return@use
+                                    }
+                                    if (authKey.isNotEmpty() && !proved) {
+                                        AppDebug.log("[CLIENT][UNICAST] server skipped auth (possible downgrade) — aborting")
+                                        onStatusUpdate("status_unauthorized", emptyArray())
+                                        return@use
+                                    }
+                                    handshakeOk = true
+                                }
+                                else -> AppDebug.log("[CLIENT][UNICAST] unexpected reply '$ackText'")
                             }
-                            else -> {
-                                AppDebug.log("[CLIENT][UNICAST] ERRORE handshake: risposta inattesa '$ackText'")
-                                onStatusUpdate("status_handshake_failed", emptyArray())
-                                return@use
-                            }
+                            if (handshakeOk) break
                         }
-                        AppDebug.log("[CLIENT][UNICAST] handshake OK, streaming avviato da $remoteAddress")
+                        if (!handshakeOk) {
+                            onStatusUpdate("status_handshake_failed", emptyArray())
+                            return@use
+                        }
+                        AppDebug.log("[CLIENT][UNICAST] handshake OK, streaming started from $remoteAddress")
                         onStatusUpdate("status_connected_streaming_from", arrayOf(remoteAddress))
                         if (connectionSoundEnabled) playConnectionSound()
 
@@ -2612,10 +2716,10 @@ object NetworkHandler_v1 {
                             while (isActive && serverAlive.get()) {
                                 delay(1000)
                                 val elapsed = System.currentTimeMillis() - lastPingReceived
-                                AppDebug.log("[CLIENT][UNICAST] watchdog: ${elapsed}ms dall'ultimo PING (timeout=${pingTimeoutMs}ms) audioPkts=$audioPackets totalAudioBytes=$totalAudioBytes")
+                                AppDebug.log("[CLIENT][UNICAST] watchdog: ${elapsed}ms since last PING (timeout=${pingTimeoutMs}ms) audioPkts=$audioPackets totalAudioBytes=$totalAudioBytes")
                                 if (elapsed > pingTimeoutMs) {
                                     AppDebug.log("---Server timeout: no PING for ${pingTimeoutMs}ms ---")
-                                    AppDebug.log("[CLIENT][UNICAST] TIMEOUT: nessun PING in ${pingTimeoutMs}ms, disconnessione")
+                                    AppDebug.log("[CLIENT][UNICAST] TIMEOUT: no PING in ${pingTimeoutMs}ms, disconnecting")
                                     onStatusUpdate("status_server_disconnected", emptyArray())
                                     if (disconnectionSoundEnabled) playDisconnectionSound()
                                     serverAlive.set(false)
@@ -2635,7 +2739,7 @@ object NetworkHandler_v1 {
                                         versionChecked = true
                                         val packetVersion = bytes[2].toInt() and 0xFF
                                         if (packetVersion != WFAS_PROTOCOL_VERSION) {
-                                            AppDebug.log("[CLIENT][UNICAST] pacchetto v=$packetVersion incompatibile (mio v=$WFAS_PROTOCOL_VERSION)")
+                                            AppDebug.log("[CLIENT][UNICAST] packet v=$packetVersion incompatible (mine v=$WFAS_PROTOCOL_VERSION)")
                                             signalProtocolMismatch(packetVersion)
                                             onStatusUpdate("status_protocol_incompatible", emptyArray())
                                             serverAlive.set(false)
@@ -2665,33 +2769,33 @@ object NetworkHandler_v1 {
                                             lastPingReceived = System.currentTimeMillis()
                                             pingCount++
                                             if (pingCount == 1L || pingCount % 10L == 0L) {
-                                                AppDebug.log("[CLIENT][UNICAST] PING #$pingCount ricevuto da ${datagram.address}")
+                                                AppDebug.log("[CLIENT][UNICAST] PING #$pingCount received from ${datagram.address}")
                                             }
                                         }
                                         "BYE"  -> {
                                             AppDebug.log("---Received BYE from server ---")
-                                            AppDebug.log("[CLIENT][UNICAST] BYE ricevuto, disconnessione pulita")
+                                            AppDebug.log("[CLIENT][UNICAST] BYE received, clean disconnect")
                                             onStatusUpdate("status_server_disconnected", emptyArray())
                                             if (disconnectionSoundEnabled) playDisconnectionSound()
                                             serverAlive.set(false)
                                         }
-                                        else -> AppDebug.log("[CLIENT][UNICAST] msg sconosciuto (#$receivedPackets): '$text'")
+                                        else -> AppDebug.log("[CLIENT][UNICAST] unknown msg (#$receivedPackets): '$text'")
                                     }
                                 }
                             }
                         } finally {
-                            AppDebug.log("[CLIENT][UNICAST] loop terminato: receivedPackets=$receivedPackets audioPackets=$audioPackets pingCount=$pingCount totalAudioBytes=$totalAudioBytes")
+                            AppDebug.log("[CLIENT][UNICAST] loop ended: receivedPackets=$receivedPackets audioPackets=$audioPackets pingCount=$pingCount totalAudioBytes=$totalAudioBytes")
                             watchdogJob.cancel()
                             withContext(NonCancellable) {
                                 runCatching {
-                                    AppDebug.log("[CLIENT][UNICAST] invio CLIENT_BYE a $remoteAddress")
+                                    AppDebug.log("[CLIENT][UNICAST] sending CLIENT_BYE to $remoteAddress")
                                     socket.send(Datagram(buildPacket { writeText("CLIENT_BYE") }, remoteAddress))
                                 }
                             }
                         }
                     }
                 } else { // Multicast
-                    AppDebug.log("[CLIENT][MULTICAST] modalità multicast, porta=${serverInfo.port} ip=${serverInfo.ip}")
+                    AppDebug.log("[CLIENT][MULTICAST] multicast mode, port=${serverInfo.port} ip=${serverInfo.ip}")
                     onStatusUpdate("status_joining_multicast", arrayOf(serverInfo.port))
                     val groupAddress = InetAddress.getByName(MULTICAST_GROUP_IP)
                     MulticastSocket(null as java.net.SocketAddress?).use { socket ->
@@ -2702,7 +2806,7 @@ object NetworkHandler_v1 {
                             AppDebug.log("[CLIENT][MULTICAST] join group $groupAddress via iface ${netIface.name}")
                             socket.joinGroup(java.net.InetSocketAddress(groupAddress, 0), netIface)
                         } else {
-                            AppDebug.log("[CLIENT][MULTICAST] join group $groupAddress (nessuna iface specifica)")
+                            AppDebug.log("[CLIENT][MULTICAST] join group $groupAddress (no specific iface)")
                             socket.joinGroup(groupAddress)
                         }
                         val effectiveAudioSettings = serverInfo.serverAudioSettings ?: audioSettings
@@ -2712,7 +2816,7 @@ object NetworkHandler_v1 {
                             JitterAudioPlayer(it, effectiveAudioSettings.sampleRate.toInt(), effectiveAudioSettings.channels,
                                 prebufferMs = audioSettings.latencyMs, maxBufferMs = audioSettings.latencyMs + 280).also { p -> p.start() }
                         }
-                        AppDebug.log("[CLIENT][MULTICAST] SourceDataLine avviata, attendo pacchetti multicast...")
+                        AppDebug.log("[CLIENT][MULTICAST] SourceDataLine started, waiting for multicast packets...")
                         onStatusUpdate("status_multicast_streaming", arrayOf(serverInfo.port))
                         if (connectionSoundEnabled) playConnectionSound()
                         socket.soTimeout = 2000
@@ -2733,7 +2837,7 @@ object NetworkHandler_v1 {
                                     mcVersionChecked = true
                                     val packetVersion = packet.data[2].toInt() and 0xFF
                                     if (packetVersion != WFAS_PROTOCOL_VERSION) {
-                                        AppDebug.log("[CLIENT][MULTICAST] pacchetto v=$packetVersion incompatibile (mio v=$WFAS_PROTOCOL_VERSION)")
+                                        AppDebug.log("[CLIENT][MULTICAST] packet v=$packetVersion incompatible (mine v=$WFAS_PROTOCOL_VERSION)")
                                         signalProtocolMismatch(packetVersion)
                                         onStatusUpdate("status_protocol_incompatible", emptyArray())
                                         break
@@ -2753,7 +2857,7 @@ object NetworkHandler_v1 {
                             } else if (packet.length >= 3 && String(packet.data, 0, minOf(packet.length, 3), Charsets.UTF_8) == "BYE") {
                                 WfasStats.add(WfasStats.Cat.BYE, packet.length)
                                 AppDebug.log("---Received BYE from multicast server ---")
-                                AppDebug.log("[CLIENT][MULTICAST] BYE ricevuto dopo $mcAudioPkts pacchetti audio ($mcTotalBytes bytes totali)")
+                                AppDebug.log("[CLIENT][MULTICAST] BYE received after $mcAudioPkts audio packets ($mcTotalBytes total bytes)")
                                 onStatusUpdate("status_server_disconnected", emptyArray())
                                 if (disconnectionSoundEnabled) playDisconnectionSound()
                                 break
@@ -2762,7 +2866,7 @@ object NetworkHandler_v1 {
                     }
                 }
             } catch (_: TimeoutCancellationException) {
-                AppDebug.log("[CLIENT] TIMEOUT: nessuna risposta dal server entro 15s")
+                AppDebug.log("[CLIENT] TIMEOUT: no response from server within 15s")
                 onStatusUpdate("status_server_no_response", emptyArray())
             } catch (e: Exception) {
                 if (e !is CancellationException) {
@@ -2771,7 +2875,7 @@ object NetworkHandler_v1 {
                     onStatusUpdate("Error: %s", arrayOf(e.message ?: e.toString()))
                 }
             } finally {
-                AppDebug.log("[CLIENT] finally: chiusura player/SourceDataLine")
+                AppDebug.log("[CLIENT] finally: closing player/SourceDataLine")
                 val p = player
                 if (p != null) {
                     p.stop()
@@ -2779,7 +2883,7 @@ object NetworkHandler_v1 {
                     runCatching { sourceDataLine?.stop() }
                     runCatching { sourceDataLine?.close() }
                 }
-                AppDebug.log("[CLIENT] launchClientInstance terminato")
+                AppDebug.log("[CLIENT] launchClientInstance ended")
             }
         }
     }
@@ -2956,7 +3060,7 @@ object NetworkHandler_v1 {
         AppDebug.log("[CLIENT] prepareSourceDataLine: mixer='${mixerInfo.name}' format=$format sr=${audioSettings.sampleRate} ch=${audioSettings.channels} bd=${audioSettings.bitDepth}")
 
         if (!mixer.isLineSupported(dataLineInfo)) {
-            AppDebug.log("[CLIENT] ERRORE: mixer '${mixerInfo.name}' NON supporta il formato $format")
+            AppDebug.log("[CLIENT] ERROR: mixer '${mixerInfo.name}' does NOT support format $format")
             return null
         }
 
@@ -2969,7 +3073,7 @@ object NetworkHandler_v1 {
         AppDebug.log("[CLIENT] SourceDataLine: frameSize=$frameSize targetLatencyMs=${targetLatencyMs}ms targetBufferBytes=$targetBytes")
         return (mixer.getLine(dataLineInfo) as SourceDataLine).also { sdl ->
             sdl.open(format, targetBytes)
-            AppDebug.log("[CLIENT] SourceDataLine aperta: bufferSize=${sdl.bufferSize} format=${sdl.format} latenzaReale=${sdl.bufferSize * 1000 / (audioSettings.sampleRate.toInt() * frameSize)}ms")
+            AppDebug.log("[CLIENT] SourceDataLine opened: bufferSize=${sdl.bufferSize} format=${sdl.format} realLatency=${sdl.bufferSize * 1000 / (audioSettings.sampleRate.toInt() * frameSize)}ms")
 
             val gainInfo = sdl.controls
                 .filterIsInstance<javax.sound.sampled.FloatControl>()
@@ -2977,7 +3081,7 @@ object NetworkHandler_v1 {
             if (gainInfo != null) {
                 AppDebug.log("[CLIENT] SDL MASTER_GAIN: ${gainInfo.value} dB (min=${gainInfo.minimum} max=${gainInfo.maximum})")
             } else {
-                AppDebug.log("[CLIENT] SDL MASTER_GAIN: controllo non disponibile")
+                AppDebug.log("[CLIENT] SDL MASTER_GAIN: control not available")
             }
             val muteInfo = sdl.controls
                 .filterIsInstance<javax.sound.sampled.BooleanControl>()
@@ -2985,7 +3089,7 @@ object NetworkHandler_v1 {
             if (muteInfo != null) {
                 AppDebug.log("[CLIENT] SDL MUTE: ${muteInfo.value}")
             } else {
-                AppDebug.log("[CLIENT] SDL MUTE: controllo non disponibile")
+                AppDebug.log("[CLIENT] SDL MUTE: control not available")
             }
 
             sdl.start()
@@ -3029,7 +3133,7 @@ object NetworkHandler_v1 {
             val isMacOS = System.getProperty("os.name").lowercase().let { it.contains("mac") || it.contains("darwin") }
             if (isMacOS && AudioEngine.loadLibrary()) {
                 AudioEngine().setSystemVolume(savedVol)
-                AppDebug.log("[Server] macOS: volume ripristinato a $savedVol")
+                AppDebug.log("[Server] macOS: volume restored to $savedVol")
             }
         }
     }
@@ -3461,7 +3565,7 @@ fun startGuiApplication(cliArgs: CliArgs) = application {
                 linuxTray.menu.add(quitItem)
 
             } else {
-                AppDebug.log("Attenzione: Dorkbox SystemTray non e' supportato su questo sistema/DE.")
+                AppDebug.log("Warning: Dorkbox SystemTray is not supported on this system/DE.")
             }
         }
     }
@@ -3477,6 +3581,76 @@ fun startGuiApplication(cliArgs: CliArgs) = application {
         // Enforce a minimum window size so content is always reachable on low-res displays.
         LaunchedEffect(Unit) {
             window.minimumSize = java.awt.Dimension(400, 500)
+        }
+        LaunchedEffect(appSettings.securityMode, appSettings.authKey) {
+            NetworkHandler_v1.configureSecurity(appSettings.securityMode, appSettings.authKey)
+        }
+        var authRequestPeer by remember { mutableStateOf<String?>(null) }
+        val authDecision = remember { java.util.concurrent.atomic.AtomicReference<kotlinx.coroutines.CompletableDeferred<Boolean>?>(null) }
+        LaunchedEffect(Unit) {
+            NetworkHandler_v1.onAuthRequest = { peer ->
+                val def = kotlinx.coroutines.CompletableDeferred<Boolean>()
+                authDecision.set(def)
+                authRequestPeer = peer
+                runCatching { kotlinx.coroutines.runBlocking { def.await() } }.getOrDefault(false)
+            }
+        }
+        authRequestPeer?.let { peer ->
+            AlertDialog(
+                onDismissRequest = { authDecision.getAndSet(null)?.complete(false); authRequestPeer = null },
+                title = { Text(stringResource("auth_request_title")) },
+                text  = { Text(stringResource("auth_request_body", peer)) },
+                confirmButton = {
+                    Button(onClick = { authDecision.getAndSet(null)?.complete(true); authRequestPeer = null }) {
+                        Text(stringResource("auth_allow"))
+                    }
+                },
+                dismissButton = {
+                    TextButton(onClick = { authDecision.getAndSet(null)?.complete(false); authRequestPeer = null }) {
+                        Text(stringResource("auth_deny"))
+                    }
+                }
+            )
+        }
+        var keyRequestWrong by remember { mutableStateOf<Boolean?>(null) }
+        val keyDecision = remember { java.util.concurrent.atomic.AtomicReference<kotlinx.coroutines.CompletableDeferred<String?>?>(null) }
+        LaunchedEffect(Unit) {
+            NetworkHandler_v1.onKeyRequest = { wrong ->
+                val def = kotlinx.coroutines.CompletableDeferred<String?>()
+                keyDecision.set(def)
+                keyRequestWrong = wrong
+                runCatching { def.await() }.getOrNull()
+            }
+        }
+        keyRequestWrong?.let { wrong ->
+            var keyText by remember { mutableStateOf("") }
+            AlertDialog(
+                onDismissRequest = { keyDecision.getAndSet(null)?.complete(null); keyRequestWrong = null },
+                title = { Text(stringResource("key_dialog_title")) },
+                text = {
+                    Column {
+                        Text(if (wrong) stringResource("key_dialog_wrong") else stringResource("key_dialog_body"))
+                        Spacer(Modifier.height(8.dp))
+                        OutlinedTextField(
+                            value = keyText,
+                            onValueChange = { keyText = it },
+                            singleLine = true,
+                            label = { Text(stringResource("auth_key_label")) },
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                    }
+                },
+                confirmButton = {
+                    Button(onClick = { keyDecision.getAndSet(null)?.complete(keyText); keyRequestWrong = null }) {
+                        Text(stringResource("key_dialog_connect"))
+                    }
+                },
+                dismissButton = {
+                    TextButton(onClick = { keyDecision.getAndSet(null)?.complete(null); keyRequestWrong = null }) {
+                        Text(stringResource("key_dialog_cancel"))
+                    }
+                }
+            )
         }
         val customColor = appSettings.customThemeColor?.toULong()?.let { Color(it) }
         val currentColorScheme = if (customColor != null) {
@@ -3912,24 +4086,19 @@ fun startGuiApplication(cliArgs: CliArgs) = application {
                             AlertDialog(
                                 onDismissRequest = { updateBanner = null },
                                 icon  = { Icon(Icons.Outlined.Update, contentDescription = null) },
-                                title = { Text(Bilingual("Update available", "Aggiornamento disponibile").get()) },
+                                title = { Text(Strings.get("update_available_title")) },
                                 text  = {
-                                    Text(
-                                        Bilingual(
-                                            "Version ${info.latest} is available. You have ${info.current}.",
-                                            "La versione ${info.latest} è disponibile. Tu hai la ${info.current}."
-                                        ).get()
-                                    )
+                                    Text(Strings.get("update_available_body", info.latest, info.current))
                                 },
                                 confirmButton = {
                                     Button(onClick = {
                                         runCatching { openUrl(info.url) }
                                         updateBanner = null
-                                    }) { Text(Bilingual("Download", "Scarica").get()) }
+                                    }) { Text(Strings.get("update_download")) }
                                 },
                                 dismissButton = {
                                     TextButton(onClick = { updateBanner = null }) {
-                                        Text(Bilingual("Later", "Più tardi").get())
+                                        Text(Strings.get("update_later"))
                                     }
                                 }
                             )
@@ -3938,32 +4107,23 @@ fun startGuiApplication(cliArgs: CliArgs) = application {
                         manualUpdateResult?.let { res ->
                             val message = when (res) {
                                 is UpdateChecker.Result.Available ->
-                                    Bilingual(
-                                        "Version ${res.latest} is available. You have ${res.current}.",
-                                        "La versione ${res.latest} è disponibile. Tu hai la ${res.current}."
-                                    ).get()
+                                    Strings.get("update_available_body", res.latest, res.current)
                                 is UpdateChecker.Result.UpToDate ->
-                                    Bilingual(
-                                        "You are on the latest version (${res.current}).",
-                                        "Sei all'ultima versione (${res.current})."
-                                    ).get()
+                                    Strings.get("update_uptodate", res.current)
                                 is UpdateChecker.Result.Failed ->
-                                    Bilingual(
-                                        "Could not check for updates. Please try again later.",
-                                        "Impossibile controllare gli aggiornamenti. Riprova più tardi."
-                                    ).get()
+                                    Strings.get("update_check_failed")
                             }
                             AlertDialog(
                                 onDismissRequest = { manualUpdateResult = null },
                                 icon  = { Icon(Icons.Outlined.Update, contentDescription = null) },
-                                title = { Text(Bilingual("Check for updates", "Controllo aggiornamenti").get()) },
+                                title = { Text(Strings.get("update_check_title")) },
                                 text  = { Text(message) },
                                 confirmButton = {
                                     if (res is UpdateChecker.Result.Available) {
                                         Button(onClick = {
                                             runCatching { openUrl(res.url) }
                                             manualUpdateResult = null
-                                        }) { Text(Bilingual("Download", "Scarica").get()) }
+                                        }) { Text(Strings.get("update_download")) }
                                     } else {
                                         TextButton(onClick = { manualUpdateResult = null }) {
                                             Text(Strings.get("close"))

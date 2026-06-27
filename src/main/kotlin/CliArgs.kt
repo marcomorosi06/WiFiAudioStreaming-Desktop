@@ -64,6 +64,8 @@ data class CliArgs(
     val debug:           Boolean         = false,
     val checkUpdate:     Boolean         = false,
     val autoCheckUpdate: String?         = null,
+    val authMode:        String          = "OFF",
+    val authKey:         String          = "",
 ) {
     companion object {
 
@@ -124,6 +126,8 @@ data class CliArgs(
             var debug           = false
             var checkUpdate     = false
             var autoCheckUpdate: String?    = null
+            var authMode        = "OFF"
+            var authKey         = ""
 
             var i = 0
             while (i < args.size) {
@@ -249,6 +253,22 @@ data class CliArgs(
                     "--licenses", "--license", "--credits" -> printLicenses = true
                     "--fred", "--Fred" -> printFred     = true
                     "--debug"          -> debug         = true
+                    "--auth-mode" -> {
+                        val v = nextArg(args, i, "--auth-mode") ?: parseError("--auth-mode requires a value: off, ask or key")
+                        i++
+                        authMode = when (v.lowercase()) {
+                            "off"  -> "OFF"
+                            "ask"  -> "ASK"
+                            "key"  -> "KEY"
+                            else   -> parseError("--auth-mode must be off, ask or key, got '$v'")
+                        }
+                    }
+                    "--auth-key" -> {
+                        val v = nextArg(args, i, "--auth-key") ?: parseError("--auth-key requires a value")
+                        i++
+                        authKey = v
+                        if (authMode == "OFF") authMode = "KEY"
+                    }
                     "--check-update", "--check-updates" -> checkUpdate = true
                     "--auto-check-update", "--auto-check-updates" -> {
                         val v = nextArg(args, i, "--auto-check-update") ?: parseError("--auto-check-update requires a value: on or off")
@@ -304,6 +324,8 @@ data class CliArgs(
                 debug           = debug,
                 checkUpdate     = checkUpdate,
                 autoCheckUpdate = autoCheckUpdate,
+                authMode        = authMode,
+                authKey         = authKey,
             )
         }
 
@@ -336,6 +358,10 @@ SERVER OPTIONS
   --http              Enable HTTP stream            (implies --multicast)
   --http-port <n>     HTTP port                    (default: 8080)
   --http-safari       Enable Safari-compatible HLS
+  --auth-mode <m>     Connection authorization: off | ask | key  (default: off;
+                      unicast only). 'ask' prompts on the terminal per client.
+  --auth-key <key>    Pre-shared key (implies --auth-mode key). The key is never
+                      sent on the wire (mutual HMAC challenge-response).
   --sdp               Print stream.sdp to stdout when server starts
   --sdp-out <path>    Write stream.sdp to file     (e.g. /tmp/stream.sdp)
   --legacy-engine     Use the legacy FFmpeg grabber instead of the native C
@@ -487,6 +513,22 @@ VERSION NEGOTIATION  (handles both directions)
   On any mismatch the device running the newer build stops the stream and shows
   an "update required" notice. Whether the outdated peer is the server (sender)
   or the client (receiver), the up-to-date side is the one that reports it.
+
+SECURITY  (optional, unicast only)
+  An optional server-side toggle gates who may connect (audio packets unchanged):
+    off    any client that completes the handshake streams
+    ask    the server user approves each client; the server replies WFAS_PENDING
+           (re-sent ~2s as keep-alive) until Allow -> HELLO_ACK or Deny -> WFAS_UNAUTHORIZED
+    key    pre-shared key, mutual HMAC-SHA256 challenge-response; the key never
+           travels on the wire and both ends are authenticated:
+             client -> HELLO_FROM_CLIENT;v=2;cnonce=C
+             server -> WFAS_AUTH_REQUIRED;snonce=S;sproof=HMAC(K,"WFAS-S:"+C+":"+S)
+             client -> HELLO_FROM_CLIENT;v=2;cnonce=C;cproof=HMAC(K,"WFAS-C:"+C+":"+S)
+             server -> HELLO_ACK  or  WFAS_UNAUTHORIZED
+  The discovery beacon is NOT trusted (it carries at most secure=1 as a hint); a
+  client that requires a key aborts unless the key exchange actually happened, so
+  a spoofed "no security" cannot downgrade it. Authentication decides WHO connects;
+  it does not encrypt the audio (stream encryption is a reserved, optional layer).
 
   Releases:
     Desktop  https://github.com/marcomorosi06/WiFiAudioStreaming-Desktop/releases

@@ -161,7 +161,7 @@ fun AppContent(
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text("WiFi Audio Streamer") },
+                title = { Text("WiFi Audio Streaming") },
                 actions = {
                     IconButton(onClick = onOpenSettings) {
                         Icon(Icons.Default.Settings, contentDescription = "Settings")
@@ -322,7 +322,11 @@ fun AppContent(
                             micRoutingDisabled = appSettings.rtpEnabled,
                             virtualMicDisabled = isMulticastMode,
                             selectedMicMixInput = selectedMicMixInput,
-                            onMicMixInputSelected = onMicMixInputSelected
+                            onMicMixInputSelected = onMicMixInputSelected,
+                            securityMode = appSettings.securityMode,
+                            authKey = appSettings.authKey,
+                            onSecurityModeChange = { onAppSettingsChange(appSettings.copy(securityMode = it)) },
+                            onAuthKeyChange = { onAppSettingsChange(appSettings.copy(authKey = it)) }
                         )
                     }
                 }
@@ -1183,11 +1187,8 @@ fun SettingsScreen(
                 }
                 item {
                     SwitchSetting(
-                        title = Bilingual("Check for updates automatically", "Controlla aggiornamenti automaticamente").get(),
-                        description = Bilingual(
-                            "On startup, check GitHub for a newer release.",
-                            "All'avvio, controlla su GitHub se c'è una nuova versione."
-                        ).get(),
+                        title = stringResource("update_auto_title"),
+                        description = stringResource("update_auto_desc"),
                         icon = Icons.Outlined.Update,
                         checked = appSettings.autoUpdateCheckEnabled,
                         onCheckedChange = { onAppSettingsChange(appSettings.copy(autoUpdateCheckEnabled = it)) }
@@ -1204,7 +1205,7 @@ fun SettingsScreen(
                             Icon(Icons.Outlined.Update, contentDescription = null, modifier = Modifier.size(18.dp))
                         }
                         Spacer(Modifier.width(8.dp))
-                        Text(Bilingual("Check for updates now", "Controlla aggiornamenti ora").get())
+                        Text(stringResource("update_check_now"))
                     }
                     Spacer(Modifier.height(8.dp))
                 }
@@ -1456,7 +1457,11 @@ fun ServerConfigCard(
     micRoutingDisabled: Boolean = false,
     virtualMicDisabled: Boolean = false,
     selectedMicMixInput: Mixer.Info? = null,
-    onMicMixInputSelected: (Mixer.Info) -> Unit = {}
+    onMicMixInputSelected: (Mixer.Info) -> Unit = {},
+    securityMode: String = "OFF",
+    authKey: String = "",
+    onSecurityModeChange: (String) -> Unit = {},
+    onAuthKeyChange: (String) -> Unit = {}
 ) {
     ElevatedCard(modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(24.dp)) {
         Column(Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
@@ -1532,6 +1537,53 @@ fun ServerConfigCard(
                     enabled = !rtpEnabled, // Disabilita lo switch se RTP è attivo
                     onCheckedChange = onMulticastChanged
                 )
+            }
+
+            HorizontalDivider()
+
+            val mode = securityMode.uppercase()
+            val modeLabel = when (mode) {
+                "ASK" -> stringResource("security_ask")
+                "KEY" -> stringResource("security_key")
+                else  -> stringResource("security_off")
+            }
+            Text(stringResource("security_section"), style = MaterialTheme.typography.titleMedium)
+            ExposedDropdown(
+                stringResource("security_mode_label"),
+                modeLabel,
+                listOf(
+                    stringResource("security_off") to "OFF",
+                    stringResource("security_ask") to "ASK",
+                    stringResource("security_key") to "KEY"
+                ),
+                onSecurityModeChange,
+                Modifier.fillMaxWidth()
+            )
+            if (mode == "KEY") {
+                OutlinedTextField(
+                    value = authKey,
+                    onValueChange = onAuthKeyChange,
+                    label = { Text(stringResource("auth_key_label")) },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth()
+                )
+                Text(
+                    stringResource("auth_key_hint"),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Column(Modifier.weight(1f)) {
+                    Text(stringResource("encryption_label"))
+                    Text(
+                        stringResource("encryption_hint"),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+                Spacer(Modifier.width(12.dp))
+                Switch(checked = false, onCheckedChange = null, enabled = false)
             }
         }
     }
@@ -2145,7 +2197,7 @@ fun ServerStatusBar(
         // IP / porta — solo in modalità server
         if (isServer) {
             Text(
-                "IP $localIp · porta $streamingPort",
+                "IP $localIp : $streamingPort",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.align(Alignment.CenterHorizontally)

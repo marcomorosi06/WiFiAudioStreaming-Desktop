@@ -48,7 +48,9 @@ data class AppSettings(
     val useNativeEngine: Boolean = true,
     val startMinimizedToTray: Boolean = false,
     val closeToTray: Boolean = true,
-    val autoUpdateCheckEnabled: Boolean = true
+    val autoUpdateCheckEnabled: Boolean = true,
+    val securityMode: String = "OFF",
+    val authKey: String = ""
 )
 
 object SettingsRepository {
@@ -88,6 +90,8 @@ object SettingsRepository {
     private const val HAS_SEEN_CLI_WELCOME_KEY = "has_seen_cli_welcome"
     private const val LAST_SEEN_CHANGELOG_KEY  = "last_seen_changelog_version"
     private const val AUTO_UPDATE_CHECK_KEY    = "auto_update_check"
+    private const val SECURITY_MODE_KEY        = "server_security_mode"
+    private const val AUTH_KEY_KEY             = "server_auth_key"
 
     fun hasSeenWelcome(): Boolean    = prefs.getBoolean(HAS_SEEN_WELCOME_KEY,     false)
     fun markWelcomeSeen()            { prefs.putBoolean(HAS_SEEN_WELCOME_KEY,     true); runCatching { prefs.flush() } }
@@ -137,6 +141,8 @@ object SettingsRepository {
             prefs.putBoolean(START_MINIMIZED_TRAY_KEY, settings.app.startMinimizedToTray)
             prefs.putBoolean(CLOSE_TO_TRAY_KEY, settings.app.closeToTray)
             prefs.putBoolean(AUTO_UPDATE_CHECK_KEY, settings.app.autoUpdateCheckEnabled)
+            prefs.put(SECURITY_MODE_KEY, settings.app.securityMode)
+            prefs.put(AUTH_KEY_KEY, settings.app.authKey)
             prefs.flush()
         } catch (e: BackingStoreException) {}
     }
@@ -177,6 +183,8 @@ object SettingsRepository {
         val startMinimizedToTray = prefs.getBoolean(START_MINIMIZED_TRAY_KEY, false)
         val closeToTray = prefs.getBoolean(CLOSE_TO_TRAY_KEY, true)
         val autoUpdateCheckEnabled = prefs.getBoolean(AUTO_UPDATE_CHECK_KEY, true)
+        val securityMode = prefs.get(SECURITY_MODE_KEY, "OFF")
+        val authKey = prefs.get(AUTH_KEY_KEY, "")
 
         val appSettings = AppSettings(
             theme = theme,
@@ -200,7 +208,9 @@ object SettingsRepository {
             useNativeEngine = useNativeEngine,
             startMinimizedToTray = startMinimizedToTray,
             closeToTray = closeToTray,
-            autoUpdateCheckEnabled = autoUpdateCheckEnabled
+            autoUpdateCheckEnabled = autoUpdateCheckEnabled,
+            securityMode = securityMode,
+            authKey = authKey
         )
         return AllSettings(appSettings, audioSettings, streamingPort, micPort, micRoutingMode)
     }

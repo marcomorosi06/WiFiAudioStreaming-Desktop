@@ -358,6 +358,15 @@ private suspend fun runCliServer(args: CliArgs, settings: AllSettings) {
     }
     viz?.start()
 
+    NetworkHandler_v1.configureSecurity(args.authMode, args.authKey)
+    if (args.authMode == "ASK") {
+        NetworkHandler_v1.onAuthRequest = { peer ->
+            out("  Client $peer wants to connect. Allow? [y/N]", args)
+            val line = runCatching { readLine()?.trim()?.lowercase() }.getOrNull()
+            line == "y" || line == "yes"
+        }
+    }
+
     NetworkHandler_v1.launchServerInstance(
         audioSettings  = audio,
         port           = args.port,
@@ -507,6 +516,16 @@ private suspend fun runCliClient(args: CliArgs, settings: AllSettings) {
         }
     }
     viz?.start()
+
+    NetworkHandler_v1.configureSecurity(args.authMode, args.authKey)
+    if (viz == null && !args.json) {
+        NetworkHandler_v1.onKeyRequest = { wrong ->
+            if (wrong) System.err.println(Strings.get("key_dialog_wrong"))
+            System.err.print(Strings.get("key_dialog_body") + " ")
+            System.err.flush()
+            runCatching { readLine()?.trim() }.getOrNull()?.takeIf { it.isNotBlank() }
+        }
+    }
 
     NetworkHandler_v1.launchClientInstance(
         audioSettings            = settings.audio,

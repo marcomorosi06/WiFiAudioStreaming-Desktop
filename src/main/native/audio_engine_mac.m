@@ -329,7 +329,7 @@ jboolean mac_engine_start(int sample_rate, int channels, int buffer_frames) {
                     SCContentFilter *filter;
                     SCDisplay *display = content.displays.firstObject;
                     if (!display) {
-                        mac_set_error("Nessun display trovato");
+                        mac_set_error("No display found");
                         dispatch_semaphore_signal(g_sema);
                         return;
                     }

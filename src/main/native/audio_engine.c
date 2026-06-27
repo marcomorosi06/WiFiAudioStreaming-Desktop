@@ -878,7 +878,7 @@ static jboolean wasapi_sink_open(const wchar_t *device_hint, int sample_rate, in
 
     g_ws.device = wasapi_sink_find_device(g_ws.enumerator, device_hint);
     if (!g_ws.device) {
-        set_error("Nessun dispositivo render compatibile trovato (cerca 'CABLE Input' o simile).");
+        set_error("No compatible render device found (look for 'CABLE Input' or similar).");
         wasapi_sink_close_internal();
         return JNI_FALSE;
     }
@@ -1403,7 +1403,7 @@ static jboolean linux_vsink_create(int sample_rate, int channels) {
     if (!load_libpulse()) return JNI_FALSE;
 
     if (!pactl_available()) {
-        set_error("'pactl' non trovato. Installa pulseaudio-utils (o pipewire-pulse) per il microfono virtuale.");
+        set_error("'pactl' not found. Install pulseaudio-utils (or pipewire-pulse) for the virtual microphone.");
         return JNI_FALSE;
     }
 
@@ -1411,7 +1411,7 @@ static jboolean linux_vsink_create(int sample_rate, int channels) {
 
     int id = run_pactl_load(g_vsink_name, sample_rate, channels);
     if (id < 0) {
-        set_error("Impossibile creare null-sink PulseAudio/PipeWire (pactl ha restituito un errore).");
+        set_error("Could not create PulseAudio/PipeWire null-sink (pactl returned an error).");
         return JNI_FALSE;
     }
     g_vsink_module_id = id;
@@ -1508,7 +1508,7 @@ Java_AudioEngine_nativeStart(JNIEnv *env, jobject thiz,
 #elif defined(__APPLE__)
     return mac_engine_start((int)sample_rate, (int)channels, (int)buffer_frames);
 #else
-    set_error("Piattaforma non supportata");
+    set_error("Unsupported platform");
     return JNI_FALSE;
 #endif
 }
@@ -1542,7 +1542,7 @@ Java_AudioEngine_nativeRead(JNIEnv *env, jobject thiz,
 #elif defined(__APPLE__)
     result = mac_engine_read((int16_t *)buf, stereo_frames) * 2;
 #else
-    set_error("Piattaforma non supportata");
+    set_error("Unsupported platform");
     result = -1;
 #endif
 
@@ -1630,7 +1630,7 @@ Java_AudioEngine_nativeVirtualSinkCreate(JNIEnv *env, jobject thiz, jint sample_
     return linux_vsink_create((int)sample_rate, (int)channels);
 #else
     (void)sample_rate; (void)channels;
-    set_error("Creazione virtual sink supportata solo su Linux (PulseAudio/PipeWire).");
+    set_error("Virtual sink creation is only supported on Linux (PulseAudio/PipeWire).");
     return JNI_FALSE;
 #endif
 }
@@ -1693,7 +1693,7 @@ Java_AudioEngine_nativeMicSinkOpen(JNIEnv *env, jobject thiz, jstring device_nam
     return wasapi_sink_open(wname[0] ? wname : NULL, (int)sample_rate, (int)channels);
 #else
     (void)env; (void)device_name; (void)sample_rate; (void)channels;
-    set_error("MicSink WASAPI supportato solo su Windows.");
+    set_error("WASAPI MicSink is only supported on Windows.");
     return JNI_FALSE;
 #endif
 }
