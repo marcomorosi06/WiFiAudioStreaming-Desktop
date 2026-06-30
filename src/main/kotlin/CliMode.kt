@@ -358,7 +358,7 @@ private suspend fun runCliServer(args: CliArgs, settings: AllSettings) {
     }
     viz?.start()
 
-    NetworkHandler_v1.configureSecurity(args.authMode, args.authKey)
+    NetworkHandler_v1.configureSecurity(args.authMode, args.authKey, args.encrypt)
     if (args.authMode == "ASK") {
         NetworkHandler_v1.onAuthRequest = { peer ->
             out("  Client $peer wants to connect. Allow? [y/N]", args)
@@ -503,6 +503,7 @@ private suspend fun runCliClient(args: CliArgs, settings: AllSettings) {
     else null
 
     val done = kotlinx.coroutines.CompletableDeferred<Unit>()
+    val connected = kotlinx.coroutines.CompletableDeferred<Unit>()
     var userStopped = false
     var cliExitCode = ExitCode.OK
 
@@ -517,7 +518,8 @@ private suspend fun runCliClient(args: CliArgs, settings: AllSettings) {
     }
     viz?.start()
 
-    NetworkHandler_v1.configureSecurity(args.authMode, args.authKey)
+    NetworkHandler_v1.configureSecurity(args.authMode, args.authKey, args.encrypt)
+    NetworkHandler_v1.clientPresharedKey = args.authKey
     if (viz == null && !args.json) {
         NetworkHandler_v1.onKeyRequest = { wrong ->
             if (wrong) System.err.println(Strings.get("key_dialog_wrong"))
@@ -558,6 +560,7 @@ private suspend fun runCliClient(args: CliArgs, settings: AllSettings) {
             }
             out("  $icon  $msg", args)
         }
+        if (key.contains("connected") && !connected.isCompleted) connected.complete(Unit)
         if (key.contains("error") || key.contains("timeout") || key.contains("disconnect") || key.contains("incompatible")) {
             if (!userStopped) cliExitCode = ExitCode.DISCONNECTED
             done.complete(Unit)
@@ -572,6 +575,8 @@ private suspend fun runCliClient(args: CliArgs, settings: AllSettings) {
     } else {
     val stdinThread = Thread {
         try {
+            while (!connected.isCompleted && !done.isCompleted) Thread.sleep(50)
+            if (done.isCompleted) return@Thread
             val reader = java.io.BufferedReader(java.io.InputStreamReader(System.`in`))
             while (!done.isCompleted) {
                 val line = reader.readLine()?.trim() ?: break
@@ -666,48 +671,89 @@ private suspend fun discoverAndChoose(args: CliArgs): ServerInfo? {
 // Discover mode
 // ─────────────────────────────────────────────────────────────────────────────
 
+private fun discoverMode(info: ServerInfo): String {
+    val protos = info.capabilities?.protocols ?: setOf(StreamingProtocol.WFAS)
+    return when {
+        StreamingProtocol.RTP in protos  -> "RTP"
+        StreamingProtocol.HTTP in protos -> "HTTP"
+        else                             -> if (info.isMulticast) "UDP/M" else "UDP"
+    }
+}
+
+private fun discoverSecurity(info: ServerInfo): String {
+    val caps = info.capabilities
+    val mode = caps?.securityMode?.uppercase()
+    return when {
+        mode == "KEY" && caps?.encrypted == true -> "Encryption"
+        mode == "KEY" || mode == "ASK"           -> "Authentication"
+        else                                     -> "None"
+    }
+}
+
+private fun printDiscoverHeader(args: CliArgs) {
+    out("  " + bold("HOST".padEnd(18)) + " " + bold("IP".padEnd(16)) + " " +
+        bold("MODE".padEnd(6)) + " " + bold("SECURITY"), args)
+}
+
+private fun emitDiscover(args: CliArgs, host: String, info: ServerInfo) {
+    val mode     = discoverMode(info)
+    val security = discoverSecurity(info)
+    if (args.json) {
+        val protocols = info.capabilities?.protocols?.joinToString("+") { it.name } ?: "WFAS"
+        jsonLine(
+            "event"     to "server_found",
+            "hostname"  to host,
+            "ip"        to info.ip,
+            "port"      to info.port,
+            "multicast" to info.isMulticast,
+            "protocols" to protocols,
+            "mode"      to mode,
+            "security"  to security,
+            "auth"      to (info.capabilities?.securityMode ?: "OFF"),
+            "encrypted" to (info.capabilities?.encrypted ?: false)
+        )
+    } else {
+        out("  " + cyan(host.padEnd(18)) + " " + info.ip.padEnd(16) + " " +
+            mode.padEnd(6) + " " + security, args)
+    }
+}
+
 private suspend fun runCliDiscover(args: CliArgs) {
     if (!args.json && !args.quiet) {
         out(bold("  WiFi Audio Streaming") + "  - discover mode", args)
-        out("  ${dim("Scanning... (Ctrl+C to stop)")}", args)
+        out("  ${dim(if (args.watch) "Scanning... (Ctrl+C to stop)" else "Scanning network (5s)...")}", args)
         out("", args)
     }
 
-    val seen = mutableSetOf<String>()
-
-    NetworkHandler_v1.beginDeviceDiscovery { hostname, serverInfo ->
-        if (serverInfo.lastSeen == 0L) {
-            if (args.json) jsonLine("event" to "server_gone", "hostname" to hostname)
-            else if (!args.quiet) out("  ${red("-")}  $hostname  ${dim("(gone)")}", args)
-        } else if (hostname !in seen || args.watch) {
-            seen += hostname
-            val caps = serverInfo.capabilities
-            val protocols = caps?.protocols?.joinToString("+") { it.name } ?: "WFAS"
-            if (args.json) {
-                jsonLine(
-                    "event"     to "server_found",
-                    "hostname"  to hostname,
-                    "ip"        to serverInfo.ip,
-                    "port"      to serverInfo.port,
-                    "multicast" to serverInfo.isMulticast,
-                    "protocols" to protocols
-                )
-            } else {
-                out("  ${green("+")}  ${bold(hostname)}  ${cyan(serverInfo.ip)}:${serverInfo.port}  ${dim(protocols)}", args)
+    if (args.watch) {
+        if (!args.json && !args.quiet) printDiscoverHeader(args)
+        val seen = mutableSetOf<String>()
+        NetworkHandler_v1.beginDeviceDiscovery { hostname, serverInfo ->
+            if (serverInfo.lastSeen == 0L) {
+                seen.remove(hostname)
+                if (args.json) jsonLine("event" to "server_gone", "hostname" to hostname)
+                else if (!args.quiet) out("  " + red("-") + " $hostname ${dim("(gone)")}", args)
+            } else if (hostname !in seen) {
+                seen += hostname
+                emitDiscover(args, hostname, serverInfo)
             }
         }
-    }
-
-    if (!args.watch) {
-        delay(5000)
-        NetworkHandler_v1.endDeviceDiscovery()
-        if (seen.isEmpty()) {
-            if (args.json) jsonLine("event" to "discover_empty")
-            else out("  ${dim("No servers found.")}", args)
-        }
-    } else {
         withContext(Dispatchers.IO) {
             try { while (true) delay(1000) } catch (_: CancellationException) {}
         }
+    } else {
+        val found = LinkedHashMap<String, ServerInfo>()
+        NetworkHandler_v1.beginDeviceDiscovery { hostname, serverInfo ->
+            if (serverInfo.lastSeen == 0L) found.remove(hostname) else found[hostname] = serverInfo
+        }
+        delay(5000)
+        NetworkHandler_v1.endDeviceDiscovery()
+        if (found.isEmpty()) {
+            if (args.json) jsonLine("event" to "discover_empty")
+            else out("  ${dim("No servers found.")}", args)
+            return
+        }
+        if (!args.json && !args.quiet) printDiscoverHeader(args)
+        for ((host, info) in found.entries.sortedBy { it.value.ip }) emitDiscover(args, host, info)
     }
 }

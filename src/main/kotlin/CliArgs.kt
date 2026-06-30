@@ -52,6 +52,7 @@ data class CliArgs(
     val sdp:             Boolean         = false,
     val sdpOut:          String?         = null,
     val controlCmd:      ControlCommand? = null,
+    val configCmd:       ConfigCommand?  = null,
     val networkIface:    String          = "Auto",
     val useNativeEngine: Boolean         = true,
     val viz:             Boolean         = false,
@@ -66,6 +67,7 @@ data class CliArgs(
     val autoCheckUpdate: String?         = null,
     val authMode:        String          = "OFF",
     val authKey:         String          = "",
+    val encrypt:         Boolean         = false,
 ) {
     companion object {
 
@@ -114,6 +116,7 @@ data class CliArgs(
             var sdp             = false
             var sdpOut: String?             = null
             var controlCmd: ControlCommand? = null
+            var configCmd: ConfigCommand?   = null
             var networkIface    = "Auto"
             var useNativeEngine = true
             var viz             = false
@@ -128,6 +131,7 @@ data class CliArgs(
             var autoCheckUpdate: String?    = null
             var authMode        = "OFF"
             var authKey         = ""
+            var encrypt         = false
 
             var i = 0
             while (i < args.size) {
@@ -170,6 +174,41 @@ data class CliArgs(
                             "stop"   -> ControlCommand.Stop
                             "status" -> ControlCommand.Status
                             else -> parseError("Unknown control subcommand '$sub'. Valid: volume, mute, unmute, stop, status")
+                        }
+                    }
+
+                    "config" -> {
+                        modeExplicit = true
+                        val sub = args.getOrNull(i + 1)?.lowercase()
+                            ?: parseError("'config' requires a subcommand: list, get, set, path, edit, reset, export, import")
+                        i++
+                        configCmd = when (sub) {
+                            "list", "ls", "show" -> ConfigCommand.List
+                            "path", "where"      -> ConfigCommand.Path
+                            "reset"              -> ConfigCommand.Reset
+                            "edit", "open"       -> ConfigCommand.Edit
+                            "get" -> {
+                                val key = args.getOrNull(i + 1) ?: parseError("'config get' requires a key")
+                                i++
+                                ConfigCommand.Get(key)
+                            }
+                            "set" -> {
+                                val key   = args.getOrNull(i + 1) ?: parseError("'config set' requires a key and a value")
+                                val value = args.getOrNull(i + 2) ?: parseError("'config set $key' requires a value")
+                                i += 2
+                                ConfigCommand.Set(key, value)
+                            }
+                            "export", "save" -> {
+                                val p = args.getOrNull(i + 1)?.takeIf { !it.startsWith("--") }
+                                if (p != null) i++
+                                ConfigCommand.Export(p)
+                            }
+                            "import", "load" -> {
+                                val p = args.getOrNull(i + 1) ?: parseError("'config import' requires a file path")
+                                i++
+                                ConfigCommand.Import(p)
+                            }
+                            else -> parseError("Unknown config subcommand '$sub'. Valid: list, get, set, path, edit, reset, export, import")
                         }
                     }
 
@@ -269,6 +308,10 @@ data class CliArgs(
                         authKey = v
                         if (authMode == "OFF") authMode = "KEY"
                     }
+                    "--encrypt" -> {
+                        encrypt = true
+                        if (authMode == "OFF") authMode = "KEY"
+                    }
                     "--check-update", "--check-updates" -> checkUpdate = true
                     "--auto-check-update", "--auto-check-updates" -> {
                         val v = nextArg(args, i, "--auto-check-update") ?: parseError("--auto-check-update requires a value: on or off")
@@ -312,6 +355,7 @@ data class CliArgs(
                 sdp             = sdp,
                 sdpOut          = sdpOut,
                 controlCmd      = controlCmd,
+                configCmd       = configCmd,
                 networkIface    = networkIface,
                 useNativeEngine = useNativeEngine,
                 viz             = viz,
@@ -326,10 +370,16 @@ data class CliArgs(
                 autoCheckUpdate = autoCheckUpdate,
                 authMode        = authMode,
                 authKey         = authKey,
+                encrypt         = encrypt,
             )
         }
 
         fun printHelp() {
+            val files = ConfigPaths.describeForHelp()
+            val fileWidth = files.maxOf { it.second.length }
+            val filesBlock = files.joinToString("\n") { (label, path) ->
+                "  ${path.padEnd(fileWidth)}  $label"
+            }
             println("""
 WiFi Audio Streaming ${VERSION} (c) 2026 Marco Morosi - Stream audio over your local network.
 
@@ -362,6 +412,8 @@ SERVER OPTIONS
                       unicast only). 'ask' prompts on the terminal per client.
   --auth-key <key>    Pre-shared key (implies --auth-mode key). The key is never
                       sent on the wire (mutual HMAC challenge-response).
+  --encrypt           Encrypt the audio with ChaCha20-Poly1305 (implies a key;
+                      use with --auth-key). See --protocol for the wire details.
   --sdp               Print stream.sdp to stdout when server starts
   --sdp-out <path>    Write stream.sdp to file     (e.g. /tmp/stream.sdp)
   --legacy-engine     Use the legacy FFmpeg grabber instead of the native C
@@ -397,6 +449,19 @@ RUNTIME CONTROL  (wfas control <command>)
   stop                Stop the running instance
   status              Show current streaming status
 
+CONFIGURATION  (wfas config <command>)
+  Persistent settings live in a single config.json shared by the CLI and the
+  GUI. Changes apply the next time a server/client starts or the GUI opens.
+  list                Show every setting and its current value
+  get <key>           Print one setting (e.g. audio.sampleRate)
+  set <key> <value>   Change one setting and save it
+  path                Print the config.json path for this system
+  edit                Open config.json in your default editor (${'$'}EDITOR)
+  reset               Restore all settings to their defaults
+  export [file]       Write the config to <file> (or stdout if omitted)
+  import <file>       Load a config.json and make it active
+  Add --json to any config command for machine-readable output.
+
 DISCOVER OPTIONS
   --watch             Keep scanning (live update)
 
@@ -425,17 +490,18 @@ EXAMPLES
   wfas --connect 192.168.1.5              # connect to a specific server
   wfas --mode discover --json             # scan and output JSON
   wfas control volume 75                  # set volume on running instance
+  wfas config set audio.sampleRate 44100  # change a setting (GUI + CLI)
+  wfas config list                        # show every setting and its value
+  wfas config path                        # print the config.json path
   wfas --gui --mode server --multicast    # open GUI, start server immediately
   wfas --viz rainbow                      # spectrum with animated rainbow colors
   wfas --viz "#1e88e5"                    # spectrum themed from a hex color
   wfas --protocol                         # print the WFAS v2 protocol reference
 
 FILES
-  ~/.config/wfas/settings.json    settings file (Linux/Mac)
-  %APPDATA%\wfas\settings.json    settings file (Windows)
-  /tmp/wfas-<pid>.port            IPC control port file (Linux/Mac)
-  %TEMP%\wfas-<pid>.port          IPC control port file (Windows)
-  /tmp/stream.sdp                 RTP session descriptor
+$filesBlock
+  Override the settings file with --config <path>, or print it with
+  'wfas config path'.
 
 See 'man wfas' for the full reference manual.
 
@@ -527,8 +593,22 @@ SECURITY  (optional, unicast only)
              server -> HELLO_ACK  or  WFAS_UNAUTHORIZED
   The discovery beacon is NOT trusted (it carries at most secure=1 as a hint); a
   client that requires a key aborts unless the key exchange actually happened, so
-  a spoofed "no security" cannot downgrade it. Authentication decides WHO connects;
-  it does not encrypt the audio (stream encryption is a reserved, optional layer).
+  a spoofed "no security" cannot downgrade it.
+
+ENCRYPTION  (optional, requires a key)
+  Authentication decides WHO connects; encryption protects WHAT is sent. With a
+  pre-shared key the PCM payload is sealed per packet with ChaCha20-Poly1305
+  (RFC 8439); session keys come from HKDF-SHA256 over the handshake nonces
+  (unicast) or a random per-session salt announced in a signed beacon (multicast).
+    packet  [header 10B (AAD)] [counter 8B] [ciphertext] [Poly1305 tag 16B]
+    nonce   per-direction prefix(4B) || counter(8B), flagged ENCRYPTED(0x02)
+  Each packet adds 24B (counter+tag), so the payload cap drops accordingly to stay
+  under the MTU. Receivers run a 1024-wide anti-replay window (verify tag, then
+  advance). Multicast beacon (clear, HMAC'd):
+    WFAS_MCAST_ENC;epoch=N;time=T;salt=HEX;mac=HMAC(K,"WFAS-MCAST:epoch=N;time=T;salt=HEX")
+  epoch is a server-persisted monotonic counter; clients reject epoch <= last seen,
+  defeating whole-session replay without needing a synced clock. Multicast uses one
+  shared group key, so it assumes mutual trust among members (no source signatures).
 
   Releases:
     Desktop  https://github.com/marcomorosi06/WiFiAudioStreaming-Desktop/releases

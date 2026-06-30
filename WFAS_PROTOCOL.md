@@ -84,12 +84,20 @@ UDP multicast, group `239.255.0.1`, port `9091`. The server sends every ~3 s a
 `;`‑separated ASCII string:
 
 ```
-WIFI_AUDIO_STREAMER_DISCOVERY;<hostname>;<mode>;<port>[;protocols=...][;http_port=...][;sr=..;ch=..;bd=..]
+WIFI_AUDIO_STREAMER_DISCOVERY;<hostname>;<mode>;<port>[;protocols=...][;http_port=...][;sr=..;ch=..;bd=..][;auth=...][;enc=...][;mic=...]
 ```
 
 * `<mode>` = `MULTICAST` or `UNICAST`
 * `<port>` = streaming port
+* `auth=` = security-mode hint: `OFF`, `ASK`, or `KEY` (optional)
+* `enc=` = `1` if the server encrypts traffic, else `0` (optional; `enc=1` implies `auth=KEY`)
+* `mic=` = microphone hint, any of `tx` (server includes its mic in the stream) and `rx` (server accepts the client's mic / talk-back), e.g. `mic=tx`, `mic=rx`, `mic=txrx` (optional; omitted when neither applies)
 * A shutdown beacon uses `;BYE;` in place of mode and removes the entry.
+
+All tokens are `key=value` and order-independent; unknown tokens are ignored, so
+`auth=`/`enc=` are backward-compatible additions. `auth=`/`enc=` are **display
+hints only** (used to show a lock/key badge in the device list) and carry no
+security weight — see Section 7.4.
 
 Discovery is intentionally **not** used for version gating: it advertises
 capabilities, while version compatibility is decided at connection time
@@ -285,15 +293,17 @@ cproof = hex( HMAC-SHA256(K, "WFAS-C:" + cnonce_hex + ":" + snonce_hex) )
   and reflection.
 * Verifying `sproof` lets the **client authenticate the server** — a rogue server
   that does not hold `K` cannot produce it, so it cannot be impersonated.
-* This is authentication only: it decides **who** connects. It does **not** encrypt
-  the audio (see Section 7.5).
+* This is authentication only: it decides **who** connects. To also encrypt the
+  audio, see Section 8.
 
 ### 7.4 The discovery beacon is not trusted
 
 Discovery (Section 3) is unauthenticated multicast that anyone can spoof, so **no
-security decision may depend on it**. The beacon carries at most a generic
-`secure=1` hint (so the client can show a lock icon); it never advertises which
-mode is in use.
+security decision may depend on it**. The beacon may carry advisory `auth=`
+(`OFF`/`ASK`/`KEY`) and `enc=` (`0`/`1`) hints so the client can show a lock/key
+badge in the device list. These are **display-only**: the client MUST NOT use
+them to decide whether to require a key or to expect encryption — that is always
+settled by the handshake.
 
 Protection against a **downgrade attack** (a spoofed beacon or rogue server
 claiming "no security") is enforced **client-side**: if the user configured the
@@ -302,13 +312,94 @@ handshake actually performed the key exchange — even if the server replied
 `HELLO_ACK` directly. Pin the expectation per server (trust-on-first-use): once a
 server is known to require a key, a later claim of "none" is ignored.
 
-### 7.5 Encryption (reserved — optional future layer)
+## 8. Encryption
 
-> **Not yet implemented — reserved.** Authentication (7.2–7.3) controls who
-> connects but leaves the PCM payload in clear, so on a LAN the audio is still
-> sniffable. A future **optional** layer may encrypt the payload: a session key
-> derived from a shared password via a KDF (e.g. PBKDF2/Argon2) and a symmetric
-> AEAD cipher (e.g. ChaCha20-Poly1305) — no asymmetric crypto required. It will be
-> negotiated in the handshake and flagged per packet; **minimal/embedded peers may
-> skip it** and remain conformant for the unencrypted profile. The wire details
-> are intentionally left unspecified here until the layer is designed.
+Authentication (Section 7) controls *who* connects; encryption protects *what* is
+sent. It is an **optional** layer, negotiated in the handshake and flagged per
+packet, so unencrypted peers remain conformant. Encryption requires a pre-shared
+key (Key mode): it is the shared secret all key material is derived from — there
+is no asymmetric/PKI exchange.
+
+### 8.1 Cipher and key schedule
+
+The payload is sealed with **ChaCha20-Poly1305** (RFC 8439), chosen for constant-
+time software performance on devices without AES acceleration (e.g. Raspberry Pi).
+Session keys come from **HKDF-SHA256** (RFC 5869):
+
+- **Unicast.** After the Section 7 handshake both ends share the key `K` and the
+  two nonces `cnonce`,`snonce`. They derive, with `salt = cnonce‖snonce` (ASCII)
+  and `ikm = K`:
+  - `key_c2s = HKDF(salt, K, "WFAS c2s key", 32)`, `prefix_c2s = HKDF(..., "WFAS c2s iv", 4)`
+  - `key_s2c = HKDF(salt, K, "WFAS s2c key", 32)`, `prefix_s2c = HKDF(..., "WFAS s2c iv", 4)`
+
+  Separate keys per direction; a fresh per-session key because the nonces are fresh.
+- **Multicast.** No handshake exists, so the key derives from `K` and a random
+  per-session `salt` announced in the beacon (8.4): `key = HKDF(salt, K, "WFAS mcast key", 32)`,
+  `prefix = HKDF(salt, K, "WFAS mcast iv", 4)`.
+
+### 8.2 Encrypted packet format
+
+```
+[ header 10B ]   magic, version, flags|ENCRYPTED(0x02), seq(BE16), samplePos(BE32)
+[ counter 8B ]   monotonic per-packet counter, big-endian (the nonce low bytes)
+[ ciphertext ]   ChaCha20-Poly1305(payload)
+[ tag 16B ]      Poly1305 authentication tag
+```
+
+- The 10-byte header travels in clear and is bound as **associated data**, so
+  `seq`/`samplePos`/flags are authenticated though readable.
+- `nonce(12B) = prefix(4B) ‖ counter(8B big-endian)`. The counter is transmitted
+  so the receiver can reconstruct the nonce despite loss/reorder. An 8-byte
+  counter never overflows in practice, so no volume-based re-keying is needed.
+- A silence frame is sent with an empty payload (counter + tag only), keeping it
+  authenticated.
+
+### 8.3 Overhead, MTU and anti-replay
+
+- Overhead is **24 bytes** per packet (8 counter + 16 tag). When encryption is on,
+  the sender lowers its payload cap by 24 so the encrypted datagram still fits the
+  MTU and avoids IP fragmentation (which badly degrades mobile networks).
+- AEAD authenticates each packet but not its **freshness**, so a receiver MUST run
+  an **anti-replay sliding window** (a bitmask sized at or above the jitter-buffer
+  depth in packets; the reference uses 1024). Order of operations: cheap pre-check
+  (drop if the counter is too old or already seen) → verify the tag → update the
+  window **only after** authentication succeeds. The window resets on a new session
+  (new handshake, or new multicast salt).
+
+### 8.4 Multicast beacon
+
+Because multicast has no back-channel, the server announces the session key
+material in a periodic clear beacon (≈1/s, more frequent at start to shorten join):
+
+```
+WFAS_MCAST_ENC;epoch=<n>;time=<unix>;salt=<hex>;mac=<hex>
+mac = HMAC-SHA256(K, "WFAS-MCAST:epoch=<n>;time=<unix>;salt=<hex>")
+```
+
+The salt is public (the key needs `K` too); the **MAC binds epoch/time/salt** so a
+party without `K` cannot inject a fake salt. A joining receiver waits for one valid
+beacon, derives the key and starts decrypting. `epoch` is a server-persisted
+**monotonic counter** (survives reboot, needs no clock): clients reject any beacon
+with `epoch ≤` the highest they have accepted — this defeats replay of a whole
+recorded session even on devices without NTP. `time` is a best-effort Unix
+timestamp clients may additionally reject when stale.
+
+### 8.5 Negotiation and anti-downgrade
+
+Encryption is negotiated inside the authenticated handshake and the negotiated
+flag is bound into the proof transcript, so a man-in-the-middle cannot strip it. A
+client that requires encryption **aborts** if the server does not confirm it.
+
+### 8.6 Threat model (multicast, symmetric-only)
+
+With a shared group key and no signatures, any group member can both decrypt and
+encrypt. Consequences, accepted by design:
+
+- **No source non-repudiation.** A malicious group member can inject audio that
+  appears to come from the server. The pre-shared key is the trust boundary:
+  multicast encryption assumes mutual trust among all participants. The only true
+  fix is per-server asymmetric signatures (e.g. Ed25519), deliberately out of
+  scope here.
+- **Ghost replay** of an entire past session is mitigated by the monotonic `epoch`
+  (8.4); a brand-new client with no history and the real server offline may accept
+  a replayed session once — an inherent limit of multicast without a back-channel.

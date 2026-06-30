@@ -53,7 +53,7 @@ This application allows you to send your PC's audio to any device on the same lo
   The app lives in your system tray. Configure it to start minimized and close to tray so it runs silently in the background like AirPlay or Chromecast.
 
 - **Automatic & Manual Discovery**
-  Clients automatically find available servers on the network via multicast beacon. If your router blocks it, you can manually enter the IP address.
+  Clients automatically find available servers on the network via multicast beacon, and the device list badges each server as Multicast/Unicast and whether it is encrypted or requires a key. If your router blocks it, you can manually enter the IP address.
 
 - **Unicast & Multicast Support**
   - **Unicast** → direct streaming to a single device
@@ -64,6 +64,9 @@ This application allows you to send your PC's audio to any device on the same lo
   - **RTP** (compatible with any RTP-capable receiver)
   - **HTTP/AAC** (Safari, iOS)
   - **HTTP/Opus WebM** (Chrome, Firefox, any browser)
+
+- **Security & Encryption**
+  Optionally gate who can connect (approve each device, or require a pre-shared key with mutual HMAC-SHA256 challenge-response) and encrypt the audio end-to-end with **ChaCha20-Poly1305** (per-packet AEAD, anti-replay, keys derived via HKDF). Works for both unicast and multicast; no PKI required. See [`WFAS_PROTOCOL.md`](WFAS_PROTOCOL.md) §7–8.
 
 - **Detailed Audio Configuration**
   Customize sample rate, bit depth, channels, and buffer size.

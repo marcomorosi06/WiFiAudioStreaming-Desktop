@@ -326,7 +326,9 @@ fun AppContent(
                             securityMode = appSettings.securityMode,
                             authKey = appSettings.authKey,
                             onSecurityModeChange = { onAppSettingsChange(appSettings.copy(securityMode = it)) },
-                            onAuthKeyChange = { onAppSettingsChange(appSettings.copy(authKey = it)) }
+                            onAuthKeyChange = { onAppSettingsChange(appSettings.copy(authKey = it)) },
+                            encryptionEnabled = appSettings.encryptionEnabled,
+                            onEncryptionChange = { onAppSettingsChange(appSettings.copy(encryptionEnabled = it)) }
                         )
                     }
                 }
@@ -1461,7 +1463,9 @@ fun ServerConfigCard(
     securityMode: String = "OFF",
     authKey: String = "",
     onSecurityModeChange: (String) -> Unit = {},
-    onAuthKeyChange: (String) -> Unit = {}
+    onAuthKeyChange: (String) -> Unit = {},
+    encryptionEnabled: Boolean = false,
+    onEncryptionChange: (Boolean) -> Unit = {}
 ) {
     ElevatedCard(modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(24.dp)) {
         Column(Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
@@ -1622,7 +1626,11 @@ fun ServerConfigCard(
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
                     }
-                    Switch(checked = false, onCheckedChange = null, enabled = false)
+                    Switch(
+                        checked = encryptionEnabled && mode == "KEY",
+                        onCheckedChange = onEncryptionChange,
+                        enabled = mode == "KEY"
+                    )
                 }
             }
         }
@@ -2117,6 +2125,7 @@ fun DeviceItem(
                         }
                     }
                 }
+                DeviceSecurityRow(caps)
             }
             IconButton(onClick = onStarClick) {
                 Icon(
@@ -2127,6 +2136,36 @@ fun DeviceItem(
             }
             Icon(Icons.AutoMirrored.Filled.ArrowForward, contentDescription = stringResource("connect"))
         }
+    }
+}
+
+@Composable
+fun DeviceSecurityRow(caps: ServerCapabilities?) {
+    if (caps == null) return
+    val mode = caps.securityMode?.uppercase()
+    val hasSec = caps.encrypted || mode == "KEY" || mode == "ASK"
+    if (!hasSec && !caps.serverSendsMic && !caps.serverWantsMic) return
+    Spacer(Modifier.height(6.dp))
+    Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+        when {
+            caps.encrypted -> DeviceBadge(Icons.Filled.Lock, stringResource("sec_encrypted"), true)
+            mode == "KEY"  -> DeviceBadge(Icons.Outlined.Key, stringResource("sec_key"), true)
+            mode == "ASK"  -> DeviceBadge(Icons.Outlined.Security, stringResource("sec_ask"), true)
+        }
+        if (caps.serverSendsMic) DeviceBadge(Icons.Filled.Mic, stringResource("mic_sends"), false)
+        if (caps.serverWantsMic) DeviceBadge(Icons.Filled.Hearing, stringResource("mic_wants"), false)
+    }
+}
+
+@Composable
+private fun DeviceBadge(icon: ImageVector, desc: String, accent: Boolean) {
+    val bg = if (accent) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.secondaryContainer
+    val fg = if (accent) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSecondaryContainer
+    Box(
+        modifier = Modifier.size(26.dp).clip(CircleShape).background(bg),
+        contentAlignment = Alignment.Center
+    ) {
+        Icon(icon, contentDescription = desc, tint = fg, modifier = Modifier.size(15.dp))
     }
 }
 

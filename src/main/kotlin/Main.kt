@@ -29,6 +29,7 @@ import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Minimize
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Warning
+import androidx.compose.material.icons.outlined.Favorite
 import androidx.compose.material.icons.outlined.Update
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -208,7 +209,11 @@ enum class StreamingProtocol { WFAS, RTP, HTTP }
 data class ServerCapabilities(
     val protocols: Set<StreamingProtocol>,
     val httpPort: Int?,
-    val safariMode: Boolean = false
+    val safariMode: Boolean = false,
+    val securityMode: String? = null,
+    val encrypted: Boolean = false,
+    val serverSendsMic: Boolean = false,
+    val serverWantsMic: Boolean = false
 )
 
 /**
@@ -437,7 +442,18 @@ object NetworkHandler_v1 {
 
     @Volatile var securityMode: String = "OFF"
     @Volatile var authKey: String = ""
-    fun configureSecurity(mode: String, key: String) { securityMode = mode; authKey = key }
+    @Volatile var encryptionEnabled: Boolean = false
+    fun configureSecurity(mode: String, key: String, encrypt: Boolean = false) {
+        securityMode = mode; authKey = key; encryptionEnabled = encrypt
+    }
+    // Pre-shared key used only when acting as a CLIENT (e.g. CLI --auth-key). The
+    // GUI client leaves this empty: it gets the key from the on-connect dialog.
+    @Volatile var clientPresharedKey: String = ""
+    // Mic-stream session keys (separate long-lived jobs): server decrypts incoming
+    // mic with micRecvDir; client encrypts outgoing mic with micSendDir.
+    @Volatile var micRecvDir: WfasCrypto.Dir? = null
+    @Volatile var micRecvWin: WfasCrypto.ReplayWindow = WfasCrypto.ReplayWindow()
+    @Volatile var micSendDir: WfasCrypto.Dir? = null
     var onAuthRequest: ((peer: String) -> Boolean)? = null
     var onKeyRequest: (suspend (wrong: Boolean) -> String?)? = null
 
@@ -546,6 +562,16 @@ object NetworkHandler_v1 {
     private var micReceiverJob:  Job? = null
     private var localMicMixJob:  Job? = null
     private var httpServerJob:   Job? = null
+    private var donationTimerJob: Job? = null
+
+    private fun startDonationTimer() {
+        donationTimerJob?.cancel()
+        donationTimerJob = scope.launch {
+            delay(3 * 60 * 1000L)
+            SettingsRepository.setDonationQualified(true)
+        }
+    }
+    private fun cancelDonationTimer() { donationTimerJob?.cancel(); donationTimerJob = null }
     private var rtpJob:          Job? = null
 
     private val lifecycleMutex = Mutex()
@@ -753,6 +779,7 @@ object NetworkHandler_v1 {
                 val packet = DatagramPacket(buffer, buffer.size)
                 while (isActive) {
                     try {
+                        packet.length = buffer.size
                         socket.receive(packet)
                         val remoteIp = packet.address.hostAddress
                         val message  = String(packet.data, 0, packet.length).trim()
@@ -782,7 +809,16 @@ object NetworkHandler_v1 {
                             }.toSet().ifEmpty { setOf(StreamingProtocol.WFAS) }
                             val httpPort = parts.firstOrNull { it.startsWith("http_port=") }
                                 ?.removePrefix("http_port=")?.toIntOrNull()
-                            ServerCapabilities(protocols, httpPort)
+                            val authMode = parts.firstOrNull { it.startsWith("auth=") }
+                                ?.removePrefix("auth=")?.uppercase()
+                            val encrypted = parts.firstOrNull { it.startsWith("enc=") }
+                                ?.removePrefix("enc=") == "1"
+                            val micTok = parts.firstOrNull { it.startsWith("mic=") }?.removePrefix("mic=")
+                            ServerCapabilities(
+                                protocols, httpPort, securityMode = authMode, encrypted = encrypted,
+                                serverSendsMic = micTok?.contains("tx") == true,
+                                serverWantsMic = micTok?.contains("rx") == true
+                            )
                         } else {
                             ServerCapabilities(setOf(StreamingProtocol.WFAS), null)
                         }
@@ -792,6 +828,7 @@ object NetworkHandler_v1 {
                         val discoveredAudio = if (discoveredSr != null && discoveredCh != null && discoveredBd != null)
                             AudioSettings_V1(discoveredSr, discoveredBd, discoveredCh, 6400)
                         else null
+                        AppDebug.log("[DISCOVERY] caps auth=${capabilities.securityMode} enc=${capabilities.encrypted} micTx=${capabilities.serverSendsMic} micRx=${capabilities.serverWantsMic}")
                         onDeviceFound(hostname, ServerInfo(remoteIp, isMulticast, port, capabilities, System.currentTimeMillis(), discoveredAudio))
                     } catch (_: java.net.SocketTimeoutException) { continue }
                 }
@@ -814,12 +851,17 @@ object NetworkHandler_v1 {
             val protocolsStr = capabilities.protocols.joinToString(",") { it.name }
             val httpPortStr  = capabilities.httpPort?.let { ";http_port=$it" } ?: ""
             val audioStr     = if (audioSettings != null) ";sr=${audioSettings.sampleRate.toInt()};ch=${audioSettings.channels};bd=${audioSettings.bitDepth}" else ""
-            val message      = "$DISCOVERY_MESSAGE;$hostname;$mode;$port;protocols=$protocolsStr$httpPortStr$audioStr"
+            val micCode      = "${if (capabilities.serverSendsMic) "tx" else ""}${if (capabilities.serverWantsMic) "rx" else ""}"
+            val micStr       = if (micCode.isNotEmpty()) ";mic=$micCode" else ""
+            val staticPrefix = "$DISCOVERY_MESSAGE;$hostname;$mode;$port;protocols=$protocolsStr$httpPortStr$audioStr"
             val groupAddress = InetAddress.getByName(MULTICAST_GROUP_IP)
             MulticastSocket().use { socket ->
                 socket.timeToLive = 4
                 getActiveNetworkInterface()?.let { socket.networkInterface = it }
                 while (isActive) {
+                    val encOn   = encryptionEnabled && securityMode.equals("KEY", ignoreCase = true)
+                    val secStr  = ";auth=$securityMode;enc=${if (encOn) 1 else 0}"
+                    val message = "$staticPrefix$secStr$micStr"
                     runCatching {
                         val bytes = message.toByteArray()
                         socket.send(DatagramPacket(bytes, bytes.size, groupAddress, DISCOVERY_PORT))
@@ -997,11 +1039,25 @@ object NetworkHandler_v1 {
                 var totalBytes   = 0L
                 var micVersionChecked = false
                 var lastPayloadShorts = 0
+                var micEncSeen = false
 
                 while (isActive) {
                     try {
                         packet.setData(buf, 0, buf.size)
                         socket.receive(packet)
+                        val rawLen = packet.length
+                        if (rawLen >= AUDIO_HEADER_SIZE && buf[0] == AUDIO_MAGIC_0 && buf[1] == AUDIO_MAGIC_1) {
+                            if ((buf[3].toInt() and WfasCrypto.FLAG_ENCRYPTED) != 0) {
+                                val md = micRecvDir ?: continue
+                                val r = WfasCrypto.decryptPacket(md, micRecvWin, buf, rawLen)
+                                if (r !is WfasCrypto.Decrypted.Ok) continue
+                                micEncSeen = true
+                                System.arraycopy(r.pcm, 0, buf, AUDIO_HEADER_SIZE, r.pcm.size)
+                                packet.setData(buf, 0, AUDIO_HEADER_SIZE + r.pcm.size)
+                            } else if (micEncSeen) {
+                                continue
+                            }
+                        }
                         val len = packet.length
                         if (len <= 0) continue
 
@@ -1304,17 +1360,29 @@ object NetworkHandler_v1 {
             val dest = if (serverInfo.isMulticast) InetAddress.getByName(MULTICAST_GROUP_IP)
             else InetAddress.getByName(serverInfo.ip)
             MicStats.begin(MicStats.Dir.SENDING, "${serverInfo.ip}:$micPort")
-            val chunkBytes = audioSettings.maxPayloadBytes.coerceIn(256, 1400 - AUDIO_HEADER_SIZE)
+            val chunkBytes = audioSettings.maxPayloadBytes.coerceIn(256, 1400 - AUDIO_HEADER_SIZE - WfasCrypto.AEAD_OVERHEAD)
             val buf = ByteArray(audioSettings.bufferSize)
             val packetBuffer = ByteArray(AUDIO_HEADER_SIZE + chunkBytes)
             var seq = 0
             var lastMutedSent = false
+            fun sendMicPacket(silence: Boolean, src: ByteArray?, off: Int, len: Int) {
+                val md = micSendDir
+                if (md != null) {
+                    val payload = if (!silence && src != null && len > 0) src.copyOfRange(off, off + len) else ByteArray(0)
+                    val enc = WfasCrypto.encryptPacket(md, seq, 0, silence, payload)
+                    runCatching { socket!!.send(DatagramPacket(enc, enc.size, dest, micPort)) }
+                } else {
+                    writeMicHeader(packetBuffer, seq, silence)
+                    val plen = if (silence) AUDIO_HEADER_SIZE else AUDIO_HEADER_SIZE + len
+                    if (!silence && src != null && len > 0) System.arraycopy(src, off, packetBuffer, AUDIO_HEADER_SIZE, len)
+                    runCatching { socket!!.send(DatagramPacket(packetBuffer, plen, dest, micPort)) }
+                }
+                seq = (seq + 1) and 0xFFFF
+            }
             while (isActive) {
                 if (isMicMuted.value) {
                     if (!lastMutedSent) {
-                        writeMicHeader(packetBuffer, seq, silence = true)
-                        seq = (seq + 1) and 0xFFFF
-                        runCatching { socket!!.send(DatagramPacket(packetBuffer, AUDIO_HEADER_SIZE, dest, micPort)) }
+                        sendMicPacket(true, null, 0, 0)
                         MicStats.addSilence(AUDIO_HEADER_SIZE)
                         lastMutedSent = true
                     }
@@ -1330,10 +1398,7 @@ object NetworkHandler_v1 {
                         var chunk = if (remaining > chunkBytes) chunkBytes else remaining
                         chunk -= chunk % 2
                         if (chunk <= 0) break
-                        writeMicHeader(packetBuffer, seq, silence = false)
-                        seq = (seq + 1) and 0xFFFF
-                        System.arraycopy(buf, offset, packetBuffer, AUDIO_HEADER_SIZE, chunk)
-                        runCatching { socket!!.send(DatagramPacket(packetBuffer, AUDIO_HEADER_SIZE + chunk, dest, micPort)) }
+                        sendMicPacket(false, buf, offset, chunk)
                         MicStats.addAudio(AUDIO_HEADER_SIZE + chunk)
                         offset += chunk
                     }
@@ -2166,6 +2231,8 @@ object NetworkHandler_v1 {
         onAudioFrame: ((ShortArray) -> Unit)? = null,
         onStatusUpdate: (key: String, args: Array<out Any>) -> Unit
     ) {
+        val annCaps = capabilities.copy(serverWantsMic = micRoutingMode != MicRoutingMode.OFF)
+        startDonationTimer()
         if (micRoutingMode != MicRoutingMode.OFF) {
             micReceiverJob = scope.launchMicReceiver(
                 audioSettings, isMulticast, micRoutingMode, micOutputMixerInfo, micPort, micMixInputInfo, onStatusUpdate
@@ -2195,7 +2262,7 @@ object NetworkHandler_v1 {
             rtpJob = scope.launchRtpSidecar(audioSettings, rtpPort, isMulticast)
         }
 
-        startAnnouncingPresence(isMulticast, port, capabilities, audioSettings)
+        startAnnouncingPresence(isMulticast, port, annCaps, audioSettings)
 
         streamingJob = scope.launch(Dispatchers.IO) {
             try {
@@ -2217,9 +2284,23 @@ object NetworkHandler_v1 {
                     onStatusUpdate("Streaming Multicast on %s:%d...", arrayOf(MULTICAST_GROUP_IP, port))
 
                     val nCh               = audioSettings.channels
+                    val mcEncrypting = encryptionEnabled && SecurityMode.fromStringSafe(securityMode) == SecurityMode.KEY
+                    val mcDir: WfasCrypto.Dir?
+                    val mcBeaconBytes: ByteArray?
+                    if (mcEncrypting) {
+                        val salt = ByteArray(WfasCrypto.SALT_BYTES).also { java.security.SecureRandom().nextBytes(it) }
+                        mcDir = WfasCrypto.deriveMulticast(authKey, salt)
+                        val beacon = WfasCrypto.buildMcastBeacon(authKey, SettingsRepository.nextMcastEpoch(), System.currentTimeMillis() / 1000, salt)
+                        mcBeaconBytes = beacon.toByteArray(Charsets.US_ASCII)
+                    } else { mcDir = null; mcBeaconBytes = null }
                     val safeMtuSize        = 1400
                     var maxShortsPerPacket = (audioSettings.maxPayloadBytes.coerceIn(256, safeMtuSize - AUDIO_HEADER_SIZE)) / 2
                     maxShortsPerPacket    -= (maxShortsPerPacket % nCh)
+                    if (mcDir != null) {
+                        maxShortsPerPacket -= (WfasCrypto.AEAD_OVERHEAD + 1) / 2
+                        maxShortsPerPacket -= (maxShortsPerPacket % nCh)
+                        if (maxShortsPerPacket < nCh) maxShortsPerPacket = nCh
+                    }
                     val exactPayloadBytes  = AUDIO_HEADER_SIZE + (maxShortsPerPacket * 2)
                     val chunkArray         = ShortArray(maxShortsPerPacket)
                     val byteBuffer         = java.nio.ByteBuffer.allocate(
@@ -2229,6 +2310,14 @@ object NetworkHandler_v1 {
                     audioSeqNum    = 0
                     audioSamplePos = 0L
                     var legacySeq  = 0
+                    fun frameForSend(buf: ByteArray, len: Int): ByteArray {
+                        val dir = mcDir ?: return if (len == buf.size) buf else buf.copyOf(len)
+                        val silence = (buf[3].toInt() and 0x01) != 0
+                        val seq = ((buf[4].toInt() and 0xFF) shl 8) or (buf[5].toInt() and 0xFF)
+                        val pos = ((buf[6].toLong() and 0xFF) shl 24) or ((buf[7].toLong() and 0xFF) shl 16) or
+                                  ((buf[8].toLong() and 0xFF) shl 8) or (buf[9].toLong() and 0xFF)
+                        return WfasCrypto.encryptPacket(dir, seq, pos, silence, buf.copyOfRange(AUDIO_HEADER_SIZE, len))
+                    }
 
                     try {
                         MulticastSocket(null as java.net.SocketAddress?).use { socket ->
@@ -2238,8 +2327,13 @@ object NetworkHandler_v1 {
                             socket.loopbackMode = true
                             getActiveNetworkInterface()?.let { socket.networkInterface = it }
                             val group = InetAddress.getByName(MULTICAST_GROUP_IP)
+                            var lastBeacon = 0L
 
                             while (isActive) {
+                                if (mcBeaconBytes != null && System.currentTimeMillis() - lastBeacon >= 400L) {
+                                    runCatching { socket.send(DatagramPacket(mcBeaconBytes, mcBeaconBytes.size, group, port)) }
+                                    lastBeacon = System.currentTimeMillis()
+                                }
                                 if (useNativeEngine) {
                                     val engine  = serverEngine ?: break
                                     val samples = engine.readFrame() ?: break
@@ -2248,7 +2342,8 @@ object NetworkHandler_v1 {
 
                                     processEngineFrame(samples, chunkArray, byteBuffer, maxShortsPerPacket, nCh) { bytesToSend ->
                                         byteBuffer.array().copyInto(packetArray, 0, 0, bytesToSend)
-                                        runCatching { socket.send(DatagramPacket(packetArray, bytesToSend, group, port)) }
+                                        val ob = frameForSend(packetArray, bytesToSend)
+                                        runCatching { socket.send(DatagramPacket(ob, ob.size, group, port)) }
                                         WfasStats.add(if ((packetArray[3].toInt() and 0x01) != 0) WfasStats.Cat.SILENCE else WfasStats.Cat.AUDIO, bytesToSend)
                                         if (aacPcmQueue != null || opusPcmQueue != null || rtpPcmQueue != null)
                                             distributeToSidecars(byteBuffer.array().copyOfRange(AUDIO_HEADER_SIZE, bytesToSend))
@@ -2272,7 +2367,8 @@ object NetworkHandler_v1 {
                                             byteBuffer.array().copyInto(packetArray, AUDIO_HEADER_SIZE, 0, bytesToSend)
                                             legacySeq = (legacySeq + 1) and 0xFFFF
                                             val totalBytes = AUDIO_HEADER_SIZE + bytesToSend
-                                            runCatching { socket.send(DatagramPacket(packetArray, totalBytes, group, port)) }
+                                            val ob = frameForSend(packetArray, totalBytes)
+                                            runCatching { socket.send(DatagramPacket(ob, ob.size, group, port)) }
                                             WfasStats.add(WfasStats.Cat.AUDIO, totalBytes)
                                             if (aacPcmQueue != null || opusPcmQueue != null || rtpPcmQueue != null)
                                                 distributeToSidecars(byteBuffer.array().copyOf(bytesToSend))
@@ -2311,7 +2407,7 @@ object NetworkHandler_v1 {
                         var pendCnonce = ""
                         var pendSnonce = ""
                         while (isActive) {
-                            startAnnouncingPresence(isMulticast = false, port = port, capabilities = capabilities, audioSettings = audioSettings)
+                            startAnnouncingPresence(isMulticast = false, port = port, capabilities = annCaps, audioSettings = audioSettings)
                             onStatusUpdate("Waiting for Unicast Client on Port %d...", arrayOf(port))
 
                             val clientDatagram = socket.receive()
@@ -2365,6 +2461,23 @@ object NetworkHandler_v1 {
                                 SecurityMode.OFF -> { }
                             }
 
+                            val encrypting = encryptionEnabled &&
+                                SecurityMode.fromStringSafe(securityMode) == SecurityMode.KEY
+                            val sessionKeys = if (encrypting)
+                                WfasCrypto.deriveUnicast(authKey, pendCnonce, pendSnonce) else null
+                            val sendDir: WfasCrypto.Dir? = sessionKeys?.second
+                            micRecvDir = sessionKeys?.first
+                            if (encrypting) micRecvWin = WfasCrypto.ReplayWindow()
+                            fun frameForSend(buf: ByteArray, len: Int): ByteArray {
+                                val dir = sendDir ?: return if (len == buf.size) buf else buf.copyOf(len)
+                                val silence = (buf[3].toInt() and 0x01) != 0
+                                val seq = ((buf[4].toInt() and 0xFF) shl 8) or (buf[5].toInt() and 0xFF)
+                                val pos = ((buf[6].toLong() and 0xFF) shl 24) or ((buf[7].toLong() and 0xFF) shl 16) or
+                                          ((buf[8].toLong() and 0xFF) shl 8) or (buf[9].toLong() and 0xFF)
+                                val pcm = buf.copyOfRange(AUDIO_HEADER_SIZE, len)
+                                return WfasCrypto.encryptPacket(dir, seq, pos, silence, pcm)
+                            }
+
                             onStatusUpdate("Client Connected: %s", arrayOf(clientAddress.toString()))
                             stopAnnouncingPresence()
 
@@ -2382,8 +2495,9 @@ object NetworkHandler_v1 {
                                 }
                             }
 
-                            socket.send(Datagram(buildPacket { writeText(helloAckMessage()) }, clientAddress))
-                            WfasStats.add(WfasStats.Cat.HELLO, helloAckMessage().length)
+                            val ackText = helloAckMessage() + if (encrypting) ";enc=1" else ""
+                            socket.send(Datagram(buildPacket { writeText(ackText) }, clientAddress))
+                            WfasStats.add(WfasStats.Cat.HELLO, ackText.length)
 
                             val clientAlive = java.util.concurrent.atomic.AtomicBoolean(true)
 
@@ -2428,6 +2542,11 @@ object NetworkHandler_v1 {
                                     val safeMtuSize = 1400
                                     var maxShortsPerPacket = (audioSettings.maxPayloadBytes.coerceIn(256, safeMtuSize - AUDIO_HEADER_SIZE)) / 2
                                     maxShortsPerPacket -= (maxShortsPerPacket % audioSettings.channels)
+                                    if (sendDir != null) {
+                                        maxShortsPerPacket -= (WfasCrypto.AEAD_OVERHEAD + 1) / 2
+                                        maxShortsPerPacket -= (maxShortsPerPacket % audioSettings.channels)
+                                        if (maxShortsPerPacket < audioSettings.channels) maxShortsPerPacket = audioSettings.channels
+                                    }
                                     val exactPayloadBytes = AUDIO_HEADER_SIZE + (maxShortsPerPacket * 2)
                                     val chunkArray = ShortArray(maxShortsPerPacket)
                                     val byteBuffer = java.nio.ByteBuffer.allocate(exactPayloadBytes)
@@ -2444,7 +2563,8 @@ object NetworkHandler_v1 {
                                         onAudioFrame?.invoke(samples)
                                         processEngineFrame(samples, chunkArray, byteBuffer, maxShortsPerPacket, audioSettings.channels) { bytesToSend ->
                                             byteBuffer.array().copyInto(packetArray, 0, 0, bytesToSend)
-                                            val packet = buildPacket { writeFully(packetArray, 0, bytesToSend) }
+                                            val outBytes = frameForSend(packetArray, bytesToSend)
+                                            val packet = buildPacket { writeFully(outBytes, 0, outBytes.size) }
                                             try {
                                                 socket.send(Datagram(packet, clientAddress))
                                                 WfasStats.add(if ((packetArray[3].toInt() and 0x01) != 0) WfasStats.Cat.SILENCE else WfasStats.Cat.AUDIO, bytesToSend)
@@ -2460,6 +2580,11 @@ object NetworkHandler_v1 {
                                     val safeMtuSize = 1400
                                     var maxShortsPerPacket = (audioSettings.maxPayloadBytes.coerceIn(256, safeMtuSize - AUDIO_HEADER_SIZE)) / 2
                                     maxShortsPerPacket -= (maxShortsPerPacket % audioSettings.channels)
+                                    if (sendDir != null) {
+                                        maxShortsPerPacket -= (WfasCrypto.AEAD_OVERHEAD + 1) / 2
+                                        maxShortsPerPacket -= (maxShortsPerPacket % audioSettings.channels)
+                                        if (maxShortsPerPacket < audioSettings.channels) maxShortsPerPacket = audioSettings.channels
+                                    }
                                     val exactPayloadBytes  = AUDIO_HEADER_SIZE + (maxShortsPerPacket * 2)
                                     val chunkArray         = ShortArray(maxShortsPerPacket)
                                     val byteBuffer         = java.nio.ByteBuffer.allocate(maxShortsPerPacket * 2)
@@ -2487,7 +2612,8 @@ object NetworkHandler_v1 {
                                                 byteBuffer.array().copyInto(packetArray, AUDIO_HEADER_SIZE, 0, bytesToSend)
                                                 legacySeq = (legacySeq + 1) and 0xFFFF
                                                 val totalBytes = AUDIO_HEADER_SIZE + bytesToSend
-                                                val packet = buildPacket { writeFully(packetArray, 0, totalBytes) }
+                                                val outBytes = frameForSend(packetArray, totalBytes)
+                                                val packet = buildPacket { writeFully(outBytes, 0, outBytes.size) }
                                                 try {
                                                     socket.send(Datagram(packet, clientAddress))
                                                     WfasStats.add(WfasStats.Cat.AUDIO, totalBytes)
@@ -2568,6 +2694,7 @@ object NetworkHandler_v1 {
         onAudioFrame: ((ShortArray) -> Unit)? = null,
         onStatusUpdate: (key: String, args: Array<out Any>) -> Unit
     ) {
+        startDonationTimer()
         // Protocol selection: WFAS > RTP > HTTP
         val caps         = serverInfo.capabilities
         val wfasAvailable = caps == null || StreamingProtocol.WFAS in caps.protocols
@@ -2585,6 +2712,7 @@ object NetworkHandler_v1 {
             return
         }
 
+        micSendDir = null   // mic stays plaintext until the handshake derives the session key
         if (sendMicrophone && micInputMixerInfo != null)
             micReceiverJob = scope.launchMicSender(audioSettings, serverInfo, micInputMixerInfo, micPort)
 
@@ -2609,6 +2737,9 @@ object NetworkHandler_v1 {
                         val cnonce = WfasAuth.nonceHex()
                         var helloMsg = "${clientHelloMessage()};cnonce=$cnonce"
                         var proved = false
+                        var clientSnonce = ""
+                        var clientKey = clientPresharedKey
+                        var sessionEncrypted = false
                         socket.send(Datagram(buildPacket { writeText(helloMsg) }, remoteAddress))
                         AppDebug.log("[CLIENT][UNICAST] HELLO sent, waiting for reply...")
                         onStatusUpdate("status_waiting_ack", emptyArray())
@@ -2619,7 +2750,7 @@ object NetworkHandler_v1 {
                         suspend fun promptKeyAndRestart(wrong: Boolean): Boolean {
                             val k = onKeyRequest?.invoke(wrong) ?: return false
                             if (k.isBlank()) return false
-                            authKey = k
+                            clientKey = k
                             proved = false
                             helloMsg = "${clientHelloMessage()};cnonce=$cnonce"
                             socket.send(Datagram(buildPacket { writeText(helloMsg) }, remoteAddress))
@@ -2652,26 +2783,27 @@ object NetworkHandler_v1 {
                                     onStatusUpdate("status_awaiting_approval", emptyArray())
                                 }
                                 ackText.startsWith(AUTH_REQUIRED_PREFIX) -> {
-                                    if (authKey.isEmpty()) {
+                                    if (clientKey.isEmpty()) {
                                         AppDebug.log("[CLIENT][UNICAST] server requires a key")
                                         val k = onKeyRequest?.invoke(false)
                                         if (k.isNullOrBlank()) {
                                             onStatusUpdate("status_key_required", emptyArray())
                                             return@use
                                         }
-                                        authKey = k
+                                        clientKey = k
                                         handshakeDeadline = System.currentTimeMillis() + 30000
                                     }
                                     val snonce = WfasAuth.getToken(ackText, "snonce") ?: ""
+                                    clientSnonce = snonce
                                     val sproof = WfasAuth.getToken(ackText, "sproof") ?: ""
-                                    if (!WfasAuth.constantTimeEquals(sproof, WfasAuth.proof(authKey, 'S', cnonce, snonce))) {
+                                    if (!WfasAuth.constantTimeEquals(sproof, WfasAuth.proof(clientKey, 'S', cnonce, snonce))) {
                                         AppDebug.log("[CLIENT][UNICAST] server proof invalid (rogue server or wrong key)")
                                         if (!promptKeyAndRestart(true)) {
                                             onStatusUpdate("status_unauthorized", emptyArray())
                                             return@use
                                         }
                                     } else {
-                                        val cproof = WfasAuth.proof(authKey, 'C', cnonce, snonce)
+                                        val cproof = WfasAuth.proof(clientKey, 'C', cnonce, snonce)
                                         helloMsg = "${clientHelloMessage()};cnonce=$cnonce;cproof=$cproof"
                                         proved = true
                                         socket.send(Datagram(buildPacket { writeText(helloMsg) }, remoteAddress))
@@ -2684,11 +2816,12 @@ object NetworkHandler_v1 {
                                         onStatusUpdate("status_protocol_incompatible", emptyArray())
                                         return@use
                                     }
-                                    if (authKey.isNotEmpty() && !proved) {
+                                    if (clientKey.isNotEmpty() && !proved) {
                                         AppDebug.log("[CLIENT][UNICAST] server skipped auth (possible downgrade) — aborting")
                                         onStatusUpdate("status_unauthorized", emptyArray())
                                         return@use
                                     }
+                                    if (WfasAuth.getToken(ackText, "enc") == "1") sessionEncrypted = true
                                     handshakeOk = true
                                 }
                                 else -> AppDebug.log("[CLIENT][UNICAST] unexpected reply '$ackText'")
@@ -2702,6 +2835,13 @@ object NetworkHandler_v1 {
                         AppDebug.log("[CLIENT][UNICAST] handshake OK, streaming started from $remoteAddress")
                         onStatusUpdate("status_connected_streaming_from", arrayOf(remoteAddress))
                         if (connectionSoundEnabled) playConnectionSound()
+
+                        val sessionKeys = if (clientKey.isNotEmpty() && proved)
+                            WfasCrypto.deriveUnicast(clientKey, cnonce, clientSnonce) else null
+                        val recvDir: WfasCrypto.Dir? = sessionKeys?.second
+                        micSendDir = if (sessionEncrypted) sessionKeys?.first else null
+                        val recvWin = WfasCrypto.ReplayWindow()
+                        var serverEncrypts = sessionEncrypted
 
                         var lastPingReceived = System.currentTimeMillis()
                         val pingTimeoutMs    = 3000L
@@ -2753,7 +2893,27 @@ object NetworkHandler_v1 {
                                     if (audioPackets == 1L || audioPackets % 500L == 0L) {
                                         AppDebug.log("[CLIENT][UNICAST] audioPkt #$audioPackets size=${bytes.size} pcmLen=$pcmLen totalAudioBytes=$totalAudioBytes SDL=${sourceDataLine?.isActive}")
                                     }
-                                    player?.let { handleAudioPacket(it, bytes, bytes.size, audioSettings.channels, playbackState, onAudioFrame) }
+                                    val p = player
+                                    if (p != null) {
+                                        val encFlag = (bytes[3].toInt() and WfasCrypto.FLAG_ENCRYPTED) != 0
+                                        if (encFlag) {
+                                            if (recvDir != null) {
+                                                val r = WfasCrypto.decryptPacket(recvDir, recvWin, bytes, bytes.size)
+                                                if (r is WfasCrypto.Decrypted.Ok) {
+                                                    serverEncrypts = true
+                                                    val plain = ByteArray(AUDIO_HEADER_SIZE + r.pcm.size)
+                                                    System.arraycopy(bytes, 0, plain, 0, AUDIO_HEADER_SIZE)
+                                                    System.arraycopy(r.pcm, 0, plain, AUDIO_HEADER_SIZE, r.pcm.size)
+                                                    handleAudioPacket(p, plain, plain.size, audioSettings.channels, playbackState, onAudioFrame)
+                                                }
+                                                // replay/auth-fail/malformed -> drop
+                                            }
+                                            // encrypted but no key -> drop
+                                        } else if (!serverEncrypts) {
+                                            handleAudioPacket(p, bytes, bytes.size, audioSettings.channels, playbackState, onAudioFrame)
+                                        }
+                                        // cleartext after encryption seen -> drop (downgrade)
+                                    }
                                 } else {
                                     val text = bytes.toString(Charsets.UTF_8).trim()
                                     WfasStats.add(
@@ -2826,10 +2986,53 @@ object NetworkHandler_v1 {
                         var mcAudioPkts = 0L
                         var mcTotalBytes = 0L
                         var mcVersionChecked = false
+                        var mcDir: WfasCrypto.Dir? = null
+                        var mcWin = WfasCrypto.ReplayWindow()
+                        var mcKey = clientPresharedKey
+                        var mcAsked = false
+                        var mcWrong = false
+                        var mcLastEpoch = SettingsRepository.getMcastClientEpoch(serverInfo.ip)
+                        val beaconPrefixLen = WfasCrypto.MSG_MCAST_ENC.length
                         while (isActive) {
                             try {
                                 socket.receive(packet)
                             } catch (_: java.net.SocketTimeoutException) {
+                                continue
+                            }
+                            if (packet.length >= beaconPrefixLen &&
+                                String(packet.data, 0, beaconPrefixLen, Charsets.US_ASCII) == WfasCrypto.MSG_MCAST_ENC) {
+                                val beaconStr = String(packet.data, 0, packet.length, Charsets.US_ASCII)
+                                if (mcDir == null) {
+                                    if (mcKey.isEmpty()) {
+                                        if (mcAsked && onKeyRequest == null) continue
+                                        mcAsked = true
+                                        mcKey = onKeyRequest?.invoke(mcWrong)?.takeIf { it.isNotBlank() } ?: ""
+                                        if (mcKey.isEmpty()) { onStatusUpdate("status_key_required", emptyArray()); continue }
+                                    }
+                                    val info = WfasCrypto.parseMcastBeacon(mcKey, beaconStr, -1L)
+                                    if (info != null) {
+                                        if (info.epoch >= mcLastEpoch) {
+                                            mcDir = WfasCrypto.deriveMulticast(mcKey, info.salt)
+                                            mcWin = WfasCrypto.ReplayWindow()
+                                            if (info.epoch > mcLastEpoch) {
+                                                mcLastEpoch = info.epoch
+                                                SettingsRepository.setMcastClientEpoch(serverInfo.ip, info.epoch)
+                                            }
+                                            onStatusUpdate("status_key_accepted", emptyArray())
+                                        }
+                                    } else {
+                                        mcWrong = true
+                                        mcKey = ""
+                                    }
+                                } else {
+                                    val info = WfasCrypto.parseMcastBeacon(mcKey, beaconStr, -1L)
+                                    if (info != null && info.epoch > mcLastEpoch) {
+                                        mcDir = WfasCrypto.deriveMulticast(mcKey, info.salt)
+                                        mcWin = WfasCrypto.ReplayWindow()
+                                        mcLastEpoch = info.epoch
+                                        SettingsRepository.setMcastClientEpoch(serverInfo.ip, info.epoch)
+                                    }
+                                }
                                 continue
                             }
                             if (packet.length >= AUDIO_HEADER_SIZE && packet.data[0] == AUDIO_MAGIC_0 && packet.data[1] == AUDIO_MAGIC_1) {
@@ -2844,15 +3047,27 @@ object NetworkHandler_v1 {
                                     }
                                 }
                                 WfasStats.add(if ((packet.data[3].toInt() and 0x01) != 0) WfasStats.Cat.SILENCE else WfasStats.Cat.AUDIO, packet.length)
-                                val pcmLen = packet.length - AUDIO_HEADER_SIZE
-                                val aligned = pcmLen - (pcmLen % frameSize)
                                 mcAudioPkts++
-                                mcTotalBytes += aligned
-                                if (mcAudioPkts == 1L || mcAudioPkts % 500L == 0L) {
-                                    AppDebug.log("[CLIENT][MULTICAST] audioPkt #$mcAudioPkts len=${packet.length} pcmLen=$pcmLen aligned=$aligned totalBytes=$mcTotalBytes")
-                                }
-                                if (aligned > 0) {
-                                    player?.let { handleAudioPacket(it, packet.data, packet.length, effectiveAudioSettings.channels, playbackState, onAudioFrame) }
+                                if ((packet.data[3].toInt() and WfasCrypto.FLAG_ENCRYPTED) != 0) {
+                                    val dir = mcDir
+                                    if (dir != null) {
+                                        val r = WfasCrypto.decryptPacket(dir, mcWin, packet.data, packet.length)
+                                        if (r is WfasCrypto.Decrypted.Ok) {
+                                            mcTotalBytes += r.pcm.size
+                                            val plain = ByteArray(AUDIO_HEADER_SIZE + r.pcm.size)
+                                            System.arraycopy(packet.data, 0, plain, 0, AUDIO_HEADER_SIZE)
+                                            System.arraycopy(r.pcm, 0, plain, AUDIO_HEADER_SIZE, r.pcm.size)
+                                            player?.let { handleAudioPacket(it, plain, plain.size, effectiveAudioSettings.channels, playbackState, onAudioFrame) }
+                                        }
+                                    }
+                                    // no key yet -> drop until a valid beacon arrives
+                                } else {
+                                    val pcmLen = packet.length - AUDIO_HEADER_SIZE
+                                    val aligned = pcmLen - (pcmLen % frameSize)
+                                    mcTotalBytes += aligned
+                                    if (aligned > 0) {
+                                        player?.let { handleAudioPacket(it, packet.data, packet.length, effectiveAudioSettings.channels, playbackState, onAudioFrame) }
+                                    }
                                 }
                             } else if (packet.length >= 3 && String(packet.data, 0, minOf(packet.length, 3), Charsets.UTF_8) == "BYE") {
                                 WfasStats.add(WfasStats.Cat.BYE, packet.length)
@@ -3113,6 +3328,7 @@ object NetworkHandler_v1 {
 
     private suspend fun stopCurrentStreamLocked() {
         stopAnnouncingPresence()
+        cancelDonationTimer()
 
         httpServerJob?.cancelAndJoin();  httpServerJob   = null
         rtpJob?.cancelAndJoin();         rtpJob          = null
@@ -3287,9 +3503,9 @@ private fun runInteractiveSetup(isHeadless: Boolean): SetupAction {
     val options = mutableListOf<Option>()
     if (!isHeadless) options += Option("Open GUI", SetupAction.GUI)
     val alreadyInstalled = CliPathInstaller.isInstalled()
+    val pathDetail = if (CliPathInstaller.isWindows) "" else "  (~/.local/bin/wfas + man wfas)"
     options += Option(
-        if (alreadyInstalled) "Reinstall wfas to PATH  (~/.local/bin/wfas + man wfas)"
-        else                  "Add wfas to PATH  (~/.local/bin/wfas + man wfas)",
+        (if (alreadyInstalled) "Reinstall wfas to PATH" else "Add wfas to PATH") + pathDetail,
         SetupAction.DONE
     )
     options += Option("Show help", SetupAction.SHOW_HELP)
@@ -3323,6 +3539,13 @@ fun main(args: Array<String>) {
     System.setErr(java.io.PrintStream(System.err, true, "UTF-8"))
 
     val cliArgs = CliArgs.parse(args)
+
+    cliArgs.configPath?.let { ConfigPaths.overrideConfigFile = java.io.File(it) }
+
+    if (cliArgs.configCmd != null) {
+        val code = ConfigCli.run(cliArgs.configCmd, cliArgs.json)
+        kotlin.system.exitProcess(code)
+    }
 
     if (cliArgs.printHelp)     { CliArgs.printHelp();     return }
     if (cliArgs.printVersion)  { CliArgs.printVersion();  return }
@@ -3397,6 +3620,13 @@ fun startGuiApplication(cliArgs: CliArgs) = application {
         )
     }
     var changelogStandalone by remember { mutableStateOf(SettingsRepository.hasSeenWelcome()) }
+    var showDonation        by remember {
+        mutableStateOf(
+            SettingsRepository.hasSeenWelcome() &&
+                SettingsRepository.isDonationQualified() &&
+                System.currentTimeMillis() >= SettingsRepository.donationSnoozeUntil()
+        )
+    }
     var updateBanner        by remember { mutableStateOf<UpdateChecker.Result.Available?>(null) }
     var manualUpdateResult  by remember { mutableStateOf<UpdateChecker.Result?>(null) }
     var checkingForUpdate   by remember { mutableStateOf(false) }
@@ -3582,8 +3812,8 @@ fun startGuiApplication(cliArgs: CliArgs) = application {
         LaunchedEffect(Unit) {
             window.minimumSize = java.awt.Dimension(400, 500)
         }
-        LaunchedEffect(appSettings.securityMode, appSettings.authKey) {
-            NetworkHandler_v1.configureSecurity(appSettings.securityMode, appSettings.authKey)
+        LaunchedEffect(appSettings.securityMode, appSettings.authKey, appSettings.encryptionEnabled) {
+            NetworkHandler_v1.configureSecurity(appSettings.securityMode, appSettings.authKey, appSettings.encryptionEnabled)
         }
         var authRequestPeer by remember { mutableStateOf<String?>(null) }
         val authDecision = remember { java.util.concurrent.atomic.AtomicReference<kotlinx.coroutines.CompletableDeferred<Boolean>?>(null) }
@@ -3595,23 +3825,6 @@ fun startGuiApplication(cliArgs: CliArgs) = application {
                 runCatching { kotlinx.coroutines.runBlocking { def.await() } }.getOrDefault(false)
             }
         }
-        authRequestPeer?.let { peer ->
-            AlertDialog(
-                onDismissRequest = { authDecision.getAndSet(null)?.complete(false); authRequestPeer = null },
-                title = { Text(stringResource("auth_request_title")) },
-                text  = { Text(stringResource("auth_request_body", peer)) },
-                confirmButton = {
-                    Button(onClick = { authDecision.getAndSet(null)?.complete(true); authRequestPeer = null }) {
-                        Text(stringResource("auth_allow"))
-                    }
-                },
-                dismissButton = {
-                    TextButton(onClick = { authDecision.getAndSet(null)?.complete(false); authRequestPeer = null }) {
-                        Text(stringResource("auth_deny"))
-                    }
-                }
-            )
-        }
         var keyRequestWrong by remember { mutableStateOf<Boolean?>(null) }
         val keyDecision = remember { java.util.concurrent.atomic.AtomicReference<kotlinx.coroutines.CompletableDeferred<String?>?>(null) }
         LaunchedEffect(Unit) {
@@ -3622,36 +3835,6 @@ fun startGuiApplication(cliArgs: CliArgs) = application {
                 runCatching { def.await() }.getOrNull()
             }
         }
-        keyRequestWrong?.let { wrong ->
-            var keyText by remember { mutableStateOf("") }
-            AlertDialog(
-                onDismissRequest = { keyDecision.getAndSet(null)?.complete(null); keyRequestWrong = null },
-                title = { Text(stringResource("key_dialog_title")) },
-                text = {
-                    Column {
-                        Text(if (wrong) stringResource("key_dialog_wrong") else stringResource("key_dialog_body"))
-                        Spacer(Modifier.height(8.dp))
-                        OutlinedTextField(
-                            value = keyText,
-                            onValueChange = { keyText = it },
-                            singleLine = true,
-                            label = { Text(stringResource("auth_key_label")) },
-                            modifier = Modifier.fillMaxWidth()
-                        )
-                    }
-                },
-                confirmButton = {
-                    Button(onClick = { keyDecision.getAndSet(null)?.complete(keyText); keyRequestWrong = null }) {
-                        Text(stringResource("key_dialog_connect"))
-                    }
-                },
-                dismissButton = {
-                    TextButton(onClick = { keyDecision.getAndSet(null)?.complete(null); keyRequestWrong = null }) {
-                        Text(stringResource("key_dialog_cancel"))
-                    }
-                }
-            )
-        }
         val customColor = appSettings.customThemeColor?.toULong()?.let { Color(it) }
         val currentColorScheme = if (customColor != null) {
             MaterialYouGenerator.generateDynamicColorScheme(customColor, useDarkTheme)
@@ -3661,6 +3844,53 @@ fun startGuiApplication(cliArgs: CliArgs) = application {
 
         MaterialTheme(colorScheme = currentColorScheme) {
             Surface(modifier = Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
+                authRequestPeer?.let { peer ->
+                    AlertDialog(
+                        onDismissRequest = { authDecision.getAndSet(null)?.complete(false); authRequestPeer = null },
+                        title = { Text(stringResource("auth_request_title")) },
+                        text  = { Text(stringResource("auth_request_body", peer)) },
+                        confirmButton = {
+                            Button(onClick = { authDecision.getAndSet(null)?.complete(true); authRequestPeer = null }) {
+                                Text(stringResource("auth_allow"))
+                            }
+                        },
+                        dismissButton = {
+                            TextButton(onClick = { authDecision.getAndSet(null)?.complete(false); authRequestPeer = null }) {
+                                Text(stringResource("auth_deny"))
+                            }
+                        }
+                    )
+                }
+                keyRequestWrong?.let { wrong ->
+                    var keyText by remember { mutableStateOf("") }
+                    AlertDialog(
+                        onDismissRequest = { keyDecision.getAndSet(null)?.complete(null); keyRequestWrong = null },
+                        title = { Text(stringResource("key_dialog_title")) },
+                        text = {
+                            Column {
+                                Text(if (wrong) stringResource("key_dialog_wrong") else stringResource("key_dialog_body"))
+                                Spacer(Modifier.height(8.dp))
+                                OutlinedTextField(
+                                    value = keyText,
+                                    onValueChange = { keyText = it },
+                                    singleLine = true,
+                                    label = { Text(stringResource("auth_key_label")) },
+                                    modifier = Modifier.fillMaxWidth()
+                                )
+                            }
+                        },
+                        confirmButton = {
+                            Button(onClick = { keyDecision.getAndSet(null)?.complete(keyText); keyRequestWrong = null }) {
+                                Text(stringResource("key_dialog_connect"))
+                            }
+                        },
+                        dismissButton = {
+                            TextButton(onClick = { keyDecision.getAndSet(null)?.complete(null); keyRequestWrong = null }) {
+                                Text(stringResource("key_dialog_cancel"))
+                            }
+                        }
+                    )
+                }
                 val clientDisconnectKeys = remember {
                     setOf(
                         "status_server_disconnected",
@@ -4081,6 +4311,43 @@ fun startGuiApplication(cliArgs: CliArgs) = application {
                                 SettingsRepository.setLastSeenChangelog(Changelog.latest.version)
                             }
                         )
+
+                        if (showDonation && !showWelcome && !showChangelog) {
+                            val snoozeLater = {
+                                showDonation = false
+                                val c = SettingsRepository.donationDismissCount() + 1
+                                SettingsRepository.setDonationDismissCount(c)
+                                SettingsRepository.setDonationQualified(false)
+                                SettingsRepository.setDonationSnoozeUntil(System.currentTimeMillis() + SettingsRepository.donationBackoffDays(c) * 24 * 60 * 60 * 1000)
+                            }
+                            val snooze30 = {
+                                showDonation = false
+                                SettingsRepository.setDonationDismissCount(4)
+                                SettingsRepository.setDonationQualified(false)
+                                SettingsRepository.setDonationSnoozeUntil(System.currentTimeMillis() + 30L * 24 * 60 * 60 * 1000)
+                            }
+                            AlertDialog(
+                                onDismissRequest = snoozeLater,
+                                icon  = { Icon(Icons.Outlined.Favorite, contentDescription = null) },
+                                title = { Text(Strings.get("donation_title")) },
+                                text  = { Text(Strings.get("donation_body")) },
+                                confirmButton = {
+                                    Button(onClick = {
+                                        runCatching { openUrl("https://ko-fi.com/marcomorosi") }
+                                        showDonation = false
+                                        SettingsRepository.setDonationDismissCount(0)
+                                        SettingsRepository.setDonationQualified(false)
+                                        SettingsRepository.setDonationSnoozeUntil(System.currentTimeMillis() + 14L * 24 * 60 * 60 * 1000)
+                                    }) { Text(Strings.get("donation_support")) }
+                                },
+                                dismissButton = {
+                                    Row {
+                                        TextButton(onClick = snooze30) { Text(Strings.get("donation_dismiss_30")) }
+                                        TextButton(onClick = snoozeLater) { Text(Strings.get("donation_later")) }
+                                    }
+                                }
+                            )
+                        }
 
                         updateBanner?.let { info ->
                             AlertDialog(

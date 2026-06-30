@@ -20,6 +20,10 @@ wfas \- stream audio over a local Wi\-Fi network
 .B wfas
 .B control
 .IR volume " <0\-100> | mute | unmute | stop | status"
+.br
+.B wfas
+.B config
+.IR list | get | set | path | edit | reset | export | import
 .\"
 .\" ─────────────────────────────────────────────────────────────────────────────
 .SH DESCRIPTION
@@ -218,13 +222,68 @@ Stop the current stream without closing the process.
 Print the current status as JSON, including mode, volume, mute state,
 port, protocols enabled, uptime, and PID.
 .\"
+.SS Configuration
+These subcommands read and write the persistent settings file
+.RB ( config.json )
+shared by the CLI and the GUI, then exit.
+Changes take effect the next time a server or client starts, or the next time
+the GUI is opened.
+Add
+.B --json
+to any of them for machine-readable output.
+.TP
+.B config list
+Print every setting and its current value, grouped by section.
+.TP
+\fBconfig get\fR \fIkey\fR
+Print the value of one setting, for example
+.BR audio.sampleRate .
+.TP
+\fBconfig set\fR \fIkey\fR \fIvalue\fR
+Change one setting and save it.
+The value is validated against the setting's type and range.
+.TP
+.B config path
+Print the absolute path of the settings file resolved for the current system.
+.TP
+.B config edit
+Open the settings file in an editor.
+Uses
+.B $VISUAL
+or
+.B $EDITOR
+when set, otherwise the operating system's default handler for the file.
+.TP
+.B config reset
+Restore every setting to its default value.
+.TP
+\fBconfig export\fR [\fIfile\fR]
+Write the current settings to
+.I file
+as JSON, or to standard output when
+.I file
+is omitted.
+.TP
+\fBconfig import\fR \fIfile\fR
+Load a JSON settings file and make it the active configuration.
+.\"
 .SS Discover options
+Discovery prints one row per server in a table with the columns
+.BR HOST ", " IP ", " MODE " (RTP, HTTP, UDP, or UDP/M for multicast), and "
+.B SECURITY
+.RB ( None ", " Authentication ", or " Encryption ).
+.B Encryption
+is reported only for key-authenticated servers that also encrypt the audio;
+a server that merely authorizes or asks for a key reports
+.BR Authentication .
 .TP
 .B --watch
 Keep scanning continuously instead of exiting after 5 seconds.
 .TP
 .B --json
-Output results as newline-delimited JSON objects instead of a human-readable table.
+Output results as newline-delimited JSON objects instead of the table.
+Each object carries the same fields plus
+.BR port ", " multicast ", and " protocols .
 .\"
 .SS Global options
 .TP
@@ -318,11 +377,24 @@ from other machines.
 .SH FILES
 .\"
 .TP
-.I ~/.config/wfas/settings.json
-User settings (Linux, macOS).
+.I ~/.config/wfas/config.json
+User settings (Linux; honors
+.BR $XDG_CONFIG_HOME ).
 .TP
-.I %APPDATA%\ewfas\esettings.json
+.I ~/Library/Application Support/wfas/config.json
+User settings (macOS).
+.TP
+.I %APPDATA%\ewfas\econfig.json
 User settings (Windows).
+.IP
+The settings file is a single JSON document shared by the CLI and the GUI.
+Inspect or edit it with
+.B wfas config
+(see COMMANDS), or override its location with
+.BR --config .
+Run
+.B wfas config path
+to print the exact path resolved for the current system.
 .TP
 .I /tmp/wfas-<pid>.port
 IPC port file created by each running instance.

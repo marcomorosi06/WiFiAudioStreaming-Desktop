@@ -396,6 +396,15 @@ if (isWindows) {
                             javaExeSrc.copyTo(File(binDir, "java.exe"), overwrite = true)
                             logger.lifecycle("[wfas] Copiato java.exe -> ${binDir.absolutePath}")
                         }
+                        val wfasCmd = File(appSubDir, "wfas.cmd")
+                        wfasCmd.writeText(
+                            "@echo off\r\n" +
+                            "setlocal\r\n" +
+                            "set \"APPHOME=%~dp0\"\r\n" +
+                            "\"%APPHOME%runtime\\bin\\java.exe\" -Djava.net.preferIPv4Stack=true -Dskiko.library.path=\"%APPHOME%app\" -Dcompose.application.resources.dir=\"%APPHOME%app\\resources\" -cp \"%APPHOME%app\\*\" MainKt %*\r\n" +
+                            "endlocal\r\n"
+                        )
+                        logger.lifecycle("[wfas] Creato wfas.cmd -> ${wfasCmd.absolutePath}")
                     }
             }
         }
