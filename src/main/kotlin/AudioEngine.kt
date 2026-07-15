@@ -56,6 +56,8 @@ class AudioEngine(
     private external fun nativeGetSystemVolume(): Float
     private external fun nativeSetSystemVolume(volume: Float)
 
+    private external fun nativeSetDebug(enabled: Boolean)
+
     companion object {
         private var libraryLoaded = false
         private var loadError: String? = null
@@ -123,6 +125,7 @@ class AudioEngine(
         }
         if (started) return true
 
+        nativeSetDebug(AppDebug.enabled)
         val ok = nativeStart(sampleRate, channels, bufferFrames)
         if (!ok) {
             lastError = nativeGetError().ifEmpty { "Unknown error in nativeStart" }
@@ -184,6 +187,7 @@ class AudioEngine(
             lastError = loadError ?: "Native library not loaded."
             return false
         }
+        nativeSetDebug(AppDebug.enabled)
         val ok = nativeVirtualSinkCreate(sampleRate, channels)
         if (!ok) lastError = nativeGetError().ifEmpty { "Virtual sink creation failed." }
         return ok
@@ -211,6 +215,7 @@ class AudioEngine(
             lastError = loadError ?: "Native library not loaded."
             return false
         }
+        nativeSetDebug(AppDebug.enabled)
         val ok = nativeMicSinkOpen(deviceName, sampleRate, channels)
         if (!ok) lastError = nativeGetError().ifEmpty { "MicSink open failed." }
         return ok

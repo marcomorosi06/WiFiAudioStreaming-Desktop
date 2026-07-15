@@ -52,6 +52,10 @@
 
 static char g_last_error[512] = {0};
 
+static int g_debug = 0;
+
+#define AE_LOG(...) do { if (g_debug) fprintf(stderr, __VA_ARGS__); } while (0)
+
 static void set_error(const char *fmt, ...) {
     va_list ap;
     va_start(ap, fmt);
@@ -283,7 +287,7 @@ static IMMDevice *pick_best_render_device(IMMDeviceEnumerator *enumerator) {
         int is_default = (default_id && dev_id && wcscmp(default_id, dev_id) == 0);
         if (dev_id) CoTaskMemFree(dev_id);
 
-        fprintf(stderr, "[AudioEngine] Device[%u]: %S virtual=%d default=%d\n",
+        AE_LOG("[AudioEngine] Device[%u]: %S virtual=%d default=%d\n",
                 i, name ? name : L"(unknown)", is_virt, is_default);
 
         PropVariantClear(&pv);
@@ -310,11 +314,11 @@ static IMMDevice *pick_best_render_device(IMMDeviceEnumerator *enumerator) {
 
     if (best_real_dev) {
         if (default_dev) IUnknown_Release((IUnknown *)default_dev);
-        fprintf(stderr, "[AudioEngine] Selected: real device for loopback.\n");
+        AE_LOG("[AudioEngine] Selected: real device for loopback.\n");
         return best_real_dev;
     }
 
-    fprintf(stderr, "[AudioEngine] Selected: %s default device.\n",
+    AE_LOG("[AudioEngine] Selected: %s default device.\n",
             default_is_virtual ? "virtual default (no real device found)" : "default");
     return default_dev;
 }
@@ -329,7 +333,7 @@ static void safety_net_restore_mute(void) {
         BOOL target = g_had_prev_mute_state ? g_prev_mute_state : FALSE;
         HRESULT hr = IAudioEndpointVolume_SetMute(epv, target, NULL);
         if (SUCCEEDED(hr)) {
-            fprintf(stderr, "[AudioEngine] Safety-net restored endpoint mute to %s.\n",
+            AE_LOG("[AudioEngine] Safety-net restored endpoint mute to %s.\n",
                     target ? "muted" : "unmuted");
         } else {
             fprintf(stderr, "[AudioEngine] Safety-net SetMute failed: 0x%08lX\n", hr);
@@ -371,7 +375,7 @@ static void mute_render_endpoint(IMMDevice *device) {
     }
 
     if (g_had_prev_mute_state && prev) {
-        fprintf(stderr, "[AudioEngine] Endpoint already muted, leaving as-is.\n");
+        AE_LOG("[AudioEngine] Endpoint already muted, leaving as-is.\n");
         g_did_mute_endpoint = 0;
         return;
     }
@@ -380,7 +384,7 @@ static void mute_render_endpoint(IMMDevice *device) {
     if (SUCCEEDED(hr)) {
         g_did_mute_endpoint = 1;
         g_safety_net_ran = 0;
-        fprintf(stderr, "[AudioEngine] Render endpoint muted to avoid double playback.\n");
+        AE_LOG("[AudioEngine] Render endpoint muted to avoid double playback.\n");
 
         if (InterlockedCompareExchange(&g_atexit_registered, 1, 0) == 0) {
             atexit(atexit_safety_handler);
@@ -397,7 +401,7 @@ static void restore_render_endpoint_mute(void) {
     if (g_did_mute_endpoint && g_had_prev_mute_state) {
         HRESULT hr = IAudioEndpointVolume_SetMute(g_endpoint_volume, g_prev_mute_state, NULL);
         if (SUCCEEDED(hr)) {
-            fprintf(stderr, "[AudioEngine] Endpoint mute restored to %s.\n",
+            AE_LOG("[AudioEngine] Endpoint mute restored to %s.\n",
                     g_prev_mute_state ? "muted" : "unmuted");
         } else {
             fprintf(stderr, "[AudioEngine] SetMute restore failed: 0x%08lX\n", hr);
@@ -458,7 +462,7 @@ static jboolean wasapi_start(int sample_rate, int channels) {
     g_src_rate     = (int)g_mix_format->nSamplesPerSec;
     g_src_bps      = g_mix_format->wBitsPerSample;
 
-    fprintf(stderr, "[AudioEngine/WASAPI] Loopback on device: %d ch, %d Hz, %d bps, float=%d\n",
+    AE_LOG("[AudioEngine/WASAPI] Loopback on device: %d ch, %d Hz, %d bps, float=%d\n",
             g_src_channels, g_src_rate, g_src_bps, g_src_is_float);
 
     hr = IAudioClient_Initialize(g_audio_client, AUDCLNT_SHAREMODE_SHARED,
@@ -989,7 +993,7 @@ static jboolean wasapi_sink_open(const wchar_t *device_hint, int sample_rate, in
         return JNI_FALSE;
     }
 
-    fprintf(stderr, "[AudioEngine] WASAPI sink aperto su '%s' (%dHz/%dch, bufferFrames=%u)\n",
+    AE_LOG("[AudioEngine] WASAPI sink aperto su '%s' (%dHz/%dch, bufferFrames=%u)\n",
             g_ws.device_name, sample_rate, channels, g_ws.buffer_frames);
 
     return JNI_TRUE;
@@ -1103,7 +1107,7 @@ static void linux_save_and_mute_sink(void) {
     FILE *fp2 = popen("LC_ALL=C pactl set-sink-mute @DEFAULT_SINK@ 1 2>/dev/null", "r");
     if (fp2) pclose(fp2);
     g_did_mute_sink = 1;
-    fprintf(stderr, "[AudioEngine/Linux] Default sink muted.\n");
+    AE_LOG("[AudioEngine/Linux] Default sink muted.\n");
 
     if (!g_linux_atexit_reg) {
         g_linux_atexit_reg = 1;
@@ -1116,7 +1120,7 @@ static void linux_restore_sink_mute(void) {
     g_did_mute_sink = 0;
     FILE *fp = popen("LC_ALL=C pactl set-sink-mute @DEFAULT_SINK@ 0 2>/dev/null", "r");
     if (fp) pclose(fp);
-    fprintf(stderr, "[AudioEngine/Linux] Default sink unmuted.\n");
+    AE_LOG("[AudioEngine/Linux] Default sink unmuted.\n");
 }
 
 /* ── Monitor-source name ──────────────────────────────────────────────────── */
@@ -1166,7 +1170,7 @@ static void pulse_drain_stream(void) {
     }
     free(tmp);
     if (!g_pa_stopping)
-        fprintf(stderr, "[AudioEngine/Linux] Buffer iniziale svuotato.\n");
+        AE_LOG("[AudioEngine/Linux] Buffer iniziale svuotato.\n");
 }
 
 /* ── pulse_flush_stream — ricrea il stream per azzerare latenza accumulata ── */
@@ -1205,7 +1209,7 @@ static void pulse_flush_stream(void) {
 
     if (g_pa_stream) {
         pulse_drain_stream();
-        fprintf(stderr, "[AudioEngine/Linux] Stream ricreato (drift azzerato).\n");
+        AE_LOG("[AudioEngine/Linux] Stream ricreato (drift azzerato).\n");
     } else {
         const char *msg = fn_pa_strerror ? fn_pa_strerror(error) : "unknown";
         set_error("pa_simple_new (flush) failed: %s", msg);
@@ -1266,7 +1270,7 @@ static jboolean pulse_start(int sample_rate, int channels) {
 
     /* Svuota l'audio accumulato da pa_simple_new + mute setup */
     pulse_drain_stream();
-    fprintf(stderr, "[AudioEngine/Linux] Started. %d ch, %d Hz, fragsize=%u B (~%u ms), device: %s\n",
+    AE_LOG("[AudioEngine/Linux] Started. %d ch, %d Hz, fragsize=%u B (~%u ms), device: %s\n",
             channels, sample_rate, frag,
             frag * 1000 / (uint32_t)(sample_rate * channels * 2),
             device ? device : "default");
@@ -1314,8 +1318,7 @@ static jboolean pulse_read(int16_t *buf, int num_stereo_samples) {
             if (elapsed_ms < expected_ms * 0.5) {
                 g_drift_ms += expected_ms - elapsed_ms;
                 if (g_drift_ms > 200.0) {
-                    fprintf(stderr,
-                        "[AudioEngine/Linux] Drift latenza %.0f ms — stream ricreato.\n",
+                    AE_LOG("[AudioEngine/Linux] Drift latenza %.0f ms — stream ricreato.\n",
                         g_drift_ms);
                     pulse_flush_stream();
                 }
@@ -1344,7 +1347,7 @@ static void pulse_stop(void) {
     }
     linux_restore_sink_mute();
     g_pa_stopping = 0;
-    fprintf(stderr, "[AudioEngine/Linux] Stopped.\n");
+    AE_LOG("[AudioEngine/Linux] Stopped.\n");
 }
 
 /* ─────────────────────────────────────────────────────────────────────────────
@@ -1434,7 +1437,7 @@ static jboolean linux_vsink_create(int sample_rate, int channels) {
         return JNI_FALSE;
     }
 
-    fprintf(stderr, "[AudioEngine/Linux] Virtual sink created: %s (module id %d)\n",
+    AE_LOG("[AudioEngine/Linux] Virtual sink created: %s (module id %d)\n",
             g_vsink_name, g_vsink_module_id);
     return JNI_TRUE;
 }
@@ -1446,7 +1449,7 @@ static void linux_vsink_destroy(void) {
     }
     if (g_vsink_module_id >= 0) {
         run_pactl_unload(g_vsink_module_id);
-        fprintf(stderr, "[AudioEngine/Linux] Virtual sink removed (module id %d).\n",
+        AE_LOG("[AudioEngine/Linux] Virtual sink removed (module id %d).\n",
                 g_vsink_module_id);
         g_vsink_module_id = -1;
     }
@@ -1753,4 +1756,10 @@ Java_AudioEngine_nativeSetSystemVolume(JNIEnv *env, jobject thiz, jfloat volume)
 #if defined(__APPLE__)
 mac_set_system_volume((float)volume);
 #endif
+}
+
+JNIEXPORT void JNICALL
+Java_AudioEngine_nativeSetDebug(JNIEnv *env, jobject thiz, jboolean enabled) {
+(void)env; (void)thiz;
+g_debug = enabled ? 1 : 0;
 }
