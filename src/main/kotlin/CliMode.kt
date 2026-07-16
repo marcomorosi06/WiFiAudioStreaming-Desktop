@@ -506,6 +506,7 @@ private suspend fun runCliClient(args: CliArgs, settings: AllSettings) {
     val connected = kotlinx.coroutines.CompletableDeferred<Unit>()
     var userStopped = false
     var cliExitCode = ExitCode.OK
+    val keySlot = java.util.concurrent.atomic.AtomicReference<kotlinx.coroutines.CompletableDeferred<String?>?>(null)
 
     if (viz != null) {
         args.volume?.let { viz.setVolumePercent((it * 100).toInt()) }
@@ -522,10 +523,12 @@ private suspend fun runCliClient(args: CliArgs, settings: AllSettings) {
     NetworkHandler_v1.clientPresharedKey = args.authKey
     if (viz == null && !args.json) {
         NetworkHandler_v1.onKeyRequest = { wrong ->
+            val slot = kotlinx.coroutines.CompletableDeferred<String?>()
+            keySlot.set(slot)
             if (wrong) System.err.println(Strings.get("key_dialog_wrong"))
             System.err.print(Strings.get("key_dialog_body") + " ")
             System.err.flush()
-            runCatching { readLine()?.trim() }.getOrNull()?.takeIf { it.isNotBlank() }
+            slot.await()?.trim()?.takeIf { it.isNotBlank() }
         }
     }
 
@@ -575,22 +578,26 @@ private suspend fun runCliClient(args: CliArgs, settings: AllSettings) {
     } else {
     val stdinThread = Thread {
         try {
-            while (!connected.isCompleted && !done.isCompleted) Thread.sleep(50)
-            if (done.isCompleted) return@Thread
             val reader = java.io.BufferedReader(java.io.InputStreamReader(System.`in`))
             while (!done.isCompleted) {
-                val line = reader.readLine()?.trim() ?: break
+                val line = reader.readLine() ?: break
+                val pendingKey = keySlot.getAndSet(null)
+                if (pendingKey != null) {
+                    pendingKey.complete(line)
+                    continue
+                }
+                val cmd = line.trim()
                 when {
-                    line.equals("q", ignoreCase = true) ||
-                    line.equals("quit", ignoreCase = true) ||
-                    line.equals("stop", ignoreCase = true) ||
-                    line.equals("disconnect", ignoreCase = true) -> {
+                    cmd.equals("q", ignoreCase = true) ||
+                    cmd.equals("quit", ignoreCase = true) ||
+                    cmd.equals("stop", ignoreCase = true) ||
+                    cmd.equals("disconnect", ignoreCase = true) -> {
                         userStopped = true
                         kotlinx.coroutines.runBlocking { NetworkHandler_v1.stopCurrentStream() }
                         done.complete(Unit)
                     }
-                    line.matches(Regex("(?i)v(?:ol(?:ume)?)?\\s+(\\d+(?:\\.\\d+)?)")) -> {
-                        val pct = line.trim().split("\\s+".toRegex()).last().toFloatOrNull() ?: return@Thread
+                    cmd.matches(Regex("(?i)v(?:ol(?:ume)?)?\\s+(\\d+(?:\\.\\d+)?)")) -> {
+                        val pct = cmd.split("\\s+".toRegex()).last().toFloatOrNull() ?: continue
                         NetworkHandler_v1.setServerVolume((pct / 100f).coerceIn(0f, 2f))
                         if (!args.quiet && !args.json) out("  volume: ${pct.toInt()}%", args)
                     }

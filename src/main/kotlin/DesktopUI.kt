@@ -654,6 +654,10 @@ fun SettingsScreen(
     var cliInstallResult by remember { mutableStateOf<CliPathInstaller.InstallResult?>(null) }
     var cliIsInstalled by remember { mutableStateOf(CliPathInstaller.isInstalled()) }
     var cliInstalling by remember { mutableStateOf(false) }
+    var fwPorts by remember(streamingPort, micPort) { mutableStateOf(listOf(streamingPort, "9091", micPort).filter { it.isNotBlank() }.joinToString(", ")) }
+    var fwBusy by remember { mutableStateOf(false) }
+    var fwActive by remember { mutableStateOf(FirewallHelper.rulesActive()) }
+    var fwResult by remember { mutableStateOf<FirewallHelper.Result?>(null) }
     var showLicensesDialog by remember { mutableStateOf(false) }
     val licensesText = remember {
         runCatching {
@@ -771,6 +775,42 @@ fun SettingsScreen(
         )
     }
 
+    if (fwResult != null) {
+        val result = fwResult!!
+        AlertDialog(
+            onDismissRequest = { fwResult = null },
+            icon = {
+                Icon(
+                    if (result is FirewallHelper.Result.Success) Icons.Default.CheckCircle else Icons.Default.Error,
+                    contentDescription = null
+                )
+            },
+            title = {
+                Text(
+                    when (result) {
+                        is FirewallHelper.Result.Success      -> stringResource("fw_result_success_title")
+                        is FirewallHelper.Result.Denied       -> stringResource("fw_result_denied_title")
+                        is FirewallHelper.Result.NotSupported -> stringResource("fw_result_failure_title")
+                        is FirewallHelper.Result.Failure      -> stringResource("fw_result_failure_title")
+                    }
+                )
+            },
+            text = {
+                Text(
+                    when (result) {
+                        is FirewallHelper.Result.Success      -> stringResource("fw_result_success_body")
+                        is FirewallHelper.Result.Denied       -> stringResource("fw_result_denied_body")
+                        is FirewallHelper.Result.NotSupported -> stringResource("fw_result_unsupported_body")
+                        is FirewallHelper.Result.Failure      -> result.reason
+                    }
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = { fwResult = null }) { Text(stringResource("ok")) }
+            }
+        )
+    }
+
     var showEasterEgg by remember { mutableStateOf(false) }
     val isLinux = remember { System.getProperty("os.name").lowercase().contains("linux") }
 
@@ -831,10 +871,8 @@ fun SettingsScreen(
                             currentTheme = appSettings.theme,
                             onThemeChange = { onAppSettingsChange(appSettings.copy(theme = it)) }
                         )
-                    }
-                }
-                item {
-                    SettingsGroup(title = "Material You Theming", icon = Icons.Outlined.FormatPaint) {
+
+                        HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
 
                         Row(
                             modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp),
@@ -891,6 +929,16 @@ fun SettingsScreen(
                 item {
                     SettingsGroup(title = stringResource("audio_quality"), icon = Icons.Outlined.Tune) {
                         AudioSettingsContent(settings = audioSettings, onSettingsChange = onAudioSettingsChange)
+
+                        HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
+
+                        SwitchSetting(
+                            title = stringResource("native_engine_title"),
+                            description = stringResource("native_engine_desc"),
+                            icon = Icons.Outlined.Memory,
+                            checked = appSettings.useNativeEngine,
+                            onCheckedChange = { onAppSettingsChange(appSettings.copy(useNativeEngine = it)) }
+                        )
                     }
                 }
                 item {
@@ -906,7 +954,7 @@ fun SettingsScreen(
                     }
                 }
                 item {
-                    SettingsGroup(title = stringResource("advanced"), icon = Icons.Outlined.Science) {
+                    SettingsGroup(title = stringResource("startup_window"), icon = Icons.Outlined.PowerSettingsNew) {
                         SwitchSetting(
                             title = stringResource("launch_at_startup"),
                             description = stringResource("launch_at_startup_desc"),
@@ -1031,18 +1079,10 @@ fun SettingsScreen(
                                 }
                             }
                         }
-                        HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp))
-
-                        SwitchSetting(
-                            title = stringResource("native_engine_title"),
-                            description = stringResource("native_engine_desc"),
-                            icon = Icons.Outlined.Memory,
-                            checked = appSettings.useNativeEngine,
-                            onCheckedChange = { onAppSettingsChange(appSettings.copy(useNativeEngine = it)) }
-                        )
-
-                        HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp))
-
+                    }
+                }
+                item {
+                    SettingsGroup(title = stringResource("sounds_group"), icon = Icons.Outlined.VolumeUp) {
                         SwitchSetting(
                             title = stringResource("connection_sound_title"),
                             description = stringResource("connection_sound_desc"),
@@ -1060,11 +1100,10 @@ fun SettingsScreen(
                             checked = appSettings.disconnectionSoundEnabled,
                             onCheckedChange = { onAppSettingsChange(appSettings.copy(disconnectionSoundEnabled = it)) }
                         )
-
                     }
                 }
                 item {
-                    SettingsGroup(title = stringResource("cli_group_title"), icon = Icons.Outlined.Terminal) {
+                    SettingsGroup(title = stringResource("system_group"), icon = Icons.Outlined.Terminal) {
                         Row(
                             modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp),
                             verticalAlignment = Alignment.CenterVertically,
@@ -1127,10 +1166,66 @@ fun SettingsScreen(
                                 )
                             }
                         }
+                        if (FirewallHelper.isWindows) {
+                            HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
+                            Column(modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp)) {
+                                Text(
+                                    text = stringResource("fw_title"),
+                                    style = MaterialTheme.typography.bodyLarge
+                                )
+                                Spacer(Modifier.height(2.dp))
+                                Text(
+                                    text = if (fwActive) stringResource("fw_status_active") else stringResource("fw_status_inactive"),
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = if (fwActive) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                                Spacer(Modifier.height(4.dp))
+                                Text(
+                                    text = stringResource("fw_desc"),
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                                Spacer(Modifier.height(12.dp))
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.SpaceBetween
+                                ) {
+                                    OutlinedTextField(
+                                        value = fwPorts,
+                                        onValueChange = { fwPorts = it },
+                                        label = { Text(stringResource("fw_ports_label")) },
+                                        singleLine = true,
+                                        modifier = Modifier.weight(1f).padding(end = 16.dp)
+                                    )
+                                    Button(
+                                        enabled = !fwBusy,
+                                        onClick = {
+                                            val ports = fwPorts.split(Regex("[^0-9]+")).mapNotNull { it.toIntOrNull() }
+                                            settingsScope.launch(Dispatchers.IO) {
+                                                fwBusy = true
+                                                val r = FirewallHelper.openInboundPorts(ports)
+                                                fwResult = r
+                                                fwActive = FirewallHelper.rulesActive()
+                                                fwBusy = false
+                                            }
+                                        }
+                                    ) {
+                                        if (fwBusy) {
+                                            CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp)
+                                        } else {
+                                            Icon(Icons.Outlined.Security, contentDescription = null, modifier = Modifier.size(18.dp))
+                                        }
+                                        Spacer(Modifier.width(6.dp))
+                                        Text(stringResource("fw_btn"))
+                                    }
+                                }
+                            }
+                        }
                     }
                 }
                 item {
-                    SettingsGroup(title = stringResource("license"), icon = Icons.Outlined.Gavel) {
+                    SettingsGroup(title = stringResource("info_group"), icon = Icons.Outlined.Info) {
                         InfoSetting(
                             title = stringResource("license_info_title"),
                             description = stringResource("license_info_desc"),
@@ -1152,8 +1247,9 @@ fun SettingsScreen(
                             icon = Icons.Outlined.Description,
                             onClick = { showLicensesDialog = true }
                         )
-                    }
-                    SettingsGroup(title = stringResource("about&help"), icon = Icons.Outlined.Info) {
+
+                        HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
+
                         InfoSetting(
                             title = stringResource("developed_by"),
                             description = "Marco Morosi",

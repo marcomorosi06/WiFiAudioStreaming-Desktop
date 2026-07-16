@@ -2481,6 +2481,10 @@ object NetworkHandler_v1 {
                             onStatusUpdate("Client Connected: %s", arrayOf(clientAddress.toString()))
                             stopAnnouncingPresence()
 
+                            val ackText = helloAckMessage() + if (encrypting) ";enc=1" else ""
+                            socket.send(Datagram(buildPacket { writeText(ackText) }, clientAddress))
+                            WfasStats.add(WfasStats.Cat.HELLO, ackText.length)
+
                             if (useNativeEngine) {
                                 serverEngine = buildAndStartEngine(audioSettings)
                                 if (serverEngine == null) {
@@ -2494,10 +2498,6 @@ object NetworkHandler_v1 {
                                     break
                                 }
                             }
-
-                            val ackText = helloAckMessage() + if (encrypting) ";enc=1" else ""
-                            socket.send(Datagram(buildPacket { writeText(ackText) }, clientAddress))
-                            WfasStats.add(WfasStats.Cat.HELLO, ackText.length)
 
                             val clientAlive = java.util.concurrent.atomic.AtomicBoolean(true)
 

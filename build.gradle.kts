@@ -255,7 +255,7 @@ compose.desktop {
         jvmArgs += baseArgs
 
         nativeDistributions {
-            targetFormats(TargetFormat.Msi, TargetFormat.Dmg, TargetFormat.Deb, TargetFormat.Rpm)
+            targetFormats(TargetFormat.Dmg, TargetFormat.Deb, TargetFormat.Rpm)
 
             packageName = "WiFi Audio Streaming"
             packageVersion = appVersion
@@ -305,13 +305,13 @@ kotlin {
 // cartella scompattata in build/compose/binaries/main/app/. Queste task ne
 // creano archivi portabili, etichettati per OS e architettura.
 val portableLabel = "$nativeOsDir-$nativeArchDir"
-val portableAppDir = layout.buildDirectory.dir("compose/binaries/main/app")
+val portableAppDir = layout.buildDirectory.dir("compose/binaries/main-release/app")
 val portableOutDir = layout.buildDirectory.dir("packages")
 
 val packageZip by tasks.registering(Zip::class) {
     group = "distribution"
     description = "Crea uno .zip portabile dell'app"
-    dependsOn("createDistributable")
+    dependsOn("createReleaseDistributable")
     from(portableAppDir)
     destinationDirectory.set(portableOutDir)
     archiveFileName.set("WiFi-Audio-Streaming-$appVersion-$portableLabel.zip")
@@ -320,7 +320,7 @@ val packageZip by tasks.registering(Zip::class) {
 val packageTarGz by tasks.registering(Tar::class) {
     group = "distribution"
     description = "Crea un .tar.gz portabile dell'app"
-    dependsOn("createDistributable")
+    dependsOn("createReleaseDistributable")
     from(portableAppDir)
     destinationDirectory.set(portableOutDir)
     archiveFileName.set("WiFi-Audio-Streaming-$appVersion-$portableLabel.tar.gz")
