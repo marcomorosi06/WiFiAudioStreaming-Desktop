@@ -586,7 +586,7 @@ object NetworkHandler_v1 {
     @Volatile private var serverGrabber: org.bytedeco.javacv.FFmpegFrameGrabber? = null
 
     // ── Protocollo audio: header 10 byte preposto a ogni pacchetto PCM ────────
-    // Layout (Big-Endian): [magic:2=0x5746][version:1=0x01][flags:1][seqNum:2][samplePos:4]
+    // Layout (Big-Endian): [magic:2=0x5746][version:1=0x02][flags:1][seqNum:2][samplePos:4]
     // flags bit0=silence. I pacchetti control (PING/BYE/HELLO) iniziano con ASCII
     // e non matchano mai il magic 0x57 0x46, quindi la distinzione è inequivoca.
     private val AUDIO_MAGIC_0: Byte = 0x57   // 'W'
@@ -3544,6 +3544,11 @@ fun main(args: Array<String>) {
 
     if (cliArgs.configCmd != null) {
         val code = ConfigCli.run(cliArgs.configCmd, cliArgs.json)
+        kotlin.system.exitProcess(code)
+    }
+
+    if (cliArgs.firewallCmd != null) {
+        val code = FirewallCli.run(cliArgs.firewallCmd, cliArgs.json)
         kotlin.system.exitProcess(code)
     }
 

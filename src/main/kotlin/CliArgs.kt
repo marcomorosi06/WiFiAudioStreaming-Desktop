@@ -53,6 +53,7 @@ data class CliArgs(
     val sdpOut:          String?         = null,
     val controlCmd:      ControlCommand? = null,
     val configCmd:       ConfigCommand?  = null,
+    val firewallCmd:     FirewallCommand? = null,
     val networkIface:    String          = "Auto",
     val useNativeEngine: Boolean         = true,
     val viz:             Boolean         = false,
@@ -118,6 +119,7 @@ data class CliArgs(
             var sdpOut: String?             = null
             var controlCmd: ControlCommand? = null
             var configCmd: ConfigCommand?   = null
+            var firewallCmd: FirewallCommand? = null
             var networkIface    = "Auto"
             var useNativeEngine = true
             var viz             = false
@@ -211,6 +213,26 @@ data class CliArgs(
                                 ConfigCommand.Import(p)
                             }
                             else -> parseError("Unknown config subcommand '$sub'. Valid: list, get, set, path, edit, reset, export, import")
+                        }
+                    }
+
+                    "firewall", "fw" -> {
+                        modeExplicit = true
+                        val sub = args.getOrNull(i + 1)?.lowercase()
+                        firewallCmd = when {
+                            sub == "status" -> { i++; FirewallCommand.Status }
+                            sub == "allow" || sub == "open" || sub == "enable" -> {
+                                i++
+                                val p = args.getOrNull(i + 1)?.takeIf { !it.startsWith("-") }
+                                if (p != null) i++
+                                FirewallCommand.Allow(p?.split(Regex("[^0-9]+"))?.mapNotNull { it.toIntOrNull() } ?: emptyList())
+                            }
+                            sub == null -> FirewallCommand.Allow(emptyList())
+                            sub.any { it.isDigit() } -> {
+                                i++
+                                FirewallCommand.Allow(sub.split(Regex("[^0-9]+")).mapNotNull { it.toIntOrNull() })
+                            }
+                            else -> parseError("Unknown firewall subcommand '$sub'. Valid: allow [ports], status")
                         }
                     }
 
@@ -364,6 +386,7 @@ data class CliArgs(
                 sdpOut          = sdpOut,
                 controlCmd      = controlCmd,
                 configCmd       = configCmd,
+                firewallCmd     = firewallCmd,
                 networkIface    = networkIface,
                 useNativeEngine = useNativeEngine,
                 viz             = viz,
@@ -471,6 +494,15 @@ CONFIGURATION  (wfas config <command>)
   import <file>       Load a config.json and make it active
   Add --json to any config command for machine-readable output.
 
+FIREWALL  (wfas firewall <command>)   [Windows only]
+  Opens the inbound UDP ports so clients can reach this machine, exactly like
+  the button in the GUI settings. Prompts once for administrator approval.
+  allow [ports]       Allow inbound UDP. With no ports, opens the configured
+                      streaming, discovery (9091) and mic ports. Or pass a list,
+                      e.g. 'wfas firewall allow 9090,9091'
+  status              Show whether the WFAS firewall rule is active
+  Add --json for machine-readable output.
+
 DISCOVER OPTIONS
   --watch             Keep scanning (live update)
 
@@ -505,6 +537,8 @@ EXAMPLES
   wfas config set audio.sampleRate 44100  # change a setting (GUI + CLI)
   wfas config list                        # show every setting and its value
   wfas config path                        # print the config.json path
+  wfas firewall allow                     # open the default ports in the firewall
+  wfas firewall status                    # check if the firewall rule is active
   wfas --gui --mode server --multicast    # open GUI, start server immediately
   wfas --viz rainbow                      # spectrum with animated rainbow colors
   wfas --viz "#1e88e5"                    # spectrum themed from a hex color
@@ -604,7 +638,7 @@ SECURITY  (optional, unicast only)
              server -> WFAS_AUTH_REQUIRED;snonce=S;sproof=HMAC(K,"WFAS-S:"+C+":"+S)
              client -> HELLO_FROM_CLIENT;v=2;cnonce=C;cproof=HMAC(K,"WFAS-C:"+C+":"+S)
              server -> HELLO_ACK  or  WFAS_UNAUTHORIZED
-  The discovery beacon is NOT trusted (it carries at most secure=1 as a hint); a
+  The discovery beacon is NOT trusted (it carries at most auth=/enc= hints); a
   client that requires a key aborts unless the key exchange actually happened, so
   a spoofed "no security" cannot downgrade it.
 

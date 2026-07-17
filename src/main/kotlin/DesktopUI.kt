@@ -206,11 +206,14 @@ fun AppContent(
         LaunchedEffect(Unit) {
             focusRequester.requestFocus()
         }
+        Box(modifier = Modifier.fillMaxSize().padding(paddingValues)) {
         LazyColumn(
             state = listState,
             modifier = Modifier
-                .fillMaxSize()
-                .padding(paddingValues)
+                .align(Alignment.TopCenter)
+                .fillMaxHeight()
+                .widthIn(max = 720.dp)
+                .fillMaxWidth()
                 .focusRequester(focusRequester)
                 .onFocusChanged { /* keep focus awareness */ }
                 .onKeyEvent { keyEvent ->
@@ -391,6 +394,7 @@ fun AppContent(
                     }
                 }
             }
+        }
         }
     }
 }
