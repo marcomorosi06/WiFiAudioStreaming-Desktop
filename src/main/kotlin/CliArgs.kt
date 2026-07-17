@@ -17,7 +17,7 @@
 
 import java.awt.GraphicsEnvironment
 
-enum class RunMode { GUI, CLI_SERVER, CLI_CLIENT, CLI_DISCOVER, CLI_CONTROL }
+enum class RunMode { GUI, CLI_SERVER, CLI_CLIENT, CLI_DISCOVER, CLI_CONTROL, CLI_MONITOR }
 
 sealed class ControlCommand {
     data class Volume(val value: Float) : ControlCommand()
@@ -57,6 +57,7 @@ data class CliArgs(
     val useNativeEngine: Boolean         = true,
     val viz:             Boolean         = false,
     val vizTheme:        String?         = null,
+    val monitor:         Boolean         = false,
     val printHelp:       Boolean         = false,
     val printVersion:    Boolean         = false,
     val printProtocol:   Boolean         = false,
@@ -121,6 +122,7 @@ data class CliArgs(
             var useNativeEngine = true
             var viz             = false
             var vizTheme: String?           = null
+            var monitor         = false
             var printHelp       = false
             var printVersion    = false
             var printProtocol   = false
@@ -286,6 +288,7 @@ data class CliArgs(
                             else parseError("--viz value must be a hex color (e.g. #1e88e5) or 'rainbow', got '$nv'")
                         }
                     }
+                    "--monitor", "--listen" -> monitor = true
                     "--help", "-h"     -> printHelp     = true
                     "--version", "-v"  -> printVersion  = true
                     "--protocol"       -> printProtocol = true
@@ -330,6 +333,11 @@ data class CliArgs(
 
             if (rtp || http) multicast = true
 
+            if (monitor) {
+                if (!viz) parseError("--monitor requires --viz")
+                runMode = RunMode.CLI_MONITOR
+            }
+
             return CliArgs(
                 runMode         = runMode,
                 guiInitMode     = if (runMode == RunMode.GUI) guiSubMode else null,
@@ -360,6 +368,7 @@ data class CliArgs(
                 useNativeEngine = useNativeEngine,
                 viz             = viz,
                 vizTheme        = vizTheme,
+                monitor         = monitor,
                 printHelp       = printHelp,
                 printVersion    = printVersion,
                 printProtocol   = printProtocol,
@@ -474,6 +483,9 @@ GLOBAL OPTIONS
                       Optional theme: a hex color (e.g. #1e88e5) recolors the
                       whole view via the Material You palette, or 'rainbow'
                       for an animated dynamic rainbow.
+  --monitor           Only with --viz: no server, just visualize the system
+                      audio (loopback) without lowering the system volume.
+                      Alias: --listen
   --debug             Live debug HUD: audio packet table + microphone
                       send/receive table (with --mic), then internal logs
   --protocol          Explain the WFAS v2 wire protocol and exit
@@ -496,6 +508,7 @@ EXAMPLES
   wfas --gui --mode server --multicast    # open GUI, start server immediately
   wfas --viz rainbow                      # spectrum with animated rainbow colors
   wfas --viz "#1e88e5"                    # spectrum themed from a hex color
+  wfas --viz --monitor                    # spectrogram of system audio, no server
   wfas --protocol                         # print the WFAS v2 protocol reference
 
 FILES

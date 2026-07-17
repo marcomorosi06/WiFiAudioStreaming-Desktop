@@ -76,6 +76,8 @@ static volatile int   g_mic_ring_r  = 0;
 static volatile int   g_mic_enabled = 0;
 static volatile float g_mic_volume  = 1.0f;
 
+static int g_mute_render = 1;
+
 #if defined(_WIN32)
 static SRWLOCK g_mic_srw = SRWLOCK_INIT;
 static void mic_lock(void)   { AcquireSRWLockExclusive(&g_mic_srw); }
@@ -443,7 +445,7 @@ static jboolean wasapi_start(int sample_rate, int channels) {
     g_device = pick_best_render_device(g_enumerator);
     if (!g_device) { set_error("No render device found"); return JNI_FALSE; }
 
-    mute_render_endpoint(g_device);
+    if (g_mute_render) mute_render_endpoint(g_device);
 
     hr = IMMDevice_Activate(g_device, &IID_IAudioClient_local, CLSCTX_ALL, NULL, (void **)&g_audio_client);
     if (FAILED(hr)) { set_error("IMMDevice_Activate failed: 0x%08lX", hr); return JNI_FALSE; }
@@ -1258,7 +1260,7 @@ static jboolean pulse_start(int sample_rate, int channels) {
         return JNI_FALSE;
     }
 
-    linux_save_and_mute_sink();
+    if (g_mute_render) linux_save_and_mute_sink();
 
     g_pa_rate      = sample_rate;
     g_pa_channels  = channels;
@@ -1500,9 +1502,10 @@ extern void     mac_set_system_volume(float volume);
 
 JNIEXPORT jboolean JNICALL
 Java_AudioEngine_nativeStart(JNIEnv *env, jobject thiz,
-        jint sample_rate, jint channels, jint buffer_frames) {
+        jint sample_rate, jint channels, jint buffer_frames, jboolean mute_render) {
     (void)env; (void)thiz;
     g_last_error[0] = '\0';
+    g_mute_render = (mute_render == JNI_TRUE) ? 1 : 0;
 
 #if defined(_WIN32)
     return wasapi_start((int)sample_rate, (int)channels);

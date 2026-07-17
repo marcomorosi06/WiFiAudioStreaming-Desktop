@@ -286,9 +286,62 @@ fun runCli(args: CliArgs) {
             RunMode.CLI_SERVER  -> runCliServer(args, settings)
             RunMode.CLI_CLIENT  -> runCliClient(args, settings)
             RunMode.CLI_DISCOVER -> runCliDiscover(args)
+            RunMode.CLI_MONITOR  -> runCliMonitor(args, settings)
             else -> Unit
         }
     }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Monitor mode (visualize system audio, no server, no volume change)
+// ─────────────────────────────────────────────────────────────────────────────
+
+private suspend fun runCliMonitor(args: CliArgs, settings: AllSettings) {
+    val audio = settings.audio
+
+    if (!AudioEngine.loadLibrary()) {
+        out(red("!") + " Native audio engine not available: ${AudioEngine.getLoadError() ?: "unknown error"}", args)
+        return
+    }
+
+    val viz = AudioVisualizer(
+        channels = audio.channels,
+        label = "monitor  system audio",
+        sampleRate = audio.sampleRate.toInt(),
+        theme = args.vizTheme,
+        volumeEnabled = false
+    )
+    val done = CompletableDeferred<Unit>()
+    viz.onQuit = { if (!done.isCompleted) done.complete(Unit) }
+    viz.statusMsg = ""
+    viz.start()
+
+    val bufFrames = (audio.sampleRate.toInt() * 10 / 1000).coerceAtLeast(256)
+    val engine = AudioEngine(
+        sampleRate   = audio.sampleRate.toInt(),
+        channels     = audio.channels,
+        bufferFrames = bufFrames,
+        muteRender   = false
+    )
+    if (!engine.start()) {
+        viz.stop()
+        out(red("!") + " Cannot start audio capture: ${engine.lastError}", args)
+        return
+    }
+
+    coroutineScope {
+        val job = launch(Dispatchers.IO) {
+            while (isActive) {
+                val frame = engine.readFrame() ?: break
+                if (frame.isNotEmpty()) viz.feedFrame(frame)
+            }
+        }
+        done.await()
+        job.cancelAndJoin()
+    }
+
+    engine.stop()
+    viz.stop()
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

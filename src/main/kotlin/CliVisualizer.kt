@@ -146,6 +146,7 @@ class AudioVisualizer(
     private val label: String = "server",
     private val sampleRate: Int = 48000,
     private val theme: String? = null,
+    volumeEnabled: Boolean = true,
 ) {
 
     companion object {
@@ -258,6 +259,7 @@ class AudioVisualizer(
     @Volatile private var volPct = 100
     var onQuit: (() -> Unit)? = null
     var onVolume: ((Float) -> Unit)? = null
+    @Volatile var volumeEnabled = volumeEnabled
 
     init {
         var j = 0
@@ -349,7 +351,7 @@ class AudioVisualizer(
 
         val tp = rulePieces(" WiFi Audio Streaming | $label ")
         topDashL = tp.first; topTitle = tp.second; topDashR = tp.third
-        val bp = rulePieces(" q quit . v volume . ${cols}x${rows} ")
+        val bp = rulePieces(if (volumeEnabled) " q quit . v volume . ${cols}x${rows} " else " q quit . ${cols}x${rows} ")
         botDashL = bp.first; botTitle = bp.second; botDashR = bp.third
 
         buildColors()
@@ -761,9 +763,8 @@ class AudioVisualizer(
         if (cur.isNotEmpty()) sb.append(RESET)
         paint(sb, BRACKET.toString(), openCol + 1 + meterW, RULE)
         if (showDb) {
-            val db = chDb[c]
-            val txt = if (db <= METER_FLOOR + 0.5f) String.format(Locale.US, " %5s dB", "-inf")
-                      else String.format(Locale.US, " %5.1f dB", db)
+            val db = chDb[c].coerceAtLeast(METER_FLOOR.toFloat())
+            val txt = String.format(Locale.US, " %5.1f dB", db)
             paint(sb, txt, openCol + 1 + meterW + 1, textColor)
         }
         return sb.toString()
@@ -838,18 +839,19 @@ class AudioVisualizer(
         when (mode) {
             Mode.NORMAL -> when (k) {
                 "Q" -> mode = Mode.CONFIRM_QUIT
-                "V" -> mode = Mode.VOLUME
+                "V" -> if (volumeEnabled) mode = Mode.VOLUME
                 else -> {}
             }
             Mode.CONFIRM_QUIT -> when (k) {
                 "Y" -> { mode = Mode.NORMAL; onQuit?.invoke() }
-                "N", "ESCAPE", "Q" -> mode = Mode.NORMAL
+                "N", "ESCAPE" -> mode = Mode.NORMAL
                 else -> {}
             }
             Mode.VOLUME -> when (k) {
                 "UPARROW", "RIGHTARROW", "D", "ADD", "OEMPLUS" -> changeVol(5)
                 "DOWNARROW", "LEFTARROW", "A", "SUBTRACT", "OEMMINUS" -> changeVol(-5)
-                "ENTER", "ESCAPE", "V", "Q" -> mode = Mode.NORMAL
+                "ENTER", "ESCAPE", "V" -> mode = Mode.NORMAL
+                "Q" -> mode = Mode.CONFIRM_QUIT
                 else -> {}
             }
         }

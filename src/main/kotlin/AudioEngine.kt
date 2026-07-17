@@ -24,7 +24,8 @@ import java.io.InputStream
 class AudioEngine(
     val sampleRate: Int   = 48000,
     val channels:   Int   = 2,
-    val bufferFrames: Int = 3200
+    val bufferFrames: Int = 3200,
+    val muteRender: Boolean = true
 ) {
     var lastError: String = ""
         private set
@@ -34,7 +35,7 @@ class AudioEngine(
     private val numSamplesPerRead = bufferFrames * channels
     private val readBufShort      = ShortArray(numSamplesPerRead)
 
-    private external fun nativeStart(sampleRate: Int, channels: Int, bufferFrames: Int): Boolean
+    private external fun nativeStart(sampleRate: Int, channels: Int, bufferFrames: Int, muteRender: Boolean): Boolean
     private external fun nativeRead(outBuf: ShortArray, numSamples: Int): Int
     private external fun nativeStop()
     private external fun nativeGetError(): String
@@ -126,7 +127,7 @@ class AudioEngine(
         if (started) return true
 
         nativeSetDebug(AppDebug.enabled)
-        val ok = nativeStart(sampleRate, channels, bufferFrames)
+        val ok = nativeStart(sampleRate, channels, bufferFrames, muteRender)
         if (!ok) {
             lastError = nativeGetError().ifEmpty { "Unknown error in nativeStart" }
             return false
