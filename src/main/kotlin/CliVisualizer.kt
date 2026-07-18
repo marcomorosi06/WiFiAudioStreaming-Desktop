@@ -147,6 +147,7 @@ class AudioVisualizer(
     private val sampleRate: Int = 48000,
     private val theme: String? = null,
     volumeEnabled: Boolean = true,
+    groove: Float = 0f,
 ) {
 
     companion object {
@@ -164,6 +165,15 @@ class AudioVisualizer(
         private const val RAINBOW_STEP = 3f
         private const val DEF_COLS     = 90
         private const val DEF_ROWS     = 24
+
+        private const val GRV_MAX      = 1.6f
+        private const val GRV_SLOW     = 0.012f
+        private const val GRV_RADIUS   = 0.07f
+        private const val GRV_CONTRAST = 0.85f
+        private const val GRV_WHITEN   = 0.25f
+        private const val GRV_GATE_DB  = 8.0f
+        private const val GRV_MAX_DEV  = 22.0f
+        private const val GRV_RELEASE  = 0.30f
 
         private const val BAR_CHAR  = '#'
         private const val CAP_CHAR  = '-'
@@ -212,6 +222,14 @@ class AudioVisualizer(
     private var topPad = 0
     private var vizCols = DEF_COLS
     private var vizRows = DEF_ROWS
+
+    private val grooveDefault = groove.coerceIn(0f, GRV_MAX).takeIf { it > 0f } ?: 1f
+    @Volatile private var grooveAmt = groove.coerceIn(0f, GRV_MAX)
+    @Volatile private var hudDirty = false
+    private var gvDb = FloatArray(0)
+    private var gvSlow = FloatArray(0)
+    private var gvSum = FloatArray(0)
+    @Volatile private var gvReady = false
 
     private var binLo = IntArray(0)
     private var binHi = IntArray(0)
@@ -331,6 +349,11 @@ class AudioVisualizer(
         rowColor = Array(specRows) { "" }
         meterColor = Array(meterW) { "" }
 
+        gvDb = FloatArray(numBars)
+        gvSlow = FloatArray(numBars)
+        gvSum = FloatArray(numBars + 1)
+        gvReady = false
+
         val nyq = sampleRate / 2.0
         val fMax = min(nyq * 0.92, 20000.0).coerceAtLeast(F_MIN * 4)
         val freqRes = sampleRate.toDouble() / FFT_SIZE
@@ -351,10 +374,25 @@ class AudioVisualizer(
 
         val tp = rulePieces(" WiFi Audio Streaming | $label ")
         topDashL = tp.first; topTitle = tp.second; topDashR = tp.third
-        val bp = rulePieces(if (volumeEnabled) " q quit . v volume . ${cols}x${rows} " else " q quit . ${cols}x${rows} ")
-        botDashL = bp.first; botTitle = bp.second; botDashR = bp.third
+        buildBottomRule()
 
         buildColors()
+    }
+
+    private fun buildBottomRule() {
+        val vol = if (volumeEnabled) " . v volume" else ""
+        val volShort = if (volumeEnabled) " . v vol" else ""
+        val state = if (grooveAmt > 0f) "on" else "off"
+        val full = " q quit$vol . g groove $state . ${vizCols}x${vizRows} "
+        val mid = " q quit$volShort . g groove $state "
+        val small = if (volumeEnabled) " q . v . g $state " else " q . g $state "
+        val txt = when {
+            full.length <= totalW -> full
+            mid.length <= totalW -> mid
+            else -> small
+        }
+        val bp = rulePieces(txt)
+        botDashL = bp.first; botTitle = bp.second; botDashR = bp.third
     }
 
     private fun awtColor(h: Float, s: Float, b: Float): String {
@@ -603,6 +641,7 @@ class AudioVisualizer(
         fft()
         val gain = (2.0 / (FFT_SIZE * 0.5)) / 32768.0
         val denom = CEIL_DB - FLOOR_DB
+        var loudest = -400.0
         for (bnd in 0 until numBars) {
             var m = 0.0
             var b = binLo[bnd]
@@ -617,10 +656,17 @@ class AudioVisualizer(
             val amp = sqrt(m) * gain
             val tilt = TILT_DB * bnd / (numBars - 1).coerceAtLeast(1)
             val dbv = 20.0 * log10(amp + 1e-12) + tilt
-            var v = ((dbv - FLOOR_DB) / denom).toFloat()
+            if (dbv > loudest) loudest = dbv
+            gvDb[bnd] = dbv.toFloat()
+        }
+        val grv = grooveAmt
+        if (grv > 0f) applyGroove(grv, loudest) else { gvReady = false }
+        val release = RELEASE + (GRV_RELEASE - RELEASE) * (grv / GRV_MAX).coerceIn(0f, 1f)
+        for (bnd in 0 until numBars) {
+            var v = ((gvDb[bnd] - FLOOR_DB) / denom).toFloat()
             if (v < 0f) v = 0f else if (v > 1f) v = 1f
             if (v > bars[bnd]) bars[bnd] += (v - bars[bnd]) * ATTACK
-            else bars[bnd] += (v - bars[bnd]) * RELEASE
+            else bars[bnd] += (v - bars[bnd]) * release
             if (bars[bnd] >= peaks[bnd]) {
                 peaks[bnd] = bars[bnd]
                 peakVel[bnd] = 0f
@@ -644,7 +690,39 @@ class AudioVisualizer(
         }
     }
 
+    private fun applyGroove(amount: Float, loudestDb: Double) {
+        val n = numBars
+        if (n < 3) return
+        if (!gvReady) {
+            for (b in 0 until n) gvSlow[b] = gvDb[b]
+            gvReady = true
+        }
+        val gate = ((loudestDb - FLOOR_DB) / GRV_GATE_DB).coerceIn(0.0, 1.0).toFloat()
+        if (gate <= 0f) return
+        val k = amount * gate
+        var slowSum = 0f
+        for (b in 0 until n) {
+            gvSlow[b] += (gvDb[b] - gvSlow[b]) * GRV_SLOW
+            slowSum += gvSlow[b]
+        }
+        val slowMean = slowSum / n
+        gvSum[0] = 0f
+        for (b in 0 until n) gvSum[b + 1] = gvSum[b] + gvDb[b]
+        val r = (n * GRV_RADIUS).roundToInt().coerceIn(1, 12)
+        for (b in 0 until n) {
+            val lo = (b - r).coerceAtLeast(0)
+            val hi = (b + r + 1).coerceAtMost(n)
+            val local = (gvSum[hi] - gvSum[lo]) / (hi - lo)
+            val d = gvDb[b]
+            var o = d + GRV_CONTRAST * (d - local) - GRV_WHITEN * (gvSlow[b] - slowMean)
+            if (o > d + GRV_MAX_DEV) o = d + GRV_MAX_DEV
+            else if (o < d - GRV_MAX_DEV) o = d - GRV_MAX_DEV
+            gvDb[b] = d + (o - d) * k
+        }
+    }
+
     private fun renderAnsi() {
+        if (hudDirty) { hudDirty = false; buildBottomRule() }
         updateRainbow()
         val lines = ArrayList<String>(specRows + dispCh + 7)
         lines.add(topRuleStr())
@@ -835,11 +913,18 @@ class AudioVisualizer(
         onVolume?.invoke(volPct / 100f)
     }
 
+    private fun toggleGroove() {
+        grooveAmt = if (grooveAmt > 0f) 0f else grooveDefault
+        gvReady = false
+        hudDirty = true
+    }
+
     private fun handleKey(k: String) {
         when (mode) {
             Mode.NORMAL -> when (k) {
                 "Q" -> mode = Mode.CONFIRM_QUIT
                 "V" -> if (volumeEnabled) mode = Mode.VOLUME
+                "G" -> toggleGroove()
                 else -> {}
             }
             Mode.CONFIRM_QUIT -> when (k) {
@@ -851,6 +936,7 @@ class AudioVisualizer(
                 "UPARROW", "RIGHTARROW", "D", "ADD", "OEMPLUS" -> changeVol(5)
                 "DOWNARROW", "LEFTARROW", "A", "SUBTRACT", "OEMMINUS" -> changeVol(-5)
                 "ENTER", "ESCAPE", "V" -> mode = Mode.NORMAL
+                "G" -> toggleGroove()
                 "Q" -> mode = Mode.CONFIRM_QUIT
                 else -> {}
             }
@@ -868,6 +954,7 @@ class AudioVisualizer(
         89 -> "Y"
         78 -> "N"
         86 -> "V"
+        71 -> "G"
         65 -> "A"
         68 -> "D"
         38 -> "UPARROW"
@@ -928,6 +1015,7 @@ class AudioVisualizer(
                                 'Y' -> handleKey("Y")
                                 'N' -> handleKey("N")
                                 'V' -> handleKey("V")
+                                'G' -> handleKey("G")
                                 'A' -> handleKey("A")
                                 'D' -> handleKey("D")
                                 '+' -> handleKey("ADD")

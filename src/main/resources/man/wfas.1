@@ -334,6 +334,59 @@ engine fails to initialise.
 .B --no-native-engine
 is a legacy alias for the same flag.
 .TP
+\fB--viz\fR [\fItheme\fR]
+Draw an animated ASCII spectrum histogram of the audio being streamed, plus a
+per-channel level meter. The optional
+.I theme
+is either a hex colour (e.g.\&
+.BR "#1e88e5" )
+which recolours the whole view from that seed, or the literal
+.BR rainbow
+for an animated hue sweep. Press
+.B q
+to quit and
+.B v
+to adjust the volume without leaving the view.
+.TP
+\fB--groove\fR [\fIamount\fR]
+(Requires
+.BR --viz .)
+Adaptive spectrum instead of raw levels. A plain FFT display is dominated by
+low frequencies, which carry most of the energy in nearly all music: the bass
+bars sit pinned at full scale and everything else collapses into a static
+blob. With
+.B --groove
+each band is judged relative to its own context rather than in absolute terms:
+.RS
+.IP \(bu 3
+each band is compared with its frequency neighbours, so a note that pokes out
+of its region is amplified while broadband noise stays flat;
+.IP \(bu 3
+a slow envelope per band is subtracted, so the constant part of the spectrum
+stops dominating and the low bars no longer sit pinned at full scale.
+.PP
+The net effect is that the display tracks the melody and the rhythm rather than
+the raw energy. Everything is relative, so silence stays silent: a gate fades
+the processing out when there is no signal, and no noise is invented.
+.PP
+The optional
+.I amount
+is
+.BR soft ", " normal " or " hard
+(equivalently a number from 0 to 160, where 100 is
+.BR normal ).
+Press
+.B g
+inside the visualizer to toggle the effect on and off while it runs, which is
+the easiest way to see what it does.
+.RE
+.TP
+.BR --monitor ", " --listen
+(Requires
+.BR --viz .)
+Do not start a server: just visualize the system audio through loopback
+capture, leaving the system volume untouched.
+.TP
 .B --protocol
 Print an explanation of the WFAS v2 wire protocol (packet format, control
 messages, version negotiation) and exit.

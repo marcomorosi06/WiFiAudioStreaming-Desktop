@@ -58,6 +58,7 @@ data class CliArgs(
     val useNativeEngine: Boolean         = true,
     val viz:             Boolean         = false,
     val vizTheme:        String?         = null,
+    val groove:          Float           = 0f,
     val monitor:         Boolean         = false,
     val printHelp:       Boolean         = false,
     val printVersion:    Boolean         = false,
@@ -124,6 +125,7 @@ data class CliArgs(
             var useNativeEngine = true
             var viz             = false
             var vizTheme: String?           = null
+            var groove          = 0f
             var monitor         = false
             var printHelp       = false
             var printVersion    = false
@@ -310,6 +312,24 @@ data class CliArgs(
                             else parseError("--viz value must be a hex color (e.g. #1e88e5) or 'rainbow', got '$nv'")
                         }
                     }
+                    "--groove" -> {
+                        groove = 1f
+                        val nv = args.getOrNull(i + 1)
+                        if (nv != null && !nv.startsWith("-")) {
+                            groove = when (nv.lowercase()) {
+                                "soft", "subtle", "low"  -> 0.5f
+                                "normal", "mid", "auto"  -> 1f
+                                "hard", "strong", "high" -> 1.5f
+                                else -> {
+                                    val n = nv.toFloatOrNull()
+                                        ?: parseError("--groove value must be soft, normal, hard or a number 0-160, got '$nv'")
+                                    if (n < 0f || n > 160f) parseError("--groove value $nv is out of range (0-160)")
+                                    n / 100f
+                                }
+                            }
+                            i++
+                        }
+                    }
                     "--monitor", "--listen" -> monitor = true
                     "--help", "-h"     -> printHelp     = true
                     "--version", "-v"  -> printVersion  = true
@@ -360,6 +380,8 @@ data class CliArgs(
                 runMode = RunMode.CLI_MONITOR
             }
 
+            if (groove > 0f && !viz) parseError("--groove requires --viz")
+
             return CliArgs(
                 runMode         = runMode,
                 guiInitMode     = if (runMode == RunMode.GUI) guiSubMode else null,
@@ -391,6 +413,7 @@ data class CliArgs(
                 useNativeEngine = useNativeEngine,
                 viz             = viz,
                 vizTheme        = vizTheme,
+                groove          = groove,
                 monitor         = monitor,
                 printHelp       = printHelp,
                 printVersion    = printVersion,
@@ -515,6 +538,14 @@ GLOBAL OPTIONS
                       Optional theme: a hex color (e.g. #1e88e5) recolors the
                       whole view via the Material You palette, or 'rainbow'
                       for an animated dynamic rainbow.
+  --groove [amount]   Only with --viz: adaptive spectrum. Instead of drawing
+                      raw levels (where bass pins the low bars at full scale
+                      and everything else flattens into one blob) each band is
+                      compared with its frequency neighbours, so a note that
+                      pokes out of its region is lifted, and a slow per-band
+                      envelope is subtracted, so the constant part of the mix
+                      stops dominating. Optional amount: soft | normal | hard,
+                      or 0-160. Press 'g' in the visualizer to toggle it live.
   --monitor           Only with --viz: no server, just visualize the system
                       audio (loopback) without lowering the system volume.
                       Alias: --listen
@@ -543,6 +574,8 @@ EXAMPLES
   wfas --viz rainbow                      # spectrum with animated rainbow colors
   wfas --viz "#1e88e5"                    # spectrum themed from a hex color
   wfas --viz --monitor                    # spectrogram of system audio, no server
+  wfas --viz --monitor --groove           # same, adaptive: follows the melody
+  wfas --viz --groove hard                # maximum contrast between notes
   wfas --protocol                         # print the WFAS v2 protocol reference
 
 FILES

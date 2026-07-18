@@ -309,7 +309,8 @@ private suspend fun runCliMonitor(args: CliArgs, settings: AllSettings) {
         label = "monitor  system audio",
         sampleRate = audio.sampleRate.toInt(),
         theme = args.vizTheme,
-        volumeEnabled = false
+        volumeEnabled = false,
+        groove = args.groove
     )
     val done = CompletableDeferred<Unit>()
     viz.onQuit = { if (!done.isCompleted) done.complete(Unit) }
@@ -396,7 +397,7 @@ private suspend fun runCliServer(args: CliArgs, settings: AllSettings) {
     }
 
     val viz = if (args.viz && !args.json)
-        AudioVisualizer(channels = audio.channels, label = "server  ${serverIp}:${args.port}", sampleRate = audio.sampleRate.toInt(), theme = args.vizTheme)
+        AudioVisualizer(channels = audio.channels, label = "server  ${serverIp}:${args.port}", sampleRate = audio.sampleRate.toInt(), theme = args.vizTheme, groove = args.groove)
     else null
 
     val done = kotlinx.coroutines.CompletableDeferred<Unit>()
@@ -552,7 +553,7 @@ private suspend fun runCliClient(args: CliArgs, settings: AllSettings) {
     }
 
     val viz = if (args.viz && !args.json)
-        AudioVisualizer(channels = settings.audio.channels, label = "client  ${serverInfo.ip}:${serverInfo.port}", sampleRate = settings.audio.sampleRate.toInt(), theme = args.vizTheme)
+        AudioVisualizer(channels = settings.audio.channels, label = "client  ${serverInfo.ip}:${serverInfo.port}", sampleRate = settings.audio.sampleRate.toInt(), theme = args.vizTheme, groove = args.groove)
     else null
 
     val done = kotlinx.coroutines.CompletableDeferred<Unit>()
