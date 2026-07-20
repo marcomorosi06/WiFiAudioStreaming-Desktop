@@ -235,8 +235,10 @@ fun printUpdateCheck() {
             println(yellow("→ ") + bold("Update available: v${r.latest}") + dim(" (you have v${r.current})") + "\n  ${r.url}")
         is UpdateChecker.Result.UpToDate ->
             println(green("✓") + " You are on the latest version (v${r.current}).")
+        is UpdateChecker.Result.Ahead ->
+            println(yellow("→ ") + "I see what you did there in build.gradle. (local v${r.current}, GitHub v${r.latest})")
         is UpdateChecker.Result.Failed ->
-            err(yellow("!") + " Could not check for updates: ${r.reason}")
+            err(yellow("!") + " GitHub is not responding: ${r.reason}")
     }
 }
 

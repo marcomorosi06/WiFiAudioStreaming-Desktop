@@ -114,9 +114,16 @@ capabilities, while version compatibility is decided at connection time
 | `HELLO_FROM_CLIENT;v=<n>`      | client → server  | Connect request carrying client version.  |
 | `HELLO_ACK;v=<n>`              | server → client  | Accept, carrying server version.          |
 | `WFAS_INCOMPATIBLE;v=<n>`      | server → client  | Reject: version mismatch, server is `<n>`.|
+| `WFAS_BUSY`                    | server → client  | Reject: the unicast session is already taken (Section 5.6). |
 | `PING`                         | server → client  | Keep‑alive (every 1 s; 3 s timeout).      |
 | `BYE`                          | server → client  | Server stopping / client gone.            |
 | `CLIENT_BYE`                   | client → server  | Client disconnecting cleanly.             |
+
+`WFAS_BUSY` is an optional, additive rejection (added in the v2 line, no version
+bump — see Section 6): a server that does not implement it simply stays silent
+and the client times out as before, so it is safe to omit in a minimal
+implementation. A client that does not know it treats it as an unexpected reply
+and falls back to its generic "handshake failed" path.
 
 The `;v=<n>` suffix is the only addition in v2. Parsers extract the version with
 a tolerant token scan (`v=` followed by an integer); a missing suffix is treated
@@ -199,6 +206,32 @@ combination is only possible when one side was not updated; the multicast path
 for the same pairing is fully covered by the sentinel, and once both ends are on
 v2+ every path is clean. This is an inherent limitation of the unversioned v1
 handshake and cannot be fixed without changing already‑released v1 builds.
+
+### 5.6 Session exclusivity (unicast)
+
+A unicast server serves **exactly one** client at a time. From the moment the
+handshake completes until the session ends, the server is bound to that client's
+IP address, and the binding is enforced on **every** datagram received on the
+streaming socket:
+
+* `HELLO_FROM_CLIENT` or `MODE_PROBE` from **any other** address → the server
+  replies `WFAS_BUSY` to that address and keeps the current session untouched.
+* `CLIENT_BYE` (and any other control message) from **any other** address is
+  **discarded**. A server that acts on `CLIENT_BYE` without checking the sender
+  lets any host on the LAN tear down someone else's session.
+* Datagrams from the connected client are processed normally.
+
+The client, on receiving `WFAS_BUSY`, **must** abort the connection attempt
+immediately — it must not keep retrying until timeout — and report to the user
+that the server is streaming to another device.
+
+While a unicast session is active the server also stops advertising itself in
+the discovery beacon (Section 3), so it disappears from other devices' lists.
+That is a courtesy, not a defence: a client can still reach the server by manual
+IP or from a stale list entry, which is exactly why `WFAS_BUSY` exists.
+
+Multicast has no session state and therefore no exclusivity: any number of
+receivers may join the group.
 
 ---
 

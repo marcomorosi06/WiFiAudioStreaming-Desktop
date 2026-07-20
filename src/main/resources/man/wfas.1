@@ -64,9 +64,20 @@ and stream it to connected clients.
 This is the default mode when no
 .B --mode
 flag is provided.
+In unicast the server accepts
+.B one
+client at a time: while a session is active it stops announcing itself on the
+network and answers any other device with
+.BR WFAS_BUSY ,
+leaving the running session untouched.
+In multicast there is no such limit.
 .TP
 .B client
 Receive audio from a server and play it on a local output device.
+If the chosen server is already streaming to another device in unicast, the
+connection attempt fails immediately with
+.I "That server is already streaming to another device"
+instead of waiting for the timeout.
 If
 .B --server
 is omitted,
@@ -607,6 +618,11 @@ If clients cannot discover the server, try disabling multicast with
 omitted and providing the server IP explicitly via
 .B --connect
 on the client side.
+.PP
+A unicast server is bound to the address of its connected client for the whole
+session: control messages arriving from any other address are discarded, so a
+third device on the LAN cannot terminate someone else's session.
+To serve several listeners at once, use multicast.
 .PP
 The
 .B --sdp

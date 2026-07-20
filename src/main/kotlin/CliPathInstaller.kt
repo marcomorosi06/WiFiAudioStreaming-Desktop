@@ -202,6 +202,25 @@ object CliPathInstaller {
         }
     }
 
+    /**
+     * Gli shim generati prima passavano "--help" quando invocati senza argomenti,
+     * quindi `wfas` da solo scaricava tutto l'help. Reinstalla in silenzio lo shim
+     * gia' presente se contiene ancora quella forma, cosi' chi ha una vecchia
+     * installazione non deve rifare il setup a mano.
+     */
+    fun refreshIfOutdated() {
+        runCatching {
+            val shim = when {
+                isWindows -> File(wfasBatDir(), "wfas.bat")
+                isLinux   -> wfasScriptFile()
+                else      -> return
+            }
+            if (!shim.exists()) return
+            if (!shim.readText().contains("MainKt --help")) return
+            install()
+        }
+    }
+
     fun install(): InstallResult = when {
         isWindows -> installWindows()
         isMac     -> installMac()
@@ -235,7 +254,7 @@ object CliPathInstaller {
                 "set \"WFAS_RESDIR=$resourcesDir\"\r\n" +
                 "set \"WFAS_APPDIR=$appDir\"\r\n" +
                 "if \"%~1\"==\"\" (\r\n" +
-                "    \"%WFAS_JAVA%\" -Djava.net.preferIPv4Stack=true \"-Dskiko.library.path=%WFAS_APPDIR%\" -Dcompose.application.configure.swing.globals=true \"-Dcompose.application.resources.dir=%WFAS_RESDIR%\" -cp \"%WFAS_CP%\" MainKt --help\r\n" +
+                "    \"%WFAS_JAVA%\" -Djava.net.preferIPv4Stack=true \"-Dskiko.library.path=%WFAS_APPDIR%\" -Dcompose.application.configure.swing.globals=true \"-Dcompose.application.resources.dir=%WFAS_RESDIR%\" -cp \"%WFAS_CP%\" MainKt --cli-no-args\r\n" +
                 ") else (\r\n" +
                 "    \"%WFAS_JAVA%\" -Djava.net.preferIPv4Stack=true \"-Dskiko.library.path=%WFAS_APPDIR%\" -Dcompose.application.configure.swing.globals=true \"-Dcompose.application.resources.dir=%WFAS_RESDIR%\" -cp \"%WFAS_CP%\" MainKt %*\r\n" +
                 ")\r\n"
@@ -288,7 +307,7 @@ object CliPathInstaller {
                 "WFAS_RESDIR=\"$resourcesDir\"\n" +
                 "WFAS_APPDIR=\"$appDirPath\"\n" +
                 "if [ \$# -eq 0 ]; then\n" +
-                "    exec \"\$WFAS_JAVA\" -Djava.net.preferIPv4Stack=true \"-Dskiko.library.path=\$WFAS_APPDIR\" -Dcompose.application.configure.swing.globals=true \"-Dcompose.application.resources.dir=\$WFAS_RESDIR\" -cp \"\$WFAS_CP\" MainKt --help\n" +
+                "    exec \"\$WFAS_JAVA\" -Djava.net.preferIPv4Stack=true \"-Dskiko.library.path=\$WFAS_APPDIR\" -Dcompose.application.configure.swing.globals=true \"-Dcompose.application.resources.dir=\$WFAS_RESDIR\" -cp \"\$WFAS_CP\" MainKt --cli-no-args\n" +
                 "else\n" +
                 "    exec \"\$WFAS_JAVA\" -Djava.net.preferIPv4Stack=true \"-Dskiko.library.path=\$WFAS_APPDIR\" -Dcompose.application.configure.swing.globals=true \"-Dcompose.application.resources.dir=\$WFAS_RESDIR\" -cp \"\$WFAS_CP\" MainKt \"\$@\"\n" +
                 "fi\n"

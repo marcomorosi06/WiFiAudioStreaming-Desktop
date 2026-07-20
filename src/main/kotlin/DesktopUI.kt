@@ -474,9 +474,15 @@ fun VirtualDriverBanner(status: VirtualDriverStatus.Missing) {
 // =================================================================
 
 @Composable
-fun WelcomeScreen(visible: Boolean, onDismiss: () -> Unit) {
+fun WelcomeScreen(
+    visible: Boolean,
+    autoUpdateEnabled: Boolean = true,
+    onAutoUpdateChange: (Boolean) -> Unit = {},
+    onDismiss: () -> Unit
+) {
     var cliInstallResult by remember { mutableStateOf<CliPathInstaller.InstallResult?>(null) }
     var cliInstalling by remember { mutableStateOf(false) }
+    var showPrivacyDetail by remember { mutableStateOf(false) }
     val welcomeScope = rememberCoroutineScope()
 
     AnimatedVisibility(
@@ -625,6 +631,66 @@ fun WelcomeScreen(visible: Boolean, onDismiss: () -> Unit) {
                                         Text(stringResource("welcome_cli_btn"))
                                     }
                                 }
+                            }
+                        }
+                    }
+
+                    ElevatedCard(modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(16.dp)) {
+                        Column(modifier = Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Icon(
+                                    imageVector = if (autoUpdateEnabled) Icons.Outlined.CloudSync
+                                    else Icons.Outlined.CloudOff,
+                                    contentDescription = null,
+                                    tint = if (autoUpdateEnabled) MaterialTheme.colorScheme.primary
+                                    else MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                                Spacer(Modifier.width(10.dp))
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text(
+                                        stringResource("welcome_privacy_title"),
+                                        style = MaterialTheme.typography.titleMedium,
+                                        fontWeight = FontWeight.SemiBold
+                                    )
+                                    Text(
+                                        text = stringResource(
+                                            if (autoUpdateEnabled) "welcome_privacy_on" else "welcome_privacy_off"
+                                        ),
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = if (autoUpdateEnabled) MaterialTheme.colorScheme.primary
+                                        else MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
+                                Switch(
+                                    checked = autoUpdateEnabled,
+                                    onCheckedChange = onAutoUpdateChange
+                                )
+                            }
+
+                            Text(
+                                text = stringResource("welcome_privacy_desc"),
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+
+                            AnimatedVisibility(visible = showPrivacyDetail) {
+                                Text(
+                                    text = stringResource("welcome_privacy_detail"),
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+
+                            TextButton(
+                                onClick = { showPrivacyDetail = !showPrivacyDetail },
+                                contentPadding = PaddingValues(0.dp)
+                            ) {
+                                Text(
+                                    text = stringResource(
+                                        if (showPrivacyDetail) "less_details" else "more_details"
+                                    ),
+                                    fontWeight = FontWeight.Bold
+                                )
                             }
                         }
                     }
@@ -1300,9 +1366,71 @@ fun SettingsScreen(
                                 openUrl("https://github.com/marcomorosi06/WiFiAudioStreaming-Desktop")
                             }
                         )
+                        ClickableSetting(
+                            title = stringResource("source_code_protocol"),
+                            description = stringResource("source_code_protocol_desc"),
+                            icon = Icons.Outlined.Code,
+                            onClick = {
+                                openUrl("https://github.com/marcomorosi06/wfas-protocol")
+                            }
+                        )
                     }
                 }
                 item {
+                    SwitchSetting(
+                        title = stringResource("developer_title"),
+                        description = stringResource("developer_desc"),
+                        icon = Icons.Outlined.Code,
+                        checked = appSettings.developerMode,
+                        onCheckedChange = { on ->
+                            // Spegnendo la modalita' sviluppatore non deve restare
+                            // attivo un DSP che poi non si puo' piu' disattivare.
+                            onAppSettingsChange(
+                                appSettings.copy(
+                                    developerMode = on,
+                                    noiseReductionEnabled = if (on) appSettings.noiseReductionEnabled else false
+                                )
+                            )
+                        }
+                    )
+
+                    AnimatedVisibility(visible = appSettings.developerMode) {
+                        Column {
+                            SwitchSetting(
+                                title = stringResource("nr_title"),
+                                description = stringResource("nr_desc"),
+                                icon = Icons.Outlined.GraphicEq,
+                                checked = appSettings.noiseReductionEnabled,
+                                onCheckedChange = {
+                                    onAppSettingsChange(appSettings.copy(noiseReductionEnabled = it))
+                                }
+                            )
+                            AnimatedVisibility(visible = appSettings.noiseReductionEnabled) {
+                                Column(modifier = Modifier.padding(horizontal = 20.dp)) {
+                                    Text(
+                                        text = stringResource("nr_strength", appSettings.noiseReductionStrength),
+                                        style = MaterialTheme.typography.bodyMedium,
+                                        color = MaterialTheme.colorScheme.primary
+                                    )
+                                    Slider(
+                                        value = appSettings.noiseReductionStrength.toFloat(),
+                                        onValueChange = {
+                                            onAppSettingsChange(appSettings.copy(noiseReductionStrength = it.toInt()))
+                                        },
+                                        valueRange = 0f..100f,
+                                        steps = 19
+                                    )
+                                    Text(
+                                        text = stringResource("nr_hint"),
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        modifier = Modifier.padding(bottom = 12.dp)
+                                    )
+                                }
+                            }
+                        }
+                    }
+
                     SwitchSetting(
                         title = stringResource("update_auto_title"),
                         description = stringResource("update_auto_desc"),

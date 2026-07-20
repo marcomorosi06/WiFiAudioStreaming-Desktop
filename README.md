@@ -107,7 +107,7 @@ If you use PipeWire with `pipewire-pulse`, this works identically.
 
 1. Open the app and select **Send (Server)**.
 2. On **Linux**, the virtual sink is created automatically. On **Windows and macOS**, the native engine captures system audio directly with no extra setup.
-3. Select **Multicast** (multiple clients) or **Unicast** (single client).
+3. Select **Multicast** (multiple clients) or **Unicast** (single client). In Unicast the server serves one client at a time: while a session is running it stops advertising itself, and any other device that tries to connect is told the server is busy instead of being left waiting.
 4. Click **Start Server**.
 
 ## Receive Audio (Client Mode)
@@ -118,6 +118,8 @@ If you use PipeWire with `pipewire-pulse`, this works identically.
 4. Select one to connect.
 
 If the server does not appear automatically, enter its local IP address manually.
+
+If the server is already streaming to another device in Unicast mode, the app reports *"That server is already streaming to another device"* immediately instead of waiting for a timeout.
 
 ---
 

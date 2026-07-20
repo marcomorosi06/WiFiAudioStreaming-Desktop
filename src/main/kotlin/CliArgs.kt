@@ -61,6 +61,7 @@ data class CliArgs(
     val groove:          Float           = 0f,
     val monitor:         Boolean         = false,
     val printHelp:       Boolean         = false,
+    val printBareHint:   Boolean         = false,
     val printVersion:    Boolean         = false,
     val printProtocol:   Boolean         = false,
     val printFred:       Boolean         = false,
@@ -89,10 +90,14 @@ data class CliArgs(
         fun parse(args: Array<String>): CliArgs {
             val isHeadless = GraphicsEnvironment.isHeadless()
 
-            if (args.isEmpty() && isHeadless)
-                return CliArgs(runMode = RunMode.CLI_SERVER)
-            if (args.isEmpty())
-                return CliArgs(runMode = RunMode.GUI)
+            if (args.isEmpty()) {
+                // Avviato da un terminale: non fare nulla, indica solo come proseguire.
+                // Senza console (doppio clic, collegamento, servizio) mantieni il
+                // comportamento storico, altrimenti l'app non si aprirebbe piu'.
+                if (System.console() != null) return CliArgs(printBareHint = true)
+                return if (isHeadless) CliArgs(runMode = RunMode.CLI_SERVER)
+                       else CliArgs(runMode = RunMode.GUI)
+            }
 
             var runMode         = RunMode.CLI_SERVER
             var modeExplicit    = false
@@ -128,6 +133,7 @@ data class CliArgs(
             var groove          = 0f
             var monitor         = false
             var printHelp       = false
+            var printBareHint   = false
             var printVersion    = false
             var printProtocol   = false
             var printFred       = false
@@ -332,6 +338,7 @@ data class CliArgs(
                     }
                     "--monitor", "--listen" -> monitor = true
                     "--help", "-h"     -> printHelp     = true
+                    "--cli-no-args"    -> printBareHint = true   // interno: passato dallo shim wfas
                     "--version", "-v"  -> printVersion  = true
                     "--protocol"       -> printProtocol = true
                     "--licenses", "--license", "--credits" -> printLicenses = true
@@ -416,6 +423,7 @@ data class CliArgs(
                 groove          = groove,
                 monitor         = monitor,
                 printHelp       = printHelp,
+                printBareHint   = printBareHint,
                 printVersion    = printVersion,
                 printProtocol   = printProtocol,
                 printFred       = printFred,
@@ -443,7 +451,7 @@ USAGE
   wfas control <command>          (see RUNTIME CONTROL)
 
 ENTRY POINT
-  (no flags)          Show this help
+  (no flags)          From a terminal: print a short hint. Otherwise open the GUI
   --cli               CLI mode (audio server by default)
   --gui               GUI mode
 
@@ -586,8 +594,19 @@ $filesBlock
 See 'man wfas' for the full reference manual.
 
 Licensed under the EUPL, Version 1.2
-  Desktop source:  https://github.com/marcomorosi06/WiFiAudioStreaming-Desktop
-  Android app:     https://github.com/marcomorosi06/WiFiAudioStreaming-Android
+  Desktop source:   https://github.com/marcomorosi06/WiFiAudioStreaming-Desktop
+  Android app:      https://github.com/marcomorosi06/WiFiAudioStreaming-Android
+  WFAS v2 protocol: https://github.com/marcomorosi06/wfas-protocol
+            """.trimIndent())
+        }
+
+        fun printBareHint() {
+            println("""
+WiFi Audio Streaming ${VERSION} - Stream audio over your local network.
+
+  wfas --help     all commands and options
+  wfas --gui      open the desktop app
+  wfas --cli      start the audio server
             """.trimIndent())
         }
 
@@ -644,8 +663,19 @@ CONTROL MESSAGES  (ASCII over UDP)
   HELLO_FROM_CLIENT;v=<n>    client -> server   connect, carries client version
   HELLO_ACK;v=<n>            server -> client   accept, carries server version
   WFAS_INCOMPATIBLE;v=<n>    server -> client   reject: version mismatch
+  WFAS_BUSY                  server -> client   reject: unicast session taken
   PING                       server -> client   keep-alive (1s, 3s timeout)
   BYE / CLIENT_BYE                              clean disconnect
+
+SESSION EXCLUSIVITY  (unicast)
+  A unicast server serves one client at a time and is bound to that client's
+  address for the whole session. A HELLO or MODE_PROBE from any other address is
+  answered with WFAS_BUSY (so the newcomer fails fast instead of retrying until
+  timeout); any other control message from a foreign address, CLIENT_BYE
+  included, is discarded, so no third device can tear down the session. The
+  server also stops announcing itself in the beacon while streaming. WFAS_BUSY
+  is additive and optional: a peer that does not implement it just times out as
+  before. Multicast has no session state and no such limit.
 
 DISCOVERY  (UDP multicast 239.255.0.1:9091, every ~3s)
   WIFI_AUDIO_STREAMER_DISCOVERY;<host>;<MULTICAST|UNICAST>;<port>;protocols=...

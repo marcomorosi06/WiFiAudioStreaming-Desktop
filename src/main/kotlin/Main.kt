@@ -29,6 +29,7 @@ import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Minimize
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Warning
+import androidx.compose.material.icons.outlined.EmojiEvents
 import androidx.compose.material.icons.outlined.Favorite
 import androidx.compose.material.icons.outlined.Update
 import androidx.compose.material3.*
@@ -424,6 +425,21 @@ object AutostartManager {
 // NetworkHandler
 // ─────────────────────────────────────────────────────────────────────────────
 
+/**
+ * Interruttore globale del denoiser: il player viene creato a ogni connessione,
+ * ma i controlli devono agire sul flusso gia' in riproduzione. Sta a livello di
+ * file perche' lo leggono sia JitterAudioPlayer (dentro NetworkHandler_v1) sia
+ * i composable dell'interfaccia.
+ */
+object NoiseReductionControl {
+    @Volatile var enabled: Boolean = false
+    @Volatile var strength: Int = 50
+    fun apply(on: Boolean, strengthPercent: Int) {
+        enabled = on
+        strength = strengthPercent.coerceIn(0, 100)
+    }
+}
+
 object NetworkHandler_v1 {
 
     // ── Constants ──────────────────────────────────────────────────────────────
@@ -438,6 +454,7 @@ object NetworkHandler_v1 {
     private const val HELLO_ACK_PREFIX    = "HELLO_ACK"
     private const val PENDING_MESSAGE       = "WFAS_PENDING"
     private const val AUTH_REQUIRED_PREFIX  = "WFAS_AUTH_REQUIRED"
+    private const val BUSY_MESSAGE = "WFAS_BUSY"
     private const val UNAUTHORIZED_MESSAGE  = "WFAS_UNAUTHORIZED"
 
     @Volatile var securityMode: String = "OFF"
@@ -2523,6 +2540,22 @@ object NetworkHandler_v1 {
                                     while (isActive && clientAlive.get()) {
                                         val datagram = socket.receive()
                                         val msg = datagram.packet.readText().trim()
+                                        // Solo il client collegato pilota questa sessione:
+                                        // senza il controllo sull'indirizzo, un CLIENT_BYE
+                                        // di un terzo dispositivo chiuderebbe la connessione
+                                        // altrui. Ai terzi si risponde "occupato".
+                                        if (datagram.address != clientAddress) {
+                                            if (msg.startsWith(CLIENT_HELLO_MESSAGE) || msg == "MODE_PROBE") {
+                                                AppDebug.log("[SERVER][UNICAST] ${datagram.address} rejected: busy with $clientAddress")
+                                                runCatching {
+                                                    socket.send(Datagram(
+                                                        buildPacket { writeText(BUSY_MESSAGE) },
+                                                        datagram.address
+                                                    ))
+                                                }
+                                            }
+                                            continue
+                                        }
                                         if (msg == "CLIENT_BYE") {
                                             AppDebug.log("---Received CLIENT_BYE from $clientAddress ---")
                                             clientAlive.set(false)
@@ -2721,14 +2754,34 @@ object NetworkHandler_v1 {
             var player: JitterAudioPlayer? = null
             val playbackState = ClientPlaybackState()
             AppDebug.log("[CLIENT] launchClientInstance started: server=${serverInfo.ip}:${serverInfo.port} isMulticast=${serverInfo.isMulticast} sendMic=$sendMicrophone mixer='${selectedMixerInfo.name}'")
+
+            // I byte li manda il server: comanda il suo formato, le impostazioni
+            // locali valgono solo se il beacon non lo annuncia. Un formato che non
+            // sappiamo riprodurre va rifiutato: reinterpretarlo produce solo rumore.
+            val advertised = serverInfo.serverAudioSettings
+            if (advertised != null && !isPlayableFormat(advertised)) {
+                AppDebug.log("[CLIENT] Unsupported stream format: ${describeFormat(advertised)} - refusing to play")
+                onStatusUpdate("status_unsupported_format", arrayOf(describeFormat(advertised)))
+                return@launch
+            }
+            val playbackSettings = advertised ?: audioSettings
+            if (advertised != null) {
+                AppDebug.log("[CLIENT] Using server-advertised format: ${describeFormat(advertised)}")
+            }
+
             try {
                 if (!serverInfo.isMulticast) { // Unicast
                     val remoteAddress = InetSocketAddress(serverInfo.ip, serverInfo.port)
                     AppDebug.log("[CLIENT][UNICAST] unicast connection to $remoteAddress")
                     aSocket(selectorManager).udp().bind().use { socket ->
-                        sourceDataLine = prepareSourceDataLine(selectedMixerInfo, audioSettings)
+                        sourceDataLine = prepareSourceDataLine(selectedMixerInfo, playbackSettings)
+                        if (sourceDataLine == null) {
+                            AppDebug.log("[CLIENT][UNICAST] Output device rejected ${describeFormat(playbackSettings)}")
+                            onStatusUpdate("status_unsupported_format", arrayOf(describeFormat(playbackSettings)))
+                            return@launch
+                        }
                         player = sourceDataLine?.let {
-                            JitterAudioPlayer(it, audioSettings.sampleRate.toInt(), audioSettings.channels,
+                            JitterAudioPlayer(it, playbackSettings.sampleRate.toInt(), playbackSettings.channels,
                                 prebufferMs = audioSettings.latencyMs, maxBufferMs = audioSettings.latencyMs + 280).also { p -> p.start() }
                         }
                         AppDebug.log("[CLIENT][UNICAST] SourceDataLine started, sending HELLO to $remoteAddress")
@@ -2808,6 +2861,11 @@ object NetworkHandler_v1 {
                                         proved = true
                                         socket.send(Datagram(buildPacket { writeText(helloMsg) }, remoteAddress))
                                     }
+                                }
+                                ackText == BUSY_MESSAGE -> {
+                                    AppDebug.log("[CLIENT] server busy with another device")
+                                    onStatusUpdate("status_server_busy", emptyArray())
+                                    return@launch
                                 }
                                 ackText.startsWith(HELLO_ACK_PREFIX) -> {
                                     val serverVersion = parseProtocolVersion(ackText)
@@ -2969,9 +3027,14 @@ object NetworkHandler_v1 {
                             AppDebug.log("[CLIENT][MULTICAST] join group $groupAddress (no specific iface)")
                             socket.joinGroup(groupAddress)
                         }
-                        val effectiveAudioSettings = serverInfo.serverAudioSettings ?: audioSettings
+                        val effectiveAudioSettings = playbackSettings
                         AppDebug.log("[CLIENT][MULTICAST] effectiveAudioSettings: sr=${effectiveAudioSettings.sampleRate} ch=${effectiveAudioSettings.channels} bd=${effectiveAudioSettings.bitDepth}")
                         sourceDataLine = prepareSourceDataLine(selectedMixerInfo, effectiveAudioSettings)
+                        if (sourceDataLine == null) {
+                            AppDebug.log("[CLIENT][MULTICAST] Output device rejected ${describeFormat(effectiveAudioSettings)}")
+                            onStatusUpdate("status_unsupported_format", arrayOf(describeFormat(effectiveAudioSettings)))
+                            return@launch
+                        }
                         player = sourceDataLine?.let {
                             JitterAudioPlayer(it, effectiveAudioSettings.sampleRate.toInt(), effectiveAudioSettings.channels,
                                 prebufferMs = audioSettings.latencyMs, maxBufferMs = audioSettings.latencyMs + 280).also { p -> p.start() }
@@ -2995,6 +3058,7 @@ object NetworkHandler_v1 {
                         val beaconPrefixLen = WfasCrypto.MSG_MCAST_ENC.length
                         while (isActive) {
                             try {
+                                packet.length = buf.size
                                 socket.receive(packet)
                             } catch (_: java.net.SocketTimeoutException) {
                                 continue
@@ -3118,6 +3182,36 @@ object NetworkHandler_v1 {
         prebufferMs: Int = 120,
         maxBufferMs: Int = 400
     ) {
+        // ── Riduzione del rumore (opt-in, modalita' sviluppatore) ───────────
+        private val noiseReducer = dsp.NoiseReducer().apply { init(sampleRate, channels) }
+        private var nrScratch = ShortArray(0)
+        private var nrWasEnabled = false
+
+        /** PCM 16 bit little endian, elaborato in place. */
+        private fun denoise(buf: ByteArray) {
+            val on = NoiseReductionControl.enabled
+            if (on && !nrWasEnabled) noiseReducer.reset()
+            nrWasEnabled = on
+            if (!on || buf.size < 2) return
+            noiseReducer.setStrength(NoiseReductionControl.strength / 100f)
+            val samples = buf.size / 2
+            if (nrScratch.size < samples) nrScratch = ShortArray(samples)
+            val sc = nrScratch
+            var bi = 0
+            for (i in 0 until samples) {
+                sc[i] = ((buf[bi].toInt() and 0xFF) or (buf[bi + 1].toInt() shl 8)).toShort()
+                bi += 2
+            }
+            noiseReducer.process(sc, 0, samples)
+            bi = 0
+            for (i in 0 until samples) {
+                val v = sc[i].toInt()
+                buf[bi] = (v and 0xFF).toByte()
+                buf[bi + 1] = ((v shr 8) and 0xFF).toByte()
+                bi += 2
+            }
+        }
+
         private val frameBytes = (channels * 2).coerceAtLeast(2)
         private val bytesPerSec = sampleRate * frameBytes
         private val prebufferBytes =
@@ -3161,6 +3255,7 @@ object NetworkHandler_v1 {
         fun submit(pcm: ByteArray, offset: Int, len: Int) {
             if (len <= 0) return
             val chunk = pcm.copyOfRange(offset, offset + len)
+            denoise(chunk)
             while (queuedBytes.get() + chunk.size > maxBytes) {
                 val dropped = queue.poll() ?: break
                 queuedBytes.addAndGet(-dropped.size)
@@ -3266,6 +3361,16 @@ object NetworkHandler_v1 {
             }
         }
     }
+
+    /** La pipeline e' PCM 16 bit: altre profondita' non sono riproducibili. */
+    private fun isPlayableFormat(s: AudioSettings_V1): Boolean =
+        s.bitDepth == 16 &&
+        s.channels in 1..2 &&
+        s.sampleRate.toInt() in 4000..192000
+
+    private fun describeFormat(s: AudioSettings_V1): String =
+        "${s.sampleRate.toInt()} Hz, " +
+        (if (s.channels == 1) "mono" else "stereo") + ", ${s.bitDepth} bit"
 
     private fun prepareSourceDataLine(mixerInfo: Mixer.Info, audioSettings: AudioSettings_V1): SourceDataLine? {
         val mixer        = AudioSystem.getMixer(mixerInfo)
@@ -3538,6 +3643,8 @@ fun main(args: Array<String>) {
     System.setOut(java.io.PrintStream(System.out, true, "UTF-8"))
     System.setErr(java.io.PrintStream(System.err, true, "UTF-8"))
 
+    CliPathInstaller.refreshIfOutdated()
+
     val cliArgs = CliArgs.parse(args)
 
     cliArgs.configPath?.let { ConfigPaths.overrideConfigFile = java.io.File(it) }
@@ -3552,6 +3659,7 @@ fun main(args: Array<String>) {
         kotlin.system.exitProcess(code)
     }
 
+    if (cliArgs.printBareHint) { CliArgs.printBareHint(); return }
     if (cliArgs.printHelp)     { CliArgs.printHelp();     return }
     if (cliArgs.printVersion)  { CliArgs.printVersion();  return }
     if (cliArgs.printProtocol) { CliArgs.printProtocol(); return }
@@ -3613,6 +3721,15 @@ fun startGuiApplication(cliArgs: CliArgs) = application {
 
     LaunchedEffect(serverVolume) { NetworkHandler_v1.setServerVolume(serverVolume) }
 
+    // Il denoiser legge da qui: cambiando l'impostazione l'effetto e' immediato
+    // sul flusso in riproduzione, senza riconnettersi.
+    LaunchedEffect(appSettings.developerMode, appSettings.noiseReductionEnabled, appSettings.noiseReductionStrength) {
+        NoiseReductionControl.apply(
+            appSettings.developerMode && appSettings.noiseReductionEnabled,
+            appSettings.noiseReductionStrength
+        )
+    }
+
     LaunchedEffect(appSettings, audioSettings, streamingPort, micPort, micRoutingMode) {
         SettingsRepository.saveSettings(AllSettings(appSettings, audioSettings, streamingPort, micPort, micRoutingMode.name))
     }
@@ -3633,13 +3750,20 @@ fun startGuiApplication(cliArgs: CliArgs) = application {
         )
     }
     var updateBanner        by remember { mutableStateOf<UpdateChecker.Result.Available?>(null) }
+    var versionAhead        by remember { mutableStateOf<UpdateChecker.Result.Ahead?>(null) }
     var manualUpdateResult  by remember { mutableStateOf<UpdateChecker.Result?>(null) }
     var checkingForUpdate   by remember { mutableStateOf(false) }
 
     LaunchedEffect(Unit) {
         if (SettingsRepository.isAutoUpdateCheckEnabled()) {
             val r = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) { UpdateChecker.check() }
-            if (r is UpdateChecker.Result.Available) updateBanner = r
+            // In automatico si mostra solo qualcosa di utile: se GitHub non
+            // risponde si resta in silenzio.
+            when (r) {
+                is UpdateChecker.Result.Available -> updateBanner = r
+                is UpdateChecker.Result.Ahead     -> versionAhead = r
+                else -> Unit
+            }
         }
     }
 
@@ -3901,7 +4025,10 @@ fun startGuiApplication(cliArgs: CliArgs) = application {
                         "status_server_disconnected",
                         "status_server_no_response",
                         "status_handshake_failed",
-                        "status_protocol_incompatible"
+                        "status_protocol_incompatible",
+                        "status_server_busy",
+                        "status_unauthorized",
+                        "status_unsupported_format"
                     )
                 }
 
@@ -4300,6 +4427,10 @@ fun startGuiApplication(cliArgs: CliArgs) = application {
 
                         WelcomeScreen(
                             visible   = showWelcome,
+                            autoUpdateEnabled = appSettings.autoUpdateCheckEnabled,
+                            onAutoUpdateChange = { enabled ->
+                                appSettings = appSettings.copy(autoUpdateCheckEnabled = enabled)
+                            },
                             onDismiss = {
                                 showWelcome = false
                                 SettingsRepository.markWelcomeSeen()
@@ -4363,14 +4494,34 @@ fun startGuiApplication(cliArgs: CliArgs) = application {
                                     Text(Strings.get("update_available_body", info.latest, info.current))
                                 },
                                 confirmButton = {
-                                    Button(onClick = {
-                                        runCatching { openUrl(info.url) }
-                                        updateBanner = null
-                                    }) { Text(Strings.get("update_download")) }
+                                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                        Button(onClick = {
+                                            runCatching { openUrl(DownloadLinks.site()) }
+                                            updateBanner = null
+                                        }) { Text(Strings.get("update_download_site")) }
+                                        FilledTonalButton(onClick = {
+                                            runCatching { openUrl(DownloadLinks.GITHUB_RELEASES) }
+                                            updateBanner = null
+                                        }) { Text(Strings.get("update_download_github")) }
+                                    }
                                 },
                                 dismissButton = {
                                     TextButton(onClick = { updateBanner = null }) {
                                         Text(Strings.get("update_later"))
+                                    }
+                                }
+                            )
+                        }
+
+                        versionAhead?.let {
+                            AlertDialog(
+                                onDismissRequest = { versionAhead = null },
+                                icon  = { Icon(Icons.Outlined.EmojiEvents, contentDescription = null) },
+                                title = { Text(Strings.get("update_ahead_title")) },
+                                text  = { Text(Strings.get("update_ahead_body")) },
+                                confirmButton = {
+                                    TextButton(onClick = { versionAhead = null }) {
+                                        Text(Strings.get("close"))
                                     }
                                 }
                             )
@@ -4382,6 +4533,8 @@ fun startGuiApplication(cliArgs: CliArgs) = application {
                                     Strings.get("update_available_body", res.latest, res.current)
                                 is UpdateChecker.Result.UpToDate ->
                                     Strings.get("update_uptodate", res.current)
+                                is UpdateChecker.Result.Ahead ->
+                                    Strings.get("update_ahead_body")
                                 is UpdateChecker.Result.Failed ->
                                     Strings.get("update_check_failed")
                             }
@@ -4392,10 +4545,16 @@ fun startGuiApplication(cliArgs: CliArgs) = application {
                                 text  = { Text(message) },
                                 confirmButton = {
                                     if (res is UpdateChecker.Result.Available) {
-                                        Button(onClick = {
-                                            runCatching { openUrl(res.url) }
-                                            manualUpdateResult = null
-                                        }) { Text(Strings.get("update_download")) }
+                                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                            Button(onClick = {
+                                                runCatching { openUrl(DownloadLinks.site()) }
+                                                manualUpdateResult = null
+                                            }) { Text(Strings.get("update_download_site")) }
+                                            FilledTonalButton(onClick = {
+                                                runCatching { openUrl(DownloadLinks.GITHUB_RELEASES) }
+                                                manualUpdateResult = null
+                                            }) { Text(Strings.get("update_download_github")) }
+                                        }
                                     } else {
                                         TextButton(onClick = { manualUpdateResult = null }) {
                                             Text(Strings.get("close"))

@@ -50,7 +50,10 @@ data class AppSettings(
     val autoUpdateCheckEnabled: Boolean = true,
     val securityMode: String = "OFF",
     val authKey: String = "",
-    val encryptionEnabled: Boolean = false
+    val encryptionEnabled: Boolean = false,
+    val developerMode: Boolean = false,
+    val noiseReductionEnabled: Boolean = false,
+    val noiseReductionStrength: Int = 50
 )
 
 object SettingsRepository {
