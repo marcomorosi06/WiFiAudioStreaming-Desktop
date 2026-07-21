@@ -1673,10 +1673,14 @@ object NetworkHandler_v1 {
             append("<audio id=\"a\" autoplay playsinline></audio>")
             append("<script>")
             // ── Costanti ──────────────────────────────────────────────────────
-            // Rileva Safari (incluso iOS WebKit) — usa AAC chunked HTTP + MSE
-            // Tutti gli altri browser (Chrome/Firefox/Edge) usano Opus via WS + MSE
-            append("const isSafari=/^((?!chrome|android).)*safari/i.test(navigator.userAgent)")
-            append("  ||/iPad|iPhone|iPod/.test(navigator.userAgent);")
+            // In safariMode il server serve solo AAC: forzare isSafari=true per
+            // tutti i browser. Altrimenti rileva Safari/iOS tramite UA.
+            if (safariMode) {
+                append("const isSafari=true;")
+            } else {
+                append("const isSafari=/^((?!chrome|android).)*safari/i.test(navigator.userAgent)")
+                append("  ||/iPad|iPhone|iPod/.test(navigator.userAgent);")
+            }
             append("const a=document.getElementById('a'),st=document.getElementById('st'),lbl=document.getElementById('codec-label');")
 
             // ── Helpers UI ────────────────────────────────────────────────────
