@@ -126,15 +126,15 @@ jobs:
           LAUNCHER="$(ls "$APP_SRC"/*.exe 2>/dev/null | head -n1 | xargs -I{} basename {})"
           echo "launcher: $LAUNCHER"
 
-          curl -fL -o 7zextra.7z "https://www.7-zip.org/a/7z2301-extra.7z"
-          7z x 7zextra.7z -o7zextra -y > /dev/null
+          curl -fL -o lzmasdk.7z "https://www.7-zip.org/a/lzma2301.7z"
+          7z x lzmasdk.7z -olzmasdk -y > /dev/null
 
           ( cd "$APP_SRC" && 7z a -t7z -mx=7 "$GITHUB_WORKSPACE/payload.7z" . > /dev/null )
 
           printf ';!@Install@!UTF-8!\r\nRunProgram="\\"%%%%T\\\\bin\\\\%s\\""\r\nGUIMode="2"\r\n;!@InstallEnd@!\r\n' "$LAUNCHER" > sfx_config.txt
           cat sfx_config.txt
 
-          SFX_MODULE="$(find 7zextra -iname '7zSD.sfx' | grep 'x64' || find 7zextra -iname '7zSD.sfx' | head -n1)"
+          SFX_MODULE="$(find lzmasdk -iname '7zSD.sfx' | head -n1)"
           cat "$SFX_MODULE" sfx_config.txt payload.7z > "$OUT/WiFi-Audio-Streaming-${APP_VER}-windows-x64.exe"
           ls -la "$OUT"
 
