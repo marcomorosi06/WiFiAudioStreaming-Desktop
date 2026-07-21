@@ -332,6 +332,7 @@ fun AppContent(
                             onMulticastChanged = onMulticastModeChange,
                             virtualDriverStatus = virtualDriverStatus,
                             rtpEnabled = appSettings.rtpEnabled,
+                            httpEnabled = appSettings.httpEnabled,
                             useNativeEngine = appSettings.useNativeEngine,
                             micRoutingMode = micRoutingMode,
                             onMicRoutingModeChange = onMicRoutingModeChange,
@@ -746,6 +747,8 @@ fun SettingsScreen(
     var cliIsInstalled by remember { mutableStateOf(CliPathInstaller.isInstalled()) }
     var cliInstalling by remember { mutableStateOf(false) }
     var fwPorts by remember(streamingPort, micPort) { mutableStateOf(listOf(streamingPort, "9091", micPort).filter { it.isNotBlank() }.joinToString(", ")) }
+    val fwTcpPorts = if (appSettings.httpEnabled)
+        listOfNotNull(appSettings.httpPort.toIntOrNull()) else emptyList()
     var fwBusy by remember { mutableStateOf(false) }
     var fwActive by remember { mutableStateOf(FirewallHelper.rulesActive()) }
     var fwResult by remember { mutableStateOf<FirewallHelper.Result?>(null) }
@@ -1302,7 +1305,7 @@ fun SettingsScreen(
                                             val ports = fwPorts.split(Regex("[^0-9]+")).mapNotNull { it.toIntOrNull() }
                                             settingsScope.launch(Dispatchers.IO) {
                                                 fwBusy = true
-                                                val r = FirewallHelper.openInboundPorts(ports)
+                                                val r = FirewallHelper.openInboundPorts(ports, fwTcpPorts)
                                                 fwResult = r
                                                 fwActive = FirewallHelper.rulesActive()
                                                 fwBusy = false
@@ -1352,7 +1355,8 @@ fun SettingsScreen(
                                     modifier = Modifier.fillMaxWidth()
                                 )
                                 val linuxCmd = FirewallHelper.linuxAllowCommand(
-                                    fwPorts.split(Regex("[^0-9]+")).mapNotNull { it.toIntOrNull() }
+                                    fwPorts.split(Regex("[^0-9]+")).mapNotNull { it.toIntOrNull() },
+                                    fwTcpPorts
                                 )
                                 if (linuxCmd != null) {
                                     Spacer(Modifier.height(12.dp))
@@ -1769,6 +1773,7 @@ fun ServerConfigCard(
     isMulticast: Boolean, onMulticastChanged: (Boolean) -> Unit,
     virtualDriverStatus: VirtualDriverStatus,
     rtpEnabled: Boolean,
+    httpEnabled: Boolean = false,
     useNativeEngine: Boolean,
     micRoutingMode: MicRoutingMode = MicRoutingMode.OFF,
     onMicRoutingModeChange: (MicRoutingMode) -> Unit = {},
@@ -1842,19 +1847,25 @@ fun ServerConfigCard(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.SpaceBetween
             ) {
-                val actualMulticast = isMulticast || rtpEnabled
+                val multicastLocked = rtpEnabled || httpEnabled
+                val actualMulticast = isMulticast || multicastLocked
 
                 Column(Modifier.weight(1f)) {
                     Text(stringResource("multicast_mode"), style = MaterialTheme.typography.bodyLarge)
                     Text(
-                        if (rtpEnabled) stringResource("rtp_forces_multicast") else stringResource("multicast_description"),
+                        when {
+                            rtpEnabled && httpEnabled -> stringResource("both_force_multicast")
+                            rtpEnabled -> stringResource("rtp_forces_multicast")
+                            httpEnabled -> stringResource("http_forces_multicast")
+                            else -> stringResource("multicast_description")
+                        },
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 }
                 Switch(
                     checked = actualMulticast,
-                    enabled = !rtpEnabled, // Disabilita lo switch se RTP è attivo
+                    enabled = !multicastLocked,
                     onCheckedChange = onMulticastChanged
                 )
             }

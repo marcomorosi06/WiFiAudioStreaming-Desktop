@@ -20,6 +20,7 @@ import java.io.File
 object FirewallHelper {
 
     private const val RULE_PORT = "WFAS-in"
+    private const val RULE_PORT_TCP = "WFAS-in-tcp"
     private const val RULE_PROG = "WFAS-app"
 
     val isWindows: Boolean
@@ -45,15 +46,17 @@ object FirewallHelper {
         else -> LinuxFirewall.NONE
     }
 
-    fun linuxAllowCommand(ports: List<Int>): String? {
-        val clean = ports.filter { it in 1..65535 }.distinct()
-        if (clean.isEmpty()) return null
+    fun linuxAllowCommand(ports: List<Int>, tcpPorts: List<Int> = emptyList()): String? {
+        val udp = ports.filter { it in 1..65535 }.distinct()
+        val tcp = tcpPorts.filter { it in 1..65535 }.distinct()
+        if (udp.isEmpty() && tcp.isEmpty()) return null
+        val specs = udp.map { "$it/udp" } + tcp.map { "$it/tcp" }
         return when (detectLinuxFirewall()) {
             LinuxFirewall.FIREWALLD ->
-                clean.joinToString(" ") { "sudo firewall-cmd --add-port=$it/udp --permanent &&" } +
+                specs.joinToString(" ") { "sudo firewall-cmd --add-port=$it --permanent &&" } +
                     " sudo firewall-cmd --reload"
             LinuxFirewall.UFW ->
-                clean.joinToString(" && ") { "sudo ufw allow $it/udp" }
+                specs.joinToString(" && ") { "sudo ufw allow $it" }
             LinuxFirewall.NONE -> null
         }
     }
@@ -67,13 +70,14 @@ object FirewallHelper {
 
     fun rulesActive(): Boolean = isWindows && ruleExists(RULE_PORT)
 
-    fun openInboundPorts(ports: List<Int>): Result {
+    fun openInboundPorts(ports: List<Int>, tcpPorts: List<Int> = emptyList()): Result {
         if (!isWindows) return Result.NotSupported
         val clean = ports.filter { it in 1..65535 }.distinct()
-        if (clean.isEmpty()) return Result.Failure("no valid ports")
+        val cleanTcp = tcpPorts.filter { it in 1..65535 }.distinct()
+        if (clean.isEmpty() && cleanTcp.isEmpty()) return Result.Failure("no valid ports")
         return runCatching {
-            applyElevated(clean)
-            if (ruleExists(RULE_PORT)) Result.Success else Result.Denied
+            applyElevated(clean, cleanTcp)
+            if (ruleExists(RULE_PORT) || ruleExists(RULE_PORT_TCP)) Result.Success else Result.Denied
         }.getOrElse { Result.Failure(it.message ?: "unknown error") }
     }
 
@@ -85,17 +89,23 @@ object FirewallHelper {
         !out.contains("No rules match", ignoreCase = true) && out.contains(name)
     }.getOrDefault(false)
 
-    private fun applyElevated(ports: List<Int>) {
+    private fun applyElevated(ports: List<Int>, tcpPorts: List<Int>) {
         val exe = ProcessHandle.current().info().command().orElse(null)
         val exeEsc = exe?.replace("'", "''")
         val portList = ports.joinToString(",")
         val script = buildString {
             appendLine("netsh advfirewall firewall delete rule name=$RULE_PORT dir=in 2>\$null | Out-Null")
+            appendLine("netsh advfirewall firewall delete rule name=$RULE_PORT_TCP dir=in 2>\$null | Out-Null")
             appendLine("netsh advfirewall firewall delete rule name=$RULE_PROG dir=in 2>\$null | Out-Null")
             if (exeEsc != null) {
                 appendLine("Get-NetFirewallRule -Direction Inbound -Action Block -ErrorAction SilentlyContinue | Where-Object { ((\$_ | Get-NetFirewallApplicationFilter -ErrorAction SilentlyContinue).Program) -ieq '$exeEsc' } | Remove-NetFirewallRule -ErrorAction SilentlyContinue")
             }
-            appendLine("netsh advfirewall firewall add rule name=$RULE_PORT dir=in action=allow protocol=UDP localport=$portList profile=any enable=yes | Out-Null")
+            if (ports.isNotEmpty()) {
+                appendLine("netsh advfirewall firewall add rule name=$RULE_PORT dir=in action=allow protocol=UDP localport=$portList profile=any enable=yes | Out-Null")
+            }
+            if (tcpPorts.isNotEmpty()) {
+                appendLine("netsh advfirewall firewall add rule name=$RULE_PORT_TCP dir=in action=allow protocol=TCP localport=${tcpPorts.joinToString(",")} profile=any enable=yes | Out-Null")
+            }
         }
         val tmp = File.createTempFile("wfas-fw", ".ps1")
         try {

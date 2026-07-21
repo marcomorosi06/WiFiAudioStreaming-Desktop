@@ -28,7 +28,7 @@ object FirewallCli {
                 is FirewallCommand.Allow -> cmd.ports.filter { it in 1..65535 }.distinct().ifEmpty { defaultPorts() }
                 else -> defaultPorts()
             }
-            val suggestion = FirewallHelper.linuxAllowCommand(ports)
+            val suggestion = FirewallHelper.linuxAllowCommand(ports, defaultTcpPorts())
             if (suggestion != null) {
                 if (json) {
                     val esc = suggestion.replace("\"", "'")
@@ -55,7 +55,7 @@ object FirewallCli {
             is FirewallCommand.Allow -> {
                 val ports = cmd.ports.filter { it in 1..65535 }.distinct().ifEmpty { defaultPorts() }
                 if (!json) println("  Allowing inbound UDP on ${ports.joinToString(", ")} (may prompt for administrator)...")
-                when (val r = FirewallHelper.openInboundPorts(ports)) {
+                when (val r = FirewallHelper.openInboundPorts(ports, defaultTcpPorts())) {
                     is FirewallHelper.Result.Success -> {
                         if (json) println("{\"status\": \"ok\", \"ports\": [${ports.joinToString(", ")}]}")
                         else println("  Firewall updated. Devices can now connect on these ports.")
@@ -80,6 +80,12 @@ object FirewallCli {
                 }
             }
         }
+    }
+
+    private fun defaultTcpPorts(): List<Int> {
+        val s = SettingsRepository.loadSettings()
+        if (!s.httpEnabled) return emptyList()
+        return listOfNotNull(s.httpPort.toIntOrNull()).filter { it in 1..65535 }
     }
 
     private fun defaultPorts(): List<Int> {
