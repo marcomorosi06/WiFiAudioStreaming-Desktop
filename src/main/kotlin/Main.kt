@@ -1673,14 +1673,12 @@ object NetworkHandler_v1 {
             append("<audio id=\"a\" autoplay playsinline></audio>")
             append("<script>")
             // ── Costanti ──────────────────────────────────────────────────────
-            // In safariMode il server serve solo AAC: forzare isSafari=true per
-            // tutti i browser. Altrimenti rileva Safari/iOS tramite UA.
-            if (safariMode) {
-                append("const isSafari=true;")
-            } else {
-                append("const isSafari=/^((?!chrome|android).)*safari/i.test(navigator.userAgent)")
-                append("  ||/iPad|iPhone|iPod/.test(navigator.userAgent);")
-            }
+            // AAC ADTS funziona solo su Safari/iOS con MSE nativo.
+            // Chrome/Firefox non supportano 'audio/aac' in MSE → usano sempre Opus WS.
+            // La UA detection è sempre attiva indipendentemente da safariMode:
+            // safariMode controlla solo discovery/advertising, non il routing del codec.
+            append("const isSafari=/^((?!chrome|android).)*safari/i.test(navigator.userAgent)")
+            append("  ||/iPad|iPhone|iPod/.test(navigator.userAgent);")
             append("const a=document.getElementById('a'),st=document.getElementById('st'),lbl=document.getElementById('codec-label');")
 
             // ── Helpers UI ────────────────────────────────────────────────────
@@ -1759,37 +1757,17 @@ object NetworkHandler_v1 {
             append("    });")
             append("  }")
 
-            // ── Safari/iOS: AAC via fetch streaming + MSE ─────────────────────
-            // Safari supporta MSE con 'audio/aac' o 'audio/mp4; codecs=mp4a.40.2'.
-            // Usiamo fetch con ReadableStream per leggere il chunked HTTP e
-            // passare i chunk direttamente al SourceBuffer — più affidabile del
-            // vecchio elemento <source> che su iOS non avvia lo stream in background.
+            // ── Safari/iOS: AAC via elemento <audio> ──────────────────────────
+            // L'elemento <audio src> con AAC/ADTS è il metodo nativo più
+            // affidabile su tutti i WebKit (iOS Safari, macOS Safari, Chrome iOS).
+            // MSE con audio/aac è inaffidabile tra versioni diverse di Safari.
             append("}else{")
             append("  lbl.textContent='AAC \u2022 ADTS';")
-            append("  const mime='audio/aac';")
-            append("  const hasMSE=(typeof MediaSource!=='undefined')&&MediaSource.isTypeSupported(mime);")
-            append("  if(!hasMSE){")
-            append("    a.src='/stream/aac';a.load();setLive();tryPlay();")
-            append("  }else{")
-            append("    const ms=new MediaSource();")
-            append("    a.src=URL.createObjectURL(ms);")
-            append("    tryPlay();")
-            append("    ms.addEventListener('sourceopen',async()=>{")
-            append("      const sb=ms.addSourceBuffer(mime);")
-            append("      sb.mode='sequence';")
-            append("      const append=makeMSEAppender(sb);")
-            append("      try{")
-            append("        const resp=await fetch('/stream/aac');")
-            append("        const reader=resp.body.getReader();")
-            append("        setLive(); tryPlay();")
-            append("        while(true){")
-            append("          const{done,value}=await reader.read();")
-            append("          if(done)break;")
-            append("          append(value.buffer);")
-            append("        }")
-            append("      }catch(e){setErr('Stream error: '+e.message);}")
-            append("    });")
-            append("  }")
+            append("  a.src='/stream/aac';")
+            append("  a.addEventListener('playing',()=>lbl.textContent='AAC \u2022 Live',{once:true});")
+            append("  a.addEventListener('error',(e)=>setErr('AAC error: '+(a.error?a.error.code:'?')));")
+            append("  a.load();")
+            append("  tryPlay();")
             append("}")
             append("</script></body></html>")
         }
@@ -1867,7 +1845,7 @@ object NetworkHandler_v1 {
                             val out  = sock.getOutputStream()
                             when {
                                 path == "/stream/aac" -> {
-                                    out.write("HTTP/1.1 200 OK\r\nContent-Type: audio/aac\r\nTransfer-Encoding: chunked\r\nCache-Control: no-cache\r\nConnection: keep-alive\r\nAccess-Control-Allow-Origin: *\r\n\r\n".toByteArray())
+                                    out.write("HTTP/1.1 200 OK\r\nContent-Type: audio/aac\r\nTransfer-Encoding: chunked\r\nCache-Control: no-cache\r\nConnection: keep-alive\r\nAccess-Control-Allow-Origin: *\r\nAccept-Ranges: none\r\nX-Content-Type-Options: nosniff\r\n\r\n".toByteArray())
                                     out.flush()
                                     aacClients.add(out)
                                     AppDebug.log("---/stream/aac client: ${sock.inetAddress} ---")
