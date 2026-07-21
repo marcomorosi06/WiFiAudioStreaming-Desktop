@@ -548,6 +548,14 @@ fun WelcomeScreen(
                                 style = MaterialTheme.typography.bodyMedium,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
+                            Button(
+                                onClick = { openUrl("https://www.marcomorosi.eu/wifi-audio-streaming/download/") },
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Icon(Icons.Outlined.OpenInBrowser, contentDescription = null, modifier = Modifier.size(18.dp))
+                                Spacer(Modifier.width(8.dp))
+                                Text(stringResource("welcome_website_btn"))
+                            }
                             FilledTonalButton(
                                 onClick = { openUrl("https://github.com/marcomorosi06/WiFiAudioStreaming-Android/releases") },
                                 modifier = Modifier.fillMaxWidth()

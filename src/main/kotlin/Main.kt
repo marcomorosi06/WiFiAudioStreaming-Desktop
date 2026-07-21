@@ -4168,14 +4168,20 @@ fun startGuiApplication(cliArgs: CliArgs) = application {
                         title = { Text(Strings.get("protocol_incompatible_title")) },
                         text  = { Text(Strings.get("protocol_incompatible_body", mm.localVersion, mm.remoteVersion)) },
                         confirmButton = {
-                            Button(onClick = {
-                                val updateUrl = if (mm.localVersion < mm.remoteVersion)
-                                    "https://github.com/marcomorosi06/WiFiAudioStreaming-Desktop/releases"
-                                else
-                                    "https://github.com/marcomorosi06/WiFiAudioStreaming-Android/releases"
-                                runCatching { openUrl(updateUrl) }
-                                NetworkHandler_v1.clearProtocolMismatch()
-                            }) { Text(Strings.get("protocol_incompatible_update")) }
+                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                Button(onClick = {
+                                    runCatching { openUrl("https://www.marcomorosi.eu/wifi-audio-streaming/download/") }
+                                    NetworkHandler_v1.clearProtocolMismatch()
+                                }) { Text(Strings.get("protocol_incompatible_website")) }
+                                TextButton(onClick = {
+                                    val updateUrl = if (mm.localVersion < mm.remoteVersion)
+                                        "https://github.com/marcomorosi06/WiFiAudioStreaming-Desktop/releases"
+                                    else
+                                        "https://github.com/marcomorosi06/WiFiAudioStreaming-Android/releases"
+                                    runCatching { openUrl(updateUrl) }
+                                    NetworkHandler_v1.clearProtocolMismatch()
+                                }) { Text(Strings.get("protocol_incompatible_github")) }
+                            }
                         },
                         dismissButton = {
                             TextButton(onClick = { NetworkHandler_v1.clearProtocolMismatch() }) { Text(Strings.get("close")) }
