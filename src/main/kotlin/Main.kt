@@ -1688,10 +1688,12 @@ object NetworkHandler_v1 {
 
             // ── Funzione play con fallback tap-to-play (policy autoplay) ──────
             append("function tryPlay(){a.play().catch(()=>{")
+            append("  if(document.getElementById('tapbtn'))return;")
             append("  const b=document.createElement('button');")
+            append("  b.id='tapbtn';")
             append("  b.textContent='\u25b6\ufe0f Tap to listen';")
             append("  b.style.cssText='margin-top:20px;padding:12px 28px;border:none;border-radius:50px;background:#fff;color:#000;font-size:16px;cursor:pointer';")
-            append("  b.onclick=()=>{a.play();b.remove();};")
+            append("  b.onclick=()=>{a.play().then(()=>b.remove()).catch(()=>{});};")
             append("  document.querySelector('.card').appendChild(b);")
             append("});}")
 
@@ -1761,13 +1763,13 @@ object NetworkHandler_v1 {
             append("}else{")
             append("  lbl.textContent='AAC \u2022 ADTS';")
             append("  const mime='audio/aac';")
-            append("  if(!MediaSource.isTypeSupported(mime)){")
-            // Fallback estremo per Safari vecchi: elemento audio diretto
-            append("    const s=document.createElement('source');s.src='/stream/aac';s.type=mime;")
-            append("    a.appendChild(s);a.load();tryPlay();")
+            append("  const hasMSE=(typeof MediaSource!=='undefined')&&MediaSource.isTypeSupported(mime);")
+            append("  if(!hasMSE){")
+            append("    a.src='/stream/aac';a.load();setLive();tryPlay();")
             append("  }else{")
             append("    const ms=new MediaSource();")
             append("    a.src=URL.createObjectURL(ms);")
+            append("    tryPlay();")
             append("    ms.addEventListener('sourceopen',async()=>{")
             append("      const sb=ms.addSourceBuffer(mime);")
             append("      sb.mode='sequence';")

@@ -1,3 +1,19 @@
+/*
+ * Copyright (c) 2026 Marco Morosi
+ *
+ * Licensed under the EUPL, Version 1.2 or – as soon they will be approved by
+ * the European Commission - subsequent versions of the EUPL (the "Licence");
+ * You may not use this work except in compliance with the Licence.
+ * You may obtain a copy of the Licence at:
+ *
+ * https://joinup.ec.europa.eu/software/page/eupl
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the Licence is distributed on an "AS IS" basis,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the Licence for the specific language governing permissions and
+ * limitations under the Licence.
+ */
 package dsp
 
 import kotlin.math.cos
@@ -8,24 +24,24 @@ import kotlin.math.sqrt
 import kotlin.math.PI
 
 /**
- * Riduzione del rumore lato ricevitore, pensata per sorgenti analogiche
- * (line-in campionato da un microcontrollore, uscita cuffie di un televisore...).
+ * Receiver-side noise reduction, designed for analog sources
+ * (line-in sampled by a microcontroller, headphone output of a TV...).
  *
- * Due stadi, perche' i due disturbi tipici di una sorgente analogica hanno
- * natura diversa e un solo strumento non li prende entrambi:
+ * Two stages, because the two typical disturbances of an analog source have
+ * different natures and a single tool cannot tackle both:
  *
- *  1. Ronzio di rete: righe strettissime a 50/60 Hz e armoniche. La risoluzione
- *     della STFT usata qui e' ~47 Hz per bin, troppo grossolana per togliere
- *     50 Hz senza portarsi via mezzo basso: servono notch IIR nel dominio del
- *     tempo, che sono chirurgici quanto serve.
- *  2. Fruscio a banda larga: la sottrazione spettrale con stima del rumore
- *     tramite statistica di minimo, senza bisogno di un VAD esplicito.
+ *  1. Mains hum: extremely narrow lines at 50/60 Hz and harmonics. The resolution
+ *     of the STFT used here is ~47 Hz per bin, which is too coarse to remove
+ *     50 Hz without taking away half the bass: time-domain IIR notch filters
+ *     are needed, as they are as surgical as required.
+ *  2. Broadband hiss: spectral subtraction with noise estimation
+ *     via minimum statistics, without needing an explicit VAD.
  *
- * Nessuna dipendenza esterna: lo stesso file compila su Android e su desktop.
+ * No external dependencies: the same file compiles on Android and desktop.
  *
- * Latenza introdotta: un hop, cioe' meta' finestra (~10 ms a 48 kHz).
+ * Introduced latency: one hop, i.e. half a window (~10 ms at 48 kHz).
  *
- * Non e' thread safe: un'istanza per flusso, usata dal thread di riproduzione.
+ * Not thread-safe: one instance per stream, used by the playback thread.
  */
 class NoiseReducer {
 
