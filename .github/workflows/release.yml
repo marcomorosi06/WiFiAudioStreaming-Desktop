@@ -126,7 +126,7 @@ jobs:
           LAUNCHER="$(ls "$APP_SRC"/*.exe 2>/dev/null | head -n1 | xargs -I{} basename {})"
           echo "launcher: $LAUNCHER"
 
-          curl -fL -o 7zextra.7z "https://www.7-zip.org/a/7z2408-extra.7z"
+          curl -fL -o 7zextra.7z "https://www.7-zip.org/a/7z2301-extra.7z"
           7z x 7zextra.7z -o7zextra -y > /dev/null
 
           ( cd "$APP_SRC" && 7z a -t7z -mx=7 "$GITHUB_WORKSPACE/payload.7z" . > /dev/null )
