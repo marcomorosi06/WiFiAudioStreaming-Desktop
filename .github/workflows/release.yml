@@ -19,7 +19,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [windows-latest, ubuntu-latest, macos-latest, ubuntu-24.04-arm]
+        os: [windows-latest, ubuntu-latest, macos-latest, macos-13, ubuntu-24.04-arm]
     runs-on: ${{ matrix.os }}
 
     # Minimal token permissions for the job. Everything not defined here is dropped
@@ -51,8 +51,14 @@ jobs:
         if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y cmake build-essential
 
-      # Builds the native installers AND the portable .zip / .tar.gz archives
-      - name: Build Packages
+      # Windows: nessun installer, solo l'app impacchettata. Le altre piattaforme
+      # producono anche i formati nativi (dmg / deb / rpm).
+      - name: Build Packages (Windows)
+        if: runner.os == 'Windows'
+        run: ./gradlew createReleaseDistributable packagePortableArchives
+
+      - name: Build Packages (Linux/macOS)
+        if: runner.os != 'Windows'
         run: ./gradlew packageDistributionForCurrentOS packagePortableArchives
 
       # Build a portable AppImage from the unpacked distributable (Linux only)
@@ -62,7 +68,9 @@ jobs:
         run: |
           set -e
           export APPIMAGE_EXTRACT_AND_RUN=1
-          APP_VER="$(grep -E 'val appVersion' build.gradle.kts | head -1 | sed -E 's/.*"([^"]+)".*/\1/')"
+          APP_VER="$(cat build/display-version.txt 2>/dev/null || true)"
+          if [ -z "$APP_VER" ]; then APP_VER="${GITHUB_REF_NAME#v}"; fi
+          if [ -z "$APP_VER" ]; then APP_VER="dev"; fi
           OUT="build/packages"; mkdir -p "$OUT"
           APPDIR="$RUNNER_TEMP/AppDir"; rm -rf "$APPDIR"; mkdir -p "$APPDIR"
 
@@ -103,19 +111,63 @@ jobs:
           chmod +x appimagetool
           ARCH=$AITARCH ./appimagetool "$APPDIR" "$OUT/WiFi-Audio-Streaming-${APP_VER}-linux-${AITARCH}.AppImage"
 
+      - name: Build standalone .exe (Windows)
+        if: runner.os == 'Windows'
+        shell: bash
+        run: |
+          set -e
+          APP_VER="$(cat build/display-version.txt 2>/dev/null || true)"
+          if [ -z "$APP_VER" ]; then APP_VER="${GITHUB_REF_NAME#v}"; fi
+          if [ -z "$APP_VER" ]; then APP_VER="dev"; fi
+          OUT="build/packages"; mkdir -p "$OUT"
+
+          APP_SRC="$(find build/compose/binaries/main-release/app -maxdepth 1 -mindepth 1 -type d | head -n1)"
+          LAUNCHER="$(ls "$APP_SRC/bin" | grep -i '\.exe$' | head -n1)"
+          echo "app-image: $APP_SRC  launcher: $LAUNCHER"
+
+          curl -fL -o 7zextra.7z "https://www.7-zip.org/a/7z2408-extra.7z"
+          7z x 7zextra.7z -o7zextra -y > /dev/null
+
+          ( cd "$APP_SRC" && 7z a -t7z -mx=7 "$GITHUB_WORKSPACE/payload.7z" . > /dev/null )
+
+          printf ';!@Install@!UTF-8!\r\nRunProgram="\\"%%%%T\\\\bin\\\\%s\\""\r\nGUIMode="2"\r\n;!@InstallEnd@!\r\n' "$LAUNCHER" > sfx_config.txt
+          cat sfx_config.txt
+
+          cat 7zextra/7zSD.sfx sfx_config.txt payload.7z > "$OUT/WiFi-Audio-Streaming-${APP_VER}-windows-x64.exe"
+          ls -la "$OUT"
+
+      - name: Rename dmg per architecture (macOS)
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          set -e
+          APP_VER="$(cat build/display-version.txt 2>/dev/null || true)"
+          if [ -z "$APP_VER" ]; then APP_VER="${GITHUB_REF_NAME#v}"; fi
+          if [ -z "$APP_VER" ]; then APP_VER="dev"; fi
+          case "$(uname -m)" in
+            arm64|aarch64) MACARCH=arm64 ;;
+            *) MACARCH=x64 ;;
+          esac
+          DMG_DIR="build/compose/binaries/main/dmg"
+          for f in "$DMG_DIR"/*.dmg; do
+            [ -e "$f" ] || continue
+            mv "$f" "$DMG_DIR/WiFi-Audio-Streaming-${APP_VER}-macos-${MACARCH}.dmg"
+          done
+          ls -la "$DMG_DIR"
+
       # Upload built binaries as artifacts for later use in the release job
       - name: Upload Desktop Artifacts
         uses: actions/upload-artifact@v6
         with:
           name: desktop-artifacts-${{ matrix.os }}
           path: |
-            build/compose/binaries/main/msi/*.msi
             build/compose/binaries/main/deb/*.deb
             build/compose/binaries/main/rpm/*.rpm
             build/compose/binaries/main/dmg/*.dmg
             build/packages/*.zip
             build/packages/*.tar.gz
             build/packages/*.AppImage
+            build/packages/*.exe
           retention-days: 30
           if-no-files-found: ignore # Matrix platforms only compile their relative target outputs
 
@@ -124,7 +176,7 @@ jobs:
     name: Create Release
     runs-on: ubuntu-latest
     needs: build
-    if: ${{ success() }}
+    if: ${{ success() && startsWith(github.ref, 'refs/tags/v') }}
 
     # Explicitly granted scopes required for secure artifact attestation and drafting releases
     permissions:
@@ -149,7 +201,7 @@ jobs:
         uses: actions/attest-build-provenance@v3
         with:
           subject-path: |
-            ./release-assets/**/*.msi
+            ./release-assets/**/*.exe
             ./release-assets/**/*.deb
             ./release-assets/**/*.rpm
             ./release-assets/**/*.dmg

@@ -29,6 +29,9 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.Surface
+import androidx.compose.material.icons.outlined.ContentCopy
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.ArrowForward
@@ -738,6 +741,8 @@ fun SettingsScreen(
     var fwBusy by remember { mutableStateOf(false) }
     var fwActive by remember { mutableStateOf(FirewallHelper.rulesActive()) }
     var fwResult by remember { mutableStateOf<FirewallHelper.Result?>(null) }
+    val linuxFirewall = remember { FirewallHelper.detectLinuxFirewall() }
+    val clipboard = LocalClipboardManager.current
     var showLicensesDialog by remember { mutableStateOf(false) }
     val licensesText = remember {
         runCatching {
@@ -1303,6 +1308,65 @@ fun SettingsScreen(
                                         }
                                         Spacer(Modifier.width(6.dp))
                                         Text(stringResource("fw_btn"))
+                                    }
+                                }
+                            }
+                        }
+
+                        if (FirewallHelper.isLinux && linuxFirewall != FirewallHelper.LinuxFirewall.NONE) {
+                            HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
+                            Column(modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp)) {
+                                Text(
+                                    text = stringResource("fw_title_linux"),
+                                    style = MaterialTheme.typography.bodyLarge
+                                )
+                                Spacer(Modifier.height(2.dp))
+                                Text(
+                                    text = stringResource(
+                                        if (linuxFirewall == FirewallHelper.LinuxFirewall.FIREWALLD)
+                                            "fw_detected_firewalld" else "fw_detected_ufw"
+                                    ),
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.primary
+                                )
+                                Spacer(Modifier.height(4.dp))
+                                Text(
+                                    text = stringResource("fw_desc_linux"),
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                                Spacer(Modifier.height(12.dp))
+                                OutlinedTextField(
+                                    value = fwPorts,
+                                    onValueChange = { fwPorts = it },
+                                    label = { Text(stringResource("fw_ports_label")) },
+                                    singleLine = true,
+                                    modifier = Modifier.fillMaxWidth()
+                                )
+                                val linuxCmd = FirewallHelper.linuxAllowCommand(
+                                    fwPorts.split(Regex("[^0-9]+")).mapNotNull { it.toIntOrNull() }
+                                )
+                                if (linuxCmd != null) {
+                                    Spacer(Modifier.height(12.dp))
+                                    Surface(
+                                        color = MaterialTheme.colorScheme.surfaceVariant,
+                                        shape = RoundedCornerShape(8.dp),
+                                        modifier = Modifier.fillMaxWidth()
+                                    ) {
+                                        Text(
+                                            text = linuxCmd,
+                                            style = MaterialTheme.typography.bodySmall,
+                                            fontFamily = FontFamily.Monospace,
+                                            modifier = Modifier.padding(12.dp)
+                                        )
+                                    }
+                                    Spacer(Modifier.height(8.dp))
+                                    Button(onClick = {
+                                        clipboard.setText(AnnotatedString(linuxCmd))
+                                    }) {
+                                        Icon(Icons.Outlined.ContentCopy, contentDescription = null, modifier = Modifier.size(18.dp))
+                                        Spacer(Modifier.width(6.dp))
+                                        Text(stringResource("fw_copy_btn"))
                                     }
                                 }
                             }

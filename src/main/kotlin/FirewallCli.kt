@@ -24,8 +24,24 @@ object FirewallCli {
 
     fun run(cmd: FirewallCommand, json: Boolean): Int {
         if (!FirewallHelper.isWindows) {
-            if (json) println("{\"status\": \"unsupported\", \"message\": \"Firewall management is only available on Windows\"}")
-            else System.err.println("wfas firewall: only available on Windows")
+            val ports = when (cmd) {
+                is FirewallCommand.Allow -> cmd.ports.filter { it in 1..65535 }.distinct().ifEmpty { defaultPorts() }
+                else -> defaultPorts()
+            }
+            val suggestion = FirewallHelper.linuxAllowCommand(ports)
+            if (suggestion != null) {
+                if (json) {
+                    val esc = suggestion.replace("\"", "'")
+                    println("{\"status\": \"manual\", \"command\": \"$esc\"}")
+                } else {
+                    println("  A firewall is active on this system. Run:")
+                    println()
+                    println("    $suggestion")
+                }
+                return ExitCode.OK
+            }
+            if (json) println("{\"status\": \"unsupported\", \"message\": \"No managed firewall detected\"}")
+            else System.err.println("wfas firewall: automatic setup is Windows-only; no active firewall detected here")
             return ExitCode.USAGE_ERROR
         }
 

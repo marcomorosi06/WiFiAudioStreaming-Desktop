@@ -25,6 +25,39 @@ object FirewallHelper {
     val isWindows: Boolean
         get() = System.getProperty("os.name").startsWith("Windows", ignoreCase = true)
 
+    val isLinux: Boolean
+        get() = System.getProperty("os.name").startsWith("Linux", ignoreCase = true)
+
+    enum class LinuxFirewall { FIREWALLD, UFW, NONE }
+
+    private fun serviceActive(name: String): Boolean = runCatching {
+        val proc = ProcessBuilder("systemctl", "is-active", name)
+            .redirectErrorStream(true).start()
+        val out = proc.inputStream.bufferedReader().readText().trim()
+        proc.waitFor()
+        out == "active"
+    }.getOrDefault(false)
+
+    fun detectLinuxFirewall(): LinuxFirewall = when {
+        !isLinux -> LinuxFirewall.NONE
+        serviceActive("firewalld") -> LinuxFirewall.FIREWALLD
+        serviceActive("ufw") -> LinuxFirewall.UFW
+        else -> LinuxFirewall.NONE
+    }
+
+    fun linuxAllowCommand(ports: List<Int>): String? {
+        val clean = ports.filter { it in 1..65535 }.distinct()
+        if (clean.isEmpty()) return null
+        return when (detectLinuxFirewall()) {
+            LinuxFirewall.FIREWALLD ->
+                clean.joinToString(" ") { "sudo firewall-cmd --add-port=$it/udp --permanent &&" } +
+                    " sudo firewall-cmd --reload"
+            LinuxFirewall.UFW ->
+                clean.joinToString(" && ") { "sudo ufw allow $it/udp" }
+            LinuxFirewall.NONE -> null
+        }
+    }
+
     sealed class Result {
         object Success      : Result()
         object Denied       : Result()

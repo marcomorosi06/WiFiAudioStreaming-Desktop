@@ -13,6 +13,19 @@ version = "6.0"
 
 val appVersion = "5.1.0"
 
+val displayVersion = appVersion.split(".").let { p ->
+    val major = ((p.getOrNull(0)?.toIntOrNull() ?: 0) - 4).coerceAtLeast(0)
+    (listOf(major.toString()) + p.drop(1)).joinToString(".")
+}
+
+tasks.register("generateDisplayVersionFile") {
+    val outFile = layout.buildDirectory.file("display-version.txt")
+    outputs.file(outFile)
+    doLast {
+        outFile.get().asFile.apply { parentFile.mkdirs() }.writeText(displayVersion)
+    }
+}
+
 tasks.register("generateVersionProperties") {
     val outFile = layout.projectDirectory.file("src/main/resources/version.properties").asFile
     outputs.file(outFile)
@@ -314,7 +327,7 @@ val packageZip by tasks.registering(Zip::class) {
     dependsOn("createReleaseDistributable")
     from(portableAppDir)
     destinationDirectory.set(portableOutDir)
-    archiveFileName.set("WiFi-Audio-Streaming-$appVersion-$portableLabel.zip")
+    archiveFileName.set("WiFi-Audio-Streaming-$displayVersion-$portableLabel.zip")
 }
 
 val packageTarGz by tasks.registering(Tar::class) {
@@ -323,14 +336,14 @@ val packageTarGz by tasks.registering(Tar::class) {
     dependsOn("createReleaseDistributable")
     from(portableAppDir)
     destinationDirectory.set(portableOutDir)
-    archiveFileName.set("WiFi-Audio-Streaming-$appVersion-$portableLabel.tar.gz")
+    archiveFileName.set("WiFi-Audio-Streaming-$displayVersion-$portableLabel.tar.gz")
     compression = Compression.GZIP
 }
 
 val packagePortableArchives by tasks.registering {
     group = "distribution"
     description = "Crea sia lo .zip sia il .tar.gz portabili"
-    dependsOn(packageZip, packageTarGz)
+    dependsOn(packageZip, packageTarGz, "generateDisplayVersionFile")
 }
 
 // ─── Man page installation ────────────────────────────────────────────────────

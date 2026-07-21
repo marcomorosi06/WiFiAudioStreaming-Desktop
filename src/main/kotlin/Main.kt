@@ -712,12 +712,16 @@ object NetworkHandler_v1 {
     // ── Device enumeration ────────────────────────────────────────────────────
     fun findAvailableOutputMixers(): List<Mixer.Info> = AudioSystem.getMixerInfo().filter { info ->
         !info.name.startsWith("Port", ignoreCase = true) &&
-                AudioSystem.getMixer(info).isLineSupported(Line.Info(SourceDataLine::class.java))
+                runCatching {
+                    AudioSystem.getMixer(info).isLineSupported(Line.Info(SourceDataLine::class.java))
+                }.getOrDefault(false)
     }
 
     fun findAvailableInputMixers(): List<Mixer.Info> = AudioSystem.getMixerInfo().filter { info ->
         !info.name.startsWith("Port", ignoreCase = true) &&
-                AudioSystem.getMixer(info).isLineSupported(Line.Info(TargetDataLine::class.java))
+                runCatching {
+                    AudioSystem.getMixer(info).isLineSupported(Line.Info(TargetDataLine::class.java))
+                }.getOrDefault(false)
     }
 
     fun checkVirtualDriverStatus(useNativeEngine: Boolean = true): VirtualDriverStatus {
@@ -778,12 +782,45 @@ object NetworkHandler_v1 {
         }
     }
 
+    val localIpFlow = MutableStateFlow(getLocalIpAddress())
+    val networkRevision = MutableStateFlow(0)
+    private var networkWatchJob: Job? = null
+
+    fun startNetworkWatch() {
+        if (networkWatchJob?.isActive == true) return
+        networkWatchJob = scope.launch {
+            while (isActive) {
+                delay(2500)
+                val ip = runCatching { getLocalIpAddress() }.getOrDefault(localIpFlow.value)
+                if (ip != localIpFlow.value) {
+                    AppDebug.log("[NET] indirizzo locale cambiato: ${localIpFlow.value} -> $ip")
+                    localIpFlow.value = ip
+                    networkRevision.value++
+                    restartAnnounceOnNetworkChange()
+                }
+            }
+        }
+    }
+
+    fun stopNetworkWatch() {
+        networkWatchJob?.cancel()
+        networkWatchJob = null
+    }
+
+    suspend fun restartDeviceDiscovery(onDeviceFound: (hostname: String, serverInfo: ServerInfo) -> Unit) {
+        val job = listeningJob
+        listeningJob = null
+        if (job != null) runCatching { job.cancelAndJoin() }
+        beginDeviceDiscovery(onDeviceFound)
+    }
+
     // ── Discovery ──────────────────────────────────────────────────────────────
     fun beginDeviceDiscovery(onDeviceFound: (hostname: String, serverInfo: ServerInfo) -> Unit) {
         if (listeningJob?.isActive == true) return
         listeningJob = scope.launch {
-            val localIps = NetworkInterface.getNetworkInterfaces().toList()
+            var localIps = NetworkInterface.getNetworkInterfaces().toList()
                 .flatMap { it.inetAddresses.toList() }.map { it.hostAddress }.toSet()
+            var lastIpRefresh = System.currentTimeMillis()
             val groupAddress = InetAddress.getByName(MULTICAST_GROUP_IP)
             var socket: MulticastSocket? = null
             try {
@@ -796,6 +833,13 @@ object NetworkHandler_v1 {
                 val packet = DatagramPacket(buffer, buffer.size)
                 while (isActive) {
                     try {
+                        if (System.currentTimeMillis() - lastIpRefresh > 5000) {
+                            lastIpRefresh = System.currentTimeMillis()
+                            localIps = runCatching {
+                                NetworkInterface.getNetworkInterfaces().toList()
+                                    .flatMap { it.inetAddresses.toList() }.map { it.hostAddress }.toSet()
+                            }.getOrDefault(localIps)
+                        }
                         packet.length = buffer.size
                         socket.receive(packet)
                         val remoteIp = packet.address.hostAddress
@@ -860,7 +904,28 @@ object NetworkHandler_v1 {
 
     fun endDeviceDiscovery() { listeningJob?.cancel() }
 
+    private data class AnnounceParams(
+        val isMulticast: Boolean,
+        val port: Int,
+        val capabilities: ServerCapabilities,
+        val audioSettings: AudioSettings_V1?
+    )
+    private var lastAnnounceParams: AnnounceParams? = null
+
+    private fun restartAnnounceOnNetworkChange() {
+        val p = lastAnnounceParams ?: return
+        if (broadcastingJob?.isActive != true) return
+        scope.launch {
+            val job = broadcastingJob
+            broadcastingJob = null
+            if (job != null) runCatching { job.cancelAndJoin() }
+            AppDebug.log("[NET] rete cambiata: beacon riavviato sull'interfaccia nuova")
+            startAnnouncingPresence(p.isMulticast, p.port, p.capabilities, p.audioSettings)
+        }
+    }
+
     fun startAnnouncingPresence(isMulticast: Boolean, port: Int, capabilities: ServerCapabilities, audioSettings: AudioSettings_V1? = null) {
+        lastAnnounceParams = AnnounceParams(isMulticast, port, capabilities, audioSettings)
         broadcastingJob?.cancel()
         broadcastingJob = scope.launch {
             val hostname     = runCatching { InetAddress.getLocalHost().hostName }.getOrDefault("Desktop-PC")
@@ -1362,7 +1427,7 @@ object NetworkHandler_v1 {
         micInputMixerInfo: Mixer.Info,
         micPort: Int
     ) = launch {
-        val mixer    = AudioSystem.getMixer(micInputMixerInfo)
+        val mixer    = resolveMixer(micInputMixerInfo) ?: return@launch
         val format   = audioSettings.toAudioFormat()
         val lineInfo = DataLine.Info(TargetDataLine::class.java, format)
         if (!mixer.isLineSupported(lineInfo)) return@launch
@@ -3372,17 +3437,25 @@ object NetworkHandler_v1 {
         "${s.sampleRate.toInt()} Hz, " +
         (if (s.channels == 1) "mono" else "stereo") + ", ${s.bitDepth} bit"
 
+    private fun resolveMixer(info: Mixer.Info): Mixer? {
+        runCatching { return AudioSystem.getMixer(info) }
+        val current = runCatching { AudioSystem.getMixerInfo() }.getOrNull() ?: return null
+        val again = current.firstOrNull { it == info }
+            ?: current.firstOrNull { it.name == info.name }
+            ?: current.firstOrNull { it.name.equals(info.name, ignoreCase = true) }
+        if (again == null) {
+            AppDebug.log("[CLIENT] mixer '${info.name}' non piu' presente fra i dispositivi correnti")
+            return null
+        }
+        AppDebug.log("[CLIENT] mixer '${info.name}' risolto di nuovo dalla lista aggiornata")
+        return runCatching { AudioSystem.getMixer(again) }.getOrNull()
+    }
+
     private fun prepareSourceDataLine(mixerInfo: Mixer.Info, audioSettings: AudioSettings_V1): SourceDataLine? {
-        val mixer        = AudioSystem.getMixer(mixerInfo)
         val format       = audioSettings.toAudioFormat()
         val dataLineInfo = DataLine.Info(SourceDataLine::class.java, format)
 
         AppDebug.log("[CLIENT] prepareSourceDataLine: mixer='${mixerInfo.name}' format=$format sr=${audioSettings.sampleRate} ch=${audioSettings.channels} bd=${audioSettings.bitDepth}")
-
-        if (!mixer.isLineSupported(dataLineInfo)) {
-            AppDebug.log("[CLIENT] ERROR: mixer '${mixerInfo.name}' does NOT support format $format")
-            return null
-        }
 
         val frameSize = format.frameSize
         val targetLatencyMs = 80
@@ -3390,8 +3463,25 @@ object NetworkHandler_v1 {
             .let { it - (it % frameSize) }
             .coerceAtLeast(frameSize * 256)
 
+        val mixer = resolveMixer(mixerInfo)
+        val line = when {
+            mixer == null -> {
+                AppDebug.log("[CLIENT] ripiego sull'uscita predefinita di sistema")
+                runCatching { AudioSystem.getSourceDataLine(format) }.getOrNull()
+            }
+            !mixer.isLineSupported(dataLineInfo) -> {
+                AppDebug.log("[CLIENT] ERROR: mixer '${mixerInfo.name}' does NOT support format $format")
+                return null
+            }
+            else -> runCatching { mixer.getLine(dataLineInfo) as SourceDataLine }.getOrNull()
+        }
+        if (line == null) {
+            AppDebug.log("[CLIENT] ERROR: nessuna linea di uscita utilizzabile per $format")
+            return null
+        }
+
         AppDebug.log("[CLIENT] SourceDataLine: frameSize=$frameSize targetLatencyMs=${targetLatencyMs}ms targetBufferBytes=$targetBytes")
-        return (mixer.getLine(dataLineInfo) as SourceDataLine).also { sdl ->
+        return runCatching { line.also { sdl ->
             sdl.open(format, targetBytes)
             AppDebug.log("[CLIENT] SourceDataLine opened: bufferSize=${sdl.bufferSize} format=${sdl.format} realLatency=${sdl.bufferSize * 1000 / (audioSettings.sampleRate.toInt() * frameSize)}ms")
 
@@ -3413,7 +3503,10 @@ object NetworkHandler_v1 {
             }
 
             sdl.start()
-        }
+        } }.onFailure {
+            AppDebug.log("[CLIENT] apertura della linea fallita: ${it.message}")
+            runCatching { line.close() }
+        }.getOrNull()
     }
 
     // ── Stop / terminate ───────────────────────────────────────────────────────
@@ -3796,12 +3889,44 @@ fun startGuiApplication(cliArgs: CliArgs) = application {
         }
     }
 
-    val localIp = remember { NetworkHandler_v1.getLocalIpAddress() }
+    val localIp by NetworkHandler_v1.localIpFlow.collectAsState()
+    val networkRevision by NetworkHandler_v1.networkRevision.collectAsState()
+    LaunchedEffect(Unit) { NetworkHandler_v1.startNetworkWatch() }
+    LaunchedEffect(networkRevision) {
+        if (networkRevision > 0 && !isServer) {
+            discoveredDevices.clear()
+            NetworkHandler_v1.restartDeviceDiscovery { hostname, serverInfo ->
+                discoveredDevices[hostname] = serverInfo
+            }
+        }
+    }
     val httpUrl by remember(appSettings, isStreaming) {
         derivedStateOf {
             if (isStreaming && appSettings.httpEnabled)
                 "http://$localIp:${appSettings.httpPort.toIntOrNull() ?: 8080}"
             else null
+        }
+    }
+
+    LaunchedEffect(Unit) {
+        while (true) {
+            val outs = runCatching { NetworkHandler_v1.findAvailableOutputMixers() }.getOrNull()
+            val ins  = runCatching { NetworkHandler_v1.findAvailableInputMixers() }.getOrNull()
+            if (outs != null && outs.map { it.name } != outputDevices.value.map { it.name }) {
+                outputDevices.value = outs
+                if (selectedOutputDevice == null || outs.none { it.name == selectedOutputDevice?.name }) {
+                    selectedOutputDevice = outs.firstOrNull()
+                } else {
+                    selectedOutputDevice = outs.first { it.name == selectedOutputDevice?.name }
+                }
+            }
+            if (ins != null && ins.map { it.name } != inputDevices.value.map { it.name }) {
+                inputDevices.value = ins
+                if (selectedInputDevice == null || ins.none { it.name == selectedInputDevice?.name }) {
+                    selectedInputDevice = ins.firstOrNull()
+                }
+            }
+            delay(3000)
         }
     }
 
