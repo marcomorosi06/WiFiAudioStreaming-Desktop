@@ -1927,6 +1927,33 @@ object NetworkHandler_v1 {
             val accumS16 = java.nio.ShortBuffer.allocate(samplesPerFrame * 4)
             var pts    = 0L
 
+            // ADTS header: 7 byte per frame — necessario perché avcodec produce
+            // raw AAC senza framing; il browser ha bisogno del sync word 0xFFF.
+            val adtsSampleRate = audioSettings.sampleRate.toInt()
+            val adtsFreqIdx = when (adtsSampleRate) {
+                96000 -> 0; 88200 -> 1; 64000 -> 2; 48000 -> 3; 44100 -> 4
+                32000 -> 5; 24000 -> 6; 22050 -> 7; 16000 -> 8; 12000 -> 9
+                11025 -> 10; 8000 -> 11; 7350 -> 12; else -> 3
+            }
+            val adtsProfile = 1 // AAC-LC (MPEG-4 Object Type 2, ADTS profile = objectType - 1)
+            val adtsChanCfg = nCh
+
+            fun wrapAdts(raw: ByteArray): ByteArray {
+                val frameLen = 7 + raw.size
+                val hdr = ByteArray(7)
+                hdr[0] = 0xFF.toByte()
+                hdr[1] = 0xF1.toByte() // MPEG-4, Layer 0, no CRC
+                hdr[2] = ((adtsProfile shl 6) or (adtsFreqIdx shl 2) or (adtsChanCfg shr 2)).toByte()
+                hdr[3] = (((adtsChanCfg and 3) shl 6) or (frameLen shr 11)).toByte()
+                hdr[4] = ((frameLen shr 3) and 0xFF).toByte()
+                hdr[5] = (((frameLen and 7) shl 5) or 0x1F).toByte()
+                hdr[6] = 0xFC.toByte() // buffer fullness 0x7FF (VBR), 0 raw data blocks
+                val out = ByteArray(frameLen)
+                System.arraycopy(hdr, 0, out, 0, 7)
+                System.arraycopy(raw, 0, out, 7, raw.size)
+                return out
+            }
+
             fun encodeAac() {
                 org.bytedeco.ffmpeg.global.avutil.av_frame_make_writable(avFrame)
                 accumS16.flip()
@@ -1945,9 +1972,9 @@ object NetworkHandler_v1 {
                 avFrame.pts(pts); pts += frameSize.toLong()
                 if (org.bytedeco.ffmpeg.global.avcodec.avcodec_send_frame(ctx, avFrame) >= 0) {
                     while (org.bytedeco.ffmpeg.global.avcodec.avcodec_receive_packet(ctx, pkt) >= 0) {
-                        val aac = ByteArray(pkt.size()).also { pkt.data().get(it) }
+                        val raw = ByteArray(pkt.size()).also { pkt.data().get(it) }
                         org.bytedeco.ffmpeg.global.avcodec.av_packet_unref(pkt)
-                        broadcastChunked(aacClients, aac, false)
+                        broadcastChunked(aacClients, wrapAdts(raw), false)
                     }
                 }
             }
