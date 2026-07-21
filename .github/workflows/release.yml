@@ -59,7 +59,7 @@ jobs:
 
       - name: Build Packages (Linux/macOS)
         if: runner.os != 'Windows'
-        run: ./gradlew packageDistributionForCurrentOS packagePortableArchives
+        run: ./gradlew createReleaseDistributable packageDistributionForCurrentOS packagePortableArchives
 
       # Build a portable AppImage from the unpacked distributable (Linux only)
       - name: Build AppImage (Linux)
@@ -75,7 +75,7 @@ jobs:
           APPDIR="$RUNNER_TEMP/AppDir"; rm -rf "$APPDIR"; mkdir -p "$APPDIR"
 
           # Copy the unpacked app (folder name resolved dynamically)
-          APP_SRC="$(find build/compose/binaries/main/app -maxdepth 1 -mindepth 1 -type d | head -n1)"
+          APP_SRC="$(find build/compose/binaries/main-release/app -maxdepth 1 -mindepth 1 -type d | head -n1)"
           cp -r "$APP_SRC/." "$APPDIR/"
           LAUNCHER_NAME="$(ls "$APPDIR/bin" | head -n1)"
 
@@ -122,8 +122,9 @@ jobs:
           OUT="build/packages"; mkdir -p "$OUT"
 
           APP_SRC="$(find build/compose/binaries/main-release/app -maxdepth 1 -mindepth 1 -type d | head -n1)"
-          LAUNCHER="$(ls "$APP_SRC/bin" | grep -i '\.exe$' | head -n1)"
-          echo "app-image: $APP_SRC  launcher: $LAUNCHER"
+          echo "app-image: $APP_SRC"
+          LAUNCHER="$(ls "$APP_SRC"/*.exe 2>/dev/null | head -n1 | xargs -I{} basename {})"
+          echo "launcher: $LAUNCHER"
 
           curl -fL -o 7zextra.7z "https://www.7-zip.org/a/7z2408-extra.7z"
           7z x 7zextra.7z -o7zextra -y > /dev/null
