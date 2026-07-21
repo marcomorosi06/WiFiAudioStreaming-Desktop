@@ -134,7 +134,8 @@ jobs:
           printf ';!@Install@!UTF-8!\r\nRunProgram="\\"%%%%T\\\\bin\\\\%s\\""\r\nGUIMode="2"\r\n;!@InstallEnd@!\r\n' "$LAUNCHER" > sfx_config.txt
           cat sfx_config.txt
 
-          cat 7zextra/7zSD.sfx sfx_config.txt payload.7z > "$OUT/WiFi-Audio-Streaming-${APP_VER}-windows-x64.exe"
+          SFX_MODULE="$(find 7zextra -iname '7zSD.sfx' | grep 'x64' || find 7zextra -iname '7zSD.sfx' | head -n1)"
+          cat "$SFX_MODULE" sfx_config.txt payload.7z > "$OUT/WiFi-Audio-Streaming-${APP_VER}-windows-x64.exe"
           ls -la "$OUT"
 
       - name: Rename dmg per architecture (macOS)
