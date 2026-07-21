@@ -252,7 +252,7 @@ data class CliArgs(
                     "--rtp-port"    -> { rtpPort  = nextInt(args, i, "--rtp-port",  1024, 65535); i++ }
                     "--http"        -> http       = true
                     "--http-port"   -> { httpPort = nextInt(args, i, "--http-port", 1024, 65535); i++ }
-                    "--http-safari" -> httpSafari = true
+                    "--http-safari" -> { httpSafari = true; http = true }
 
                     "--connect" -> {
                         serverIp = nextArg(args, i, "--connect") ?: parseError("--connect requires an IP address")
@@ -470,7 +470,7 @@ SERVER OPTIONS
   --rtp-port <n>      RTP port                     (default: 9094)
   --http              Enable HTTP stream            (implies --multicast)
   --http-port <n>     HTTP port                    (default: 8080)
-  --http-safari       Enable Safari-compatible HLS
+  --http-safari       Enable Safari-compatible AAC  (implies --http)
   --auth-mode <m>     Connection authorization: off | ask | key  (default: off;
                       unicast only). 'ask' prompts on the terminal per client.
   --auth-key <key>    Pre-shared key (implies --auth-mode key). The key is never

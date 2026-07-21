@@ -145,7 +145,10 @@ HTTP server port (default:
 .IR 8080 ).
 .TP
 .B --http-safari
-Enable Safari-compatible HLS mode on the HTTP server.
+Enable the Safari-compatible AAC stream on the HTTP server.
+Implies
+.BR --http ,
+which in turn forces multicast.
 .TP
 .B --sdp
 Print the SDP session descriptor to standard output when the server starts.
