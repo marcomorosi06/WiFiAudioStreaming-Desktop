@@ -8,6 +8,8 @@ Turn your computer into a **wireless audio transmitter or receiver**.
 
 This application allows you to send your PC's audio to any device on the same local network, or listen to audio from another device. It is designed to work seamlessly with the [Android version](https://github.com/marcomorosi06/WiFiAudioStreaming-Android).
 
+🌐 **Website**: [marcomorosi.eu/wifi-audio-streaming](https://www.marcomorosi.eu/wifi-audio-streaming/)
+
 [![ko-fi](https://ko-fi.com/img/githubbutton_sm.svg)](https://ko-fi.com/marcomorosi)
 
 ---
@@ -60,13 +62,24 @@ This application allows you to send your PC's audio to any device on the same lo
   - **Multicast** → simultaneous transmission to multiple clients
 
 - **Multiple Streaming Protocols**
-  - **WFAS** (native protocol, lowest latency)
+  - **WFAS v2** (native protocol, lowest latency)
   - **RTP** (compatible with any RTP-capable receiver)
   - **HTTP/AAC** (Safari, iOS)
   - **HTTP/Opus WebM** (Chrome, Firefox, any browser)
 
+  Peers running an incompatible protocol version are rejected immediately during the handshake with a clear error, instead of hanging silently.
+
 - **Security & Encryption**
-  Optionally gate who can connect (approve each device, or require a pre-shared key with mutual HMAC-SHA256 challenge-response) and encrypt the audio end-to-end with **ChaCha20-Poly1305** (per-packet AEAD, anti-replay, keys derived via HKDF). Works for both unicast and multicast; no PKI required. See [`WFAS_PROTOCOL.md`](WFAS_PROTOCOL.md) §7–8.
+  Optionally gate who can connect (**Off**, **Ask** to approve each device, or **Key** for a pre-shared password checked via mutual HMAC-SHA256 challenge-response) and encrypt the audio end-to-end with **ChaCha20-Poly1305** (per-packet AEAD, anti-replay, keys derived via HKDF). Works for both unicast and multicast; no PKI required. See [`WFAS_PROTOCOL.md`](WFAS_PROTOCOL.md) §7–8.
+
+- **Firewall Assistant**
+  On Windows, the app can create the required inbound firewall rule automatically with one click. On Linux, it detects `ufw` or `firewalld` and shows the exact command to open the required ports.
+
+- **Automatic Update Checker**
+  Optionally checks GitHub for new releases on startup, or on demand, with release notes and a direct download link shown right in the app.
+
+- **Command-Line Interface (`wfas`)**
+  A full headless daemon and control tool, installable to your system's PATH during first-run setup: start a server or client, run `wfas control volume 75` or `wfas control mute` against a running instance, manage configuration profiles with `wfas config`, and fix Windows Firewall with `wfas firewall allow`. Add `--json` to almost any command for scripting. Run `wfas --viz` for a real-time ASCII audio visualizer, with theming (`--viz rainbow`) and a `--groove` mode that highlights melody over raw bass. Run `wfas --debug` for a live-updating table of UDP packets and internal state. See `wfas --help` or the man page for the full command reference.
 
 - **Detailed Audio Configuration**
   Customize sample rate, bit depth, channels, and buffer size.
@@ -85,19 +98,11 @@ This application allows you to send your PC's audio to any device on the same lo
 |----------|-------------|---------------|------|
 | Windows 10/11 | x86_64 | ✅ Native (no drivers needed) | ✅ |
 | macOS 13+ (Ventura) | x86_64, arm64 | ✅ Native (no drivers needed) | ✅ |
-| Linux | x86_64 | FFmpeg + PulseAudio virtual sink (auto-managed) | ✅ |
+| Linux | x86_64 | ✅ Native (no drivers needed) | ✅ |
 
 > **macOS note:** ScreenCaptureKit (used by the native engine) requires macOS 12.3 or later. The app will ask for screen recording and audio permissions on first launch. Yes, there are quite a few permission dialogs. Grant them all and the audio quality is genuinely clean and crisp on the receiving end.
 >
 > **macOS legacy:** If you are on macOS 12.2 or earlier, you can still use the FFmpeg + BlackHole path by disabling the native engine in Settings → Advanced.
-
----
-
-# 🐧 Linux: Virtual Audio Cable
-
-On Linux, the application automatically creates and manages a PulseAudio virtual sink named `VirtualCable` at startup. When you start the server, your system audio is routed through it automatically and restored when you stop. **No extra installation required.**
-
-If you use PipeWire with `pipewire-pulse`, this works identically.
 
 ---
 
@@ -108,18 +113,21 @@ If you use PipeWire with `pipewire-pulse`, this works identically.
 1. Open the app and select **Send (Server)**.
 2. On **Linux**, the virtual sink is created automatically. On **Windows and macOS**, the native engine captures system audio directly with no extra setup.
 3. Select **Multicast** (multiple clients) or **Unicast** (single client). In Unicast the server serves one client at a time: while a session is running it stops advertising itself, and any other device that tries to connect is told the server is busy instead of being left waiting.
-4. Click **Start Server**.
+4. Optionally set an authorization mode (**Off**, **Ask**, or **Key**) in Settings → Security to control who can connect, and enable encryption if you set a key.
+5. Click **Start Server**.
 
 ## Receive Audio (Client Mode)
 
 1. Open the app and select **Receive (Client)**.
 2. Choose your physical output device (headphones, speakers).
 3. The app will automatically list active servers on the network.
-4. Select one to connect.
+4. Select one to connect. If it's password-protected, you'll be prompted for the key.
 
 If the server does not appear automatically, enter its local IP address manually.
 
 If the server is already streaming to another device in Unicast mode, the app reports *"That server is already streaming to another device"* immediately instead of waiting for a timeout.
+
+If Windows Firewall is blocking the connection, the app will offer to fix it for you automatically.
 
 ---
 
@@ -134,6 +142,29 @@ If you are using the Android app as a microphone source, the desktop server can 
 | **Mix Into Stream** | Blends the mic into the outgoing audio directly |
 
 A mute button is available at any time during streaming.
+
+---
+
+# ⌨️ Command-Line Interface
+
+WiFi Audio Streaming ships with `wfas`, a fully-featured CLI and headless daemon, useful for scripting, running on a headless box, or just staying in the terminal.
+
+```bash
+wfas --server --rtp                     # start a headless RTP server
+wfas --client 192.168.1.42              # connect as a client
+wfas --mode discover --json             # scan the network, output JSON
+wfas control volume 75                  # adjust volume on a running instance
+wfas control mute                       # toggle mic mute on a running instance
+wfas config list                        # show every setting and its value
+wfas config edit                        # edit the shared JSON configuration
+wfas firewall allow                     # open the default ports (Windows)
+wfas --viz rainbow                      # ASCII audio visualizer, rainbow theme
+wfas --monitor --groove                 # visualize local system audio only
+wfas --debug                            # live UDP packet / state table
+wfas --help                             # full command reference
+```
+
+During first-run setup, the app offers to install `wfas` to your system's PATH automatically.
 
 ---
 
@@ -152,6 +183,16 @@ Turn your smartphone into a **portable audio receiver or transmitter**.
 <a href="https://apt.izzysoft.de/packages/com.cuscus.wifiaudiostreaming">
 <img src="https://gitlab.com/IzzyOnDroid/repo/-/raw/master/assets/IzzyOnDroid.png" height="80">
 </a>
+
+---
+
+# 🔌 Open Protocol & Embedded Devices
+
+The WFAS v2 wire protocol is documented separately from the apps, with a tiny, dependency-free C99 reference implementation for embedded and firmware projects (ESP32, STM32, RP2040, Raspberry Pi, and more):
+
+👉 [wfas-protocol on GitHub](https://github.com/marcomorosi06/wfas-protocol)
+
+It has been tested end to end on real hardware, an ESP32 streaming audio from an analog line-in source, decoded live by both this desktop app and the Android app using the exact same protocol implementation. If you're experimenting with an analog capture setup like that, there's an optional **Noise Reduction** filter under Developer Settings that helps with the background hiss.
 
 ---
 
@@ -195,6 +236,7 @@ Output: `build/compose/binaries/main/`
 - **Networking:** Ktor (UDP/TCP sockets)
 - **Audio Capture:** Native C library via JNI (Windows, macOS) / FFmpeg via JavaCV (Linux)
 - **Audio Encoding:** FFmpeg via JavaCV (AAC, Opus for HTTP streaming)
+- **Cryptography:** HMAC-SHA256 challenge-response authentication, ChaCha20-Poly1305 AEAD encryption, HKDF-SHA256 key derivation (Bouncy Castle)
 
 ---
 
