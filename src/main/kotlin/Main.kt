@@ -2529,7 +2529,7 @@ object NetworkHandler_v1 {
                     }
 
                 } else { // Unicast
-                    val localAddress = InetSocketAddress(port)
+                    val localAddress = InetSocketAddress(NetAddr.wildcardHost(), port)
                     aSocket(selectorManager).udp().bind(localAddress) { reuseAddress = true }.use { socket ->
                         var pendCnonce = ""
                         var pendSnonce = ""

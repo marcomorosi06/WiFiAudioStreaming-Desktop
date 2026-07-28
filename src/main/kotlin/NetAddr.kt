@@ -115,6 +115,19 @@ object NetAddr {
 
     fun hasIpv6(): Boolean = localAddresses().any { it.isV6 }
 
+    private val wildcard: String by lazy {
+        val dualStack = runCatching {
+            java.net.DatagramSocket(null).use { s ->
+                s.reuseAddress = true
+                s.bind(java.net.InetSocketAddress(InetAddress.getByName("::"), 0))
+                true
+            }
+        }.getOrDefault(false)
+        if (dualStack) "::" else "0.0.0.0"
+    }
+
+    fun wildcardHost(): String = wildcard
+
     fun interfaceHasV4(iface: NetworkInterface): Boolean = runCatching {
         iface.inetAddresses.toList().any { it is Inet4Address && !it.isLoopbackAddress }
     }.getOrDefault(false)
