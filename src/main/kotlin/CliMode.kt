@@ -36,11 +36,7 @@ object ExitCode {
 // ANSI helpers
 // ─────────────────────────────────────────────────────────────────────────────
 
-private val ANSI = System.getenv("NO_COLOR") == null && System.getenv("TERM") != "dumb" &&
-        !System.getProperty("os.name", "").lowercase().contains("win") ||
-        System.getenv("WT_SESSION") != null || System.getenv("COLORTERM") != null
-
-private fun ansi(code: String, text: String) = if (ANSI) "[${code}m$text[0m" else text
+private fun ansi(code: String, text: String) = Ansi.code(code, text)
 private fun green(t: String)  = ansi("32",   t)
 private fun red(t: String)    = ansi("31",   t)
 private fun yellow(t: String) = ansi("33",   t)
@@ -143,6 +139,40 @@ private fun assertPortFree(port: Int, label: String, args: CliArgs) {
 // ─────────────────────────────────────────────────────────────────────────────
 // SDP generation
 // ─────────────────────────────────────────────────────────────────────────────
+
+private fun linkLabel(): String {
+    val st = UsbLink.state
+    return if (UsbLink.isReady())
+        "USB  ${st.displayName ?: st.interfaceName ?: "usb"}  ${st.localAddress ?: "-"}"
+    else "Wi-Fi"
+}
+
+private fun reportLink(args: CliArgs) {
+    if (args.json) {
+        jsonLine(
+            "event"   to "link_state",
+            "usb"     to UsbLink.isReady(),
+            "iface"   to (UsbLink.state.interfaceName ?: ""),
+            "address" to (UsbLink.state.localAddress ?: ""),
+            "family"  to NetAddr.preferredFamily.name.lowercase()
+        )
+        return
+    }
+    if (!args.viz) {
+        out("  ${dim("Link")}    ${if (UsbLink.isReady()) green(linkLabel()) else dim(linkLabel())}", args)
+    }
+    if (args.usb == true && !UsbLink.isReady()) {
+        err(yellow("!") + " --usb requested but no USB link is up. Streaming over Wi-Fi instead.")
+        if (UsbLink.platform == UsbLink.Platform.MACOS)
+            err(dim("  macOS has no built-in RNDIS driver, so Android USB tethering does not come up."))
+        else
+            err(dim("  Enable USB tethering on the phone, or run with --debug to list the interfaces."))
+        if (args.debug) {
+            err(dim("  Interfaces seen:"))
+            UsbLink.inspect().forEach { err(dim("    $it")) }
+        }
+    }
+}
 
 private fun buildSdp(args: CliArgs, serverIp: String, audio: AudioSettings_V1): String {
     val sessionId = System.currentTimeMillis() / 1000
@@ -255,6 +285,14 @@ private fun maybeNotifyUpdate(args: CliArgs) {
 fun runCli(args: CliArgs) {
     AppDebug.enabled = args.debug
     val settings = SettingsRepository.loadSettings()
+
+    NetAddr.configureFamily(args.ipFamily)
+    UsbLink.configure(
+        args.usb ?: settings.app.usbModeEnabled,
+        args.usbLatency ?: settings.app.usbLatencyMs,
+        override = args.usb != null || args.usbLatency != null
+    )
+    WfasPolicy.configure(args.wfasMode ?: settings.app.wfasMode, override = args.wfasMode != null)
 
     if (!SettingsRepository.hasSeenCliWelcome() && args.controlCmd == null && !args.json) {
         printCliWelcome()
@@ -388,14 +426,17 @@ private suspend fun runCliServer(args: CliArgs, settings: AllSettings) {
     } else if (!args.viz) {
         out("", args)
         out(bold("  WiFi Audio Streaming") + "  - server mode", args)
-        out("  ${dim("IP")}      ${cyan(serverIp)}:${args.port}", args)
+        out("  ${dim("IP")}      ${cyan(NetAddr.hostPort(serverIp, args.port))}", args)
         out("  ${dim("Multicast")} ${if (args.multicast) green("enabled") else dim("disabled")}", args)
         if (args.rtp)  out("  ${dim("RTP")}     port ${args.rtpPort}", args)
         if (args.http) out("  ${dim("HTTP")}    http://$serverIp:${args.httpPort}", args)
         if (args.mic)  out("  ${dim("Mic")}     ${args.micRouting.name.lowercase().replace('_', '-')}", args)
+        reportLink(args)
         out("", args)
         out(dim("  Commands: q=stop, v <0-100>=volume"), args)
         out("", args)
+    } else {
+        reportLink(args)
     }
 
     val viz = if (args.viz && !args.json)
@@ -549,6 +590,7 @@ private suspend fun runCliClient(args: CliArgs, settings: AllSettings) {
         out("  ${dim("Connecting to")}  ${cyan(serverInfo.ip)}:${serverInfo.port}", args)
         out("  ${dim("Output")}         ${outputDevice.name}", args)
         if (args.sendMic) out("  ${dim("Mic")}            ${micInput?.name ?: "default"}", args)
+        reportLink(args)
         out("", args)
         out(dim("  Commands: q=disconnect, v <0-100>=volume"), args)
         out("", args)
@@ -753,9 +795,12 @@ private fun discoverSecurity(info: ServerInfo): String {
     }
 }
 
+private fun discoverLink(info: ServerInfo): String =
+    (if (info.viaUsb) "USB" else "WIFI") + "/" + (if (NetAddr.isV6Literal(info.ip)) "v6" else "v4")
+
 private fun printDiscoverHeader(args: CliArgs) {
-    out("  " + bold("HOST".padEnd(18)) + " " + bold("IP".padEnd(16)) + " " +
-        bold("MODE".padEnd(6)) + " " + bold("SECURITY"), args)
+    out("  " + bold("HOST".padEnd(18)) + " " + bold("ADDRESS".padEnd(28)) + " " +
+        bold("MODE".padEnd(6)) + " " + bold("LINK".padEnd(8)) + " " + bold("SECURITY"), args)
 }
 
 private fun emitDiscover(args: CliArgs, host: String, info: ServerInfo) {
@@ -773,11 +818,14 @@ private fun emitDiscover(args: CliArgs, host: String, info: ServerInfo) {
             "mode"      to mode,
             "security"  to security,
             "auth"      to (info.capabilities?.securityMode ?: "OFF"),
-            "encrypted" to (info.capabilities?.encrypted ?: false)
+            "encrypted" to (info.capabilities?.encrypted ?: false),
+            "transport" to (if (info.viaUsb) "usb" else "wifi"),
+            "family"    to (if (NetAddr.isV6Literal(info.ip)) "ipv6" else "ipv4")
         )
     } else {
-        out("  " + cyan(host.padEnd(18)) + " " + info.ip.padEnd(16) + " " +
-            mode.padEnd(6) + " " + security, args)
+        val addr = NetAddr.hostPort(info.ip, info.port)
+        out("  " + cyan(host.padEnd(18)) + " " + addr.padEnd(28) + " " +
+            mode.padEnd(6) + " " + discoverLink(info).padEnd(8) + " " + security, args)
     }
 }
 
@@ -786,6 +834,16 @@ private suspend fun runCliDiscover(args: CliArgs) {
         out(bold("  WiFi Audio Streaming") + "  - discover mode", args)
         out("  ${dim(if (args.watch) "Scanning... (Ctrl+C to stop)" else "Scanning network (5s)...")}", args)
         out("", args)
+    }
+
+    if (args.debug && !args.json) {
+        val usbIface = UsbLink.detectedInterface()
+        err(dim("  USB link: iface=${usbIface?.name ?: "none"} " +
+                "display=${usbIface?.displayName ?: "-"} " +
+                "streamingEnabled=${UsbLink.enabled} ready=${UsbLink.isReady()}"))
+        err(dim("  Interfaces seen:"))
+        UsbLink.inspect().forEach { err(dim("    $it")) }
+        err("")
     }
 
     if (args.watch) {

@@ -68,20 +68,68 @@ object NetAddr {
         return runCatching { InetAddress.getByName(h) }.getOrNull()
     }
 
-    fun score(address: InetAddress): Int = when {
-        address.isLoopbackAddress -> -1000
-        address is Inet4Address -> when {
-            address.isLinkLocalAddress -> 10
-            address.isSiteLocalAddress -> 100
-            else -> 80
+    fun literalHost(socketAddress: Any?): String? {
+        if (socketAddress == null) return null
+        val raw = runCatching {
+            socketAddress.javaClass
+                .getMethod("getAddress\$ktor_network")
+                .invoke(socketAddress)
+        }.getOrNull() as? java.net.InetSocketAddress ?: return null
+        val inet = raw.address ?: return null
+        return inet.hostAddress?.ifBlank { null }
+    }
+
+    fun literalHostOfText(text: String?): String? {
+        if (text.isNullOrBlank()) return null
+        var s = text.trim()
+        val slash = s.lastIndexOf('/')
+        if (slash >= 0) s = s.substring(slash + 1)
+        if (s.startsWith("[")) {
+            val close = s.indexOf(']')
+            if (close > 0) return s.substring(1, close).ifBlank { null }
         }
-        address is Inet6Address -> when {
-            address.isLinkLocalAddress -> 40
-            isUniqueLocal(address) -> 90
-            address.isSiteLocalAddress -> 70
-            else -> 85
+        val colon = s.lastIndexOf(':')
+        if (colon > 0 && s.substring(colon + 1).toIntOrNull() != null) s = s.substring(0, colon)
+        return s.ifBlank { null }
+    }
+
+    enum class Family { AUTO, V4, V6 }
+
+    @Volatile
+    var preferredFamily: Family = Family.AUTO
+
+    fun configureFamily(value: Family) {
+        preferredFamily = value
+    }
+
+    fun allows(address: InetAddress): Boolean = when (preferredFamily) {
+        Family.AUTO -> true
+        Family.V4 -> address is Inet4Address
+        Family.V6 -> address is Inet6Address
+    }
+
+    fun score(address: InetAddress): Int {
+        if (address.isLoopbackAddress) return -1000
+        val base = when {
+            address is Inet4Address -> when {
+                address.isLinkLocalAddress -> 10
+                address.isSiteLocalAddress -> 100
+                else -> 80
+            }
+            address is Inet6Address -> when {
+                address.isLinkLocalAddress -> 40
+                isUniqueLocal(address) -> 90
+                address.isSiteLocalAddress -> 70
+                else -> 85
+            }
+            else -> 0
         }
-        else -> 0
+        val bias = when (preferredFamily) {
+            Family.AUTO -> 0
+            Family.V4 -> if (address is Inet4Address) 500 else -400
+            Family.V6 -> if (address is Inet6Address) 500 else -400
+        }
+        return base + bias
     }
 
     private fun isUniqueLocal(address: Inet6Address): Boolean {
@@ -89,7 +137,18 @@ object NetAddr {
         return b.isNotEmpty() && (b[0].toInt() and 0xFE) == 0xFC
     }
 
+    private const val SCAN_CACHE_MS = 1000L
+
+    @Volatile private var cachedLocals: List<Local>? = null
+    @Volatile private var cachedLocalsAt = 0L
+
+    fun invalidateScan() {
+        cachedLocals = null
+    }
+
     fun localAddresses(): List<Local> {
+        val now = System.currentTimeMillis()
+        cachedLocals?.let { if (now - cachedLocalsAt < SCAN_CACHE_MS) return it }
         val out = mutableListOf<Local>()
         runCatching {
             NetworkInterface.getNetworkInterfaces()?.toList()?.forEach { iface ->
@@ -105,7 +164,10 @@ object NetAddr {
                 }
             }
         }
-        return out.sortedByDescending { it.score }
+        val sorted = out.sortedByDescending { it.score }
+        cachedLocals = sorted
+        cachedLocalsAt = now
+        return sorted
     }
 
     fun bestLocalAddress(): String =
@@ -115,18 +177,43 @@ object NetAddr {
 
     fun hasIpv6(): Boolean = localAddresses().any { it.isV6 }
 
-    private val wildcard: String by lazy {
-        val dualStack = runCatching {
+    private val dualStackCapable: Boolean by lazy {
+        runCatching {
             java.net.DatagramSocket(null).use { s ->
                 s.reuseAddress = true
                 s.bind(java.net.InetSocketAddress(InetAddress.getByName("::"), 0))
                 true
             }
         }.getOrDefault(false)
-        if (dualStack) "::" else "0.0.0.0"
     }
 
-    fun wildcardHost(): String = wildcard
+    fun wildcardHost(): String = when {
+        preferredFamily == Family.V4 -> "0.0.0.0"
+        preferredFamily == Family.V6 -> "::"
+        !hasIpv4() && hasIpv6() && dualStackCapable -> "::"
+        else -> "0.0.0.0"
+    }
+
+    fun wildcardFor(host: String?): String =
+        if (isV6Literal(host)) "::" else "0.0.0.0"
+
+    fun addressScore(host: String?): Int {
+        val a = resolve(host) ?: return -1000
+        return score(a)
+    }
+
+    fun shouldAdoptAddress(
+        currentHost: String?,
+        currentLastSeen: Long,
+        candidateHost: String?,
+        now: Long,
+        staleAfterMs: Long = 10_000L
+    ): Boolean {
+        if (currentHost.isNullOrBlank()) return true
+        if (currentHost == candidateHost) return true
+        if (now - currentLastSeen > staleAfterMs) return true
+        return addressScore(candidateHost) > addressScore(currentHost)
+    }
 
     fun interfaceHasV4(iface: NetworkInterface): Boolean = runCatching {
         iface.inetAddresses.toList().any { it is Inet4Address && !it.isLoopbackAddress }

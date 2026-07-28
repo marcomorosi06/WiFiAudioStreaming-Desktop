@@ -129,6 +129,18 @@ object IpcClient {
         println("  ${dim("Volume")}  $volume${if (muted) "  ${yellow("(muted)")}" else ""}")
         println("  ${dim("RTP")}     ${if (rtp) green("yes") else dim("no")}")
         println("  ${dim("HTTP")}    ${if (http) green("yes") else dim("no")}")
+        val usbUp  = bool("usb") == "true"
+        val usbIf  = str("usb_iface").orEmpty()
+        val family = str("family") ?: "auto"
+        val wfas   = when (str("wfas")?.lowercase()) {
+            "off"        -> "off"
+            "always"     -> "always"
+            "off_on_usb" -> "not on USB"
+            else         -> str("wfas") ?: "always"
+        }
+        println("  ${dim("Link")}    " + (if (usbUp) green("USB") + (if (usbIf.isNotEmpty()) dim(" ($usbIf)") else "") else dim("Wi-Fi")))
+        println("  ${dim("IP")}      ${if (family == "auto") dim("auto") else yellow(family)}")
+        println("  ${dim("WFAS")}    $wfas")
         println("  ${dim("Uptime")}  $uptime")
         println()
     }
@@ -149,23 +161,8 @@ object IpcClient {
         else System.err.println("  ✗  $msg")
     }
 
-    private fun dim(t: String): String {
-        val ansi = System.getenv("NO_COLOR") == null && System.getenv("TERM") != "dumb"
-        return if (ansi) "[2m$t[0m" else t
-    }
-
-    private fun bold(t: String): String {
-        val ansi = System.getenv("NO_COLOR") == null && System.getenv("TERM") != "dumb"
-        return if (ansi) "[1m$t[0m" else t
-    }
-
-    private fun green(t: String): String {
-        val ansi = System.getenv("NO_COLOR") == null && System.getenv("TERM") != "dumb"
-        return if (ansi) "[32m$t[0m" else t
-    }
-
-    private fun yellow(t: String): String {
-        val ansi = System.getenv("NO_COLOR") == null && System.getenv("TERM") != "dumb"
-        return if (ansi) "[33m$t[0m" else t
-    }
+    private fun dim(t: String)    = Ansi.dim(t)
+    private fun bold(t: String)   = Ansi.bold(t)
+    private fun green(t: String)  = Ansi.green(t)
+    private fun yellow(t: String) = Ansi.yellow(t)
 }

@@ -21,7 +21,7 @@ object DebugHud {
     private const val HUD_ROWS = 20
     private const val WIDTH = 64
 
-    private val color = System.getenv("NO_COLOR") == null && System.getenv("TERM") != "dumb"
+    private val color = Ansi.enabled
 
     private val lock = Any()
     @Volatile private var running = false

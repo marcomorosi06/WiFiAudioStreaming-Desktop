@@ -299,6 +299,74 @@ Output results as newline-delimited JSON objects instead of the table.
 Each object carries the same fields plus
 .BR port ", " multicast ", and " protocols .
 .\"
+.SS Link options (transport and address family)
+.TP
+.B --usb
+Stream over the USB cable instead of Wi\-Fi.
+Enable USB tethering on the Android phone: the phone acts as gateway and the app
+locates the resulting network interface on its own, so the wire protocol is
+unchanged \(em only the path differs.
+Jitter is far steadier than on Wi\-Fi, which is what makes a shorter buffer safe.
+Not available on macOS, which has no built\-in RNDIS driver, so Android USB
+tethering never comes up there.
+Overrides the stored
+.B net.usbMode
+for this run only.
+.TP
+.B --no-usb
+Force the USB link off even when enabled in the configuration.
+.TP
+\fB--usb-latency\fR \fIms\fR
+Jitter buffer applied only while the USB link is up (default:
+.IR 20 ,
+range 5\-120).
+The Wi\-Fi buffer selected with
+.B --latency
+is left untouched, so the two transports keep independent depths.
+Implies
+.BR --usb .
+.TP
+\fB--wfas-mode\fR \fImode\fR
+Controls when this device serves the native WFAS protocol:
+.RS
+.TP
+.B always
+Always, both over Wi\-Fi and over the cable.
+.TP
+.B not-on-usb
+Served over Wi\-Fi, but suppressed as soon as the USB link comes up (default).
+Useful to keep the phone from being reachable over the network while it is
+wired.
+.TP
+.B off
+Never served over Wi\-Fi; only the cable and the other protocols remain.
+.RE
+.IP
+With
+.B off
+and neither
+.BR --rtp ", " --http
+nor a USB link there is nothing left to serve, and the server refuses to start
+rather than running silently.
+.TP
+.BR --ip4 ", " --ipv4
+Restrict the app to IPv4: bind
+.IR 0.0.0.0 ,
+announce and listen on the
+.I 239.255.0.1
+multicast group only.
+.TP
+.BR --ip6 ", " --ipv6
+Restrict the app to IPv6: use the
+.I [ff02::5746]
+multicast group only.
+.IP
+With neither flag the app is dual\-stack: it binds the wildcard address, joins
+both groups, and for each peer keeps the most usable address it hears \(em a
+routable IPv4 or IPv6 wins over a link\-local one.
+Force a family only to work around a broken network; on an IPv6\-only LAN the
+automatic behaviour already selects IPv6.
+.\"
 .SS Global options
 .TP
 \fB--interface\fR \fIname\fR
@@ -496,6 +564,24 @@ Print the WFAS v2 protocol reference:
 .PP
 .RS
 .B wfas --protocol
+.RE
+.PP
+Serve over the USB cable, with an aggressive buffer:
+.PP
+.RS
+.B wfas --server --usb --usb-latency 10
+.RE
+.PP
+Receive on an IPv6\-only network:
+.PP
+.RS
+.B wfas --client --ip6
+.RE
+.PP
+List servers with transport and address family:
+.PP
+.RS
+.B wfas discover --json
 .RE
 .PP
 Start a server with RTP enabled and print the SDP to stdout:

@@ -14,7 +14,8 @@ object MulticastNet {
     val groupV4: InetAddress by lazy { InetAddress.getByName(GROUP_V4) }
     val groupV6: InetAddress? by lazy { runCatching { InetAddress.getByName(GROUP_V6) }.getOrNull() }
 
-    fun groups(): List<InetAddress> = listOfNotNull(groupV4, groupV6)
+    fun groups(): List<InetAddress> =
+        listOfNotNull(groupV4, groupV6).filter { NetAddr.allows(it) }
 
     fun joinCandidates(): List<NetworkInterface> {
         val out = LinkedHashSet<NetworkInterface>()
@@ -109,6 +110,8 @@ object MulticastNet {
 
     fun audioGroup(iface: NetworkInterface?): InetAddress {
         val v6 = groupV6
+        if (NetAddr.preferredFamily == NetAddr.Family.V6 && v6 != null) return v6
+        if (NetAddr.preferredFamily == NetAddr.Family.V4) return groupV4
         if (iface != null && v6 != null && !NetAddr.interfaceHasV4(iface) && NetAddr.interfaceHasV6(iface)) {
             return v6
         }
@@ -120,6 +123,22 @@ object MulticastNet {
         preferred: NetworkInterface?,
         accept: (NetworkInterface) -> Boolean = { true }
     ): NetworkInterface? = sendCandidates(preferred).firstOrNull(accept) ?: preferred
+
+    fun peerScore(host: String?): Int =
+        NetAddr.addressScore(host) + if (UsbLink.isUsbPeer(host)) 200 else 0
+
+    fun shouldAdoptPeer(
+        currentHost: String?,
+        currentLastSeen: Long,
+        candidateHost: String?,
+        now: Long,
+        staleAfterMs: Long = 10_000L
+    ): Boolean {
+        if (currentHost.isNullOrBlank()) return true
+        if (currentHost == candidateHost) return true
+        if (now - currentLastSeen > staleAfterMs) return true
+        return peerScore(candidateHost) > peerScore(currentHost)
+    }
 
     fun isUsbInterface(iface: NetworkInterface): Boolean {
         val usb = UsbLink.activeInterface() ?: return false

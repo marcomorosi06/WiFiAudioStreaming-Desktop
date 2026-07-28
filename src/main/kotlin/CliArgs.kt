@@ -55,6 +55,10 @@ data class CliArgs(
     val configCmd:       ConfigCommand?  = null,
     val firewallCmd:     FirewallCommand? = null,
     val networkIface:    String          = "Auto",
+    val ipFamily:        NetAddr.Family  = NetAddr.Family.AUTO,
+    val usb:             Boolean?        = null,
+    val usbLatency:      Int?            = null,
+    val wfasMode:        String?         = null,
     val useNativeEngine: Boolean         = true,
     val viz:             Boolean         = false,
     val vizTheme:        String?         = null,
@@ -124,6 +128,10 @@ data class CliArgs(
             var sdp             = false
             var sdpOut: String?             = null
             var controlCmd: ControlCommand? = null
+            var ipFamily        = NetAddr.Family.AUTO
+            var usb: Boolean?               = null
+            var usbLatency: Int?            = null
+            var wfasMode: String?           = null
             var configCmd: ConfigCommand?   = null
             var firewallCmd: FirewallCommand? = null
             var networkIface    = "Auto"
@@ -302,6 +310,32 @@ data class CliArgs(
                         i++
                     }
 
+                    "--ip4", "--ipv4" -> ipFamily = NetAddr.Family.V4
+                    "--ip6", "--ipv6" -> ipFamily = NetAddr.Family.V6
+                    "--usb"     -> usb = true
+                    "--no-usb"  -> usb = false
+                    "--usb-latency" -> {
+                        val raw = nextArg(args, i, "--usb-latency")
+                            ?: parseError("--usb-latency requires a value in milliseconds")
+                        i++
+                        val ms = raw.toIntOrNull()
+                            ?: parseError("--usb-latency must be numeric, got '$raw'")
+                        if (ms < UsbLink.MIN_USB_LATENCY_MS || ms > UsbLink.MAX_USB_LATENCY_MS)
+                            parseError("--usb-latency must be between ${UsbLink.MIN_USB_LATENCY_MS} and ${UsbLink.MAX_USB_LATENCY_MS}, got $ms")
+                        usbLatency = ms
+                        usb = usb ?: true
+                    }
+                    "--wfas-mode" -> {
+                        val raw = nextArg(args, i, "--wfas-mode")
+                            ?: parseError("--wfas-mode requires: always | not-on-usb | off")
+                        i++
+                        wfasMode = when (raw.lowercase()) {
+                            "always"                 -> WfasPolicy.MODE_ALWAYS
+                            "not-on-usb", "notonusb" -> WfasPolicy.MODE_OFF_ON_USB
+                            "off"                    -> WfasPolicy.MODE_OFF
+                            else -> parseError("Unknown --wfas-mode '$raw'. Valid: always, not-on-usb, off")
+                        }
+                    }
                     "--interface" -> {
                         networkIface = nextArg(args, i, "--interface") ?: parseError("--interface requires a name")
                         i++
@@ -417,6 +451,10 @@ data class CliArgs(
                 configCmd       = configCmd,
                 firewallCmd     = firewallCmd,
                 networkIface    = networkIface,
+                ipFamily        = ipFamily,
+                usb             = usb,
+                usbLatency      = usbLatency,
+                wfasMode        = wfasMode,
                 useNativeEngine = useNativeEngine,
                 viz             = viz,
                 vizTheme        = vizTheme,
@@ -537,6 +575,36 @@ FIREWALL  (wfas firewall <command>)   [Windows only]
 DISCOVER OPTIONS
   --watch             Keep scanning (live update)
 
+LINK OPTIONS  (transport and address family)
+  --usb               Stream over the USB cable instead of Wi-Fi. Enable USB
+                      tethering on the Android phone: the phone becomes the
+                      gateway and the app finds the link on its own. Lower and
+                      far steadier jitter than Wi-Fi, which is what lets the
+                      buffer shrink. Not available on macOS: there is no
+                      built-in RNDIS driver, so Android USB tethering does not
+                      come up. Overrides the saved net.usbMode for this run.
+  --no-usb            Force the USB link off even if enabled in the config.
+  --usb-latency <ms>  Jitter buffer used only while the USB link is up
+                      (default: 20, range 5-120). The Wi-Fi buffer set by
+                      --latency is left untouched. Implies --usb.
+  --wfas-mode <m>     When this device serves the native WFAS protocol:
+                        always      always, over Wi-Fi and over the cable
+                        not-on-usb  over Wi-Fi, but suppressed as soon as the
+                                    USB link comes up (default)
+                        off         never over Wi-Fi; only the cable and the
+                                    other protocols remain
+                      With 'off' and no --rtp/--http and no USB link there is
+                      nothing left to serve, and the server refuses to start.
+  --ip4, --ipv4       Use IPv4 only: bind 0.0.0.0, announce and listen on the
+                      239.255.0.1 group alone.
+  --ip6, --ipv6       Use IPv6 only: the [ff02::5746] group alone.
+                      Without either flag the app is dual-stack: it binds the
+                      wildcard, joins both groups, and picks per-peer the most
+                      usable address (a routable v4 or v6 wins over a
+                      link-local). Force a family only to work around a broken
+                      network; on a v6-only LAN auto already does the right
+                      thing.
+
 GLOBAL OPTIONS
   --interface <name>  Network interface            (default: Auto)
   --config <path>     Alternate settings file
@@ -578,6 +646,10 @@ EXAMPLES
   wfas config path                        # print the config.json path
   wfas firewall allow                     # open the default ports in the firewall
   wfas firewall status                    # check if the firewall rule is active
+  wfas --server --usb                     # serve over the USB cable
+  wfas --server --usb --usb-latency 10    # USB with an aggressive buffer
+  wfas --client --ip6                     # receive on an IPv6-only network
+  wfas discover --json                    # each entry carries transport+family
   wfas --gui --mode server --multicast    # open GUI, start server immediately
   wfas --viz rainbow                      # spectrum with animated rainbow colors
   wfas --viz "#1e88e5"                    # spectrum themed from a hex color

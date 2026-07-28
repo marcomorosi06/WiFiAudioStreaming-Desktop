@@ -304,7 +304,16 @@ fun AppContent(
                     onStop = onStopStreaming,
                     showMicMute = (!isServer && sendMicrophone) || (isServer && micRoutingMode == MicRoutingMode.MIX_INTO_STREAM),
                     isMicMuted = isMicMuted,
-                    onMicMuteToggle = onMicMuteToggle
+                    onMicMuteToggle = onMicMuteToggle,
+                    canStartServer = WfasPolicy.canStartServerWith(
+                        appSettings.wfasMode,
+                        UsbLink.isReady(),
+                        appSettings.rtpEnabled,
+                        appSettings.httpEnabled
+                    ),
+                    onActivateWfas = {
+                        onAppSettingsChange(appSettings.copy(wfasMode = WfasPolicy.MODE_OFF_ON_USB))
+                    }
                 )
             }
 
@@ -1592,7 +1601,8 @@ fun StreamingControlCenter(
     isStreaming: Boolean, isServer: Boolean, isServerReady: Boolean,
     serverVolume: Float, onServerVolumeChange: (Float) -> Unit,
     onStart: () -> Unit, onStop: () -> Unit,
-    showMicMute: Boolean = false, isMicMuted: Boolean = false, onMicMuteToggle: () -> Unit = {}
+    showMicMute: Boolean = false, isMicMuted: Boolean = false, onMicMuteToggle: () -> Unit = {},
+    canStartServer: Boolean = true, onActivateWfas: () -> Unit = {}
 ) {
     ElevatedCard(modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(24.dp)) {
         AnimatedContent(
@@ -1708,10 +1718,49 @@ fun StreamingControlCenter(
                     }
                     if (isServer) {
                         Spacer(Modifier.width(16.dp))
-                        Button(onClick = onStart, enabled = isServerReady) {
+                        Button(onClick = onStart, enabled = isServerReady && canStartServer) {
                             Icon(Icons.Default.PlayArrow, contentDescription = null, modifier = Modifier.size(18.dp))
                             Spacer(Modifier.width(6.dp))
                             Text(stringResource("start_server"))
+                        }
+                    }
+                }
+
+                AnimatedVisibility(isServer && !canStartServer) {
+                    Column {
+                        Spacer(Modifier.height(14.dp))
+                        Surface(
+                            shape = RoundedCornerShape(20.dp),
+                            color = MaterialTheme.colorScheme.errorContainer,
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Row(
+                                modifier = Modifier.padding(horizontal = 16.dp, vertical = 14.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(14.dp)
+                            ) {
+                                Icon(
+                                    Icons.Outlined.WarningAmber,
+                                    contentDescription = null,
+                                    tint = MaterialTheme.colorScheme.onErrorContainer
+                                )
+                                Column(Modifier.weight(1f)) {
+                                    Text(
+                                        stringResource("wfas_no_protocol_title"),
+                                        style = MaterialTheme.typography.labelLarge,
+                                        fontWeight = FontWeight.Bold,
+                                        color = MaterialTheme.colorScheme.onErrorContainer
+                                    )
+                                    Text(
+                                        stringResource("wfas_no_protocol_desc"),
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onErrorContainer
+                                    )
+                                }
+                                FilledTonalButton(onClick = onActivateWfas) {
+                                    Text(stringResource("wfas_activate_action"))
+                                }
+                            }
                         }
                     }
                 }
@@ -2754,10 +2803,22 @@ fun ServerStatusBar(
                 )
             }
         }
+        // Tipo di collegamento — solo a stream attivo, non nella schermata iniziale
+        if (isStreaming) {
+            val usbUp = UsbLink.isReady() && NetworkHandler_v1.sessionUsesUsb()
+            Text(
+                stringResource(if (usbUp) "link_connected_usb" else "link_connected_wireless"),
+                style = MaterialTheme.typography.labelSmall,
+                fontWeight = FontWeight.Bold,
+                color = if (usbUp) MaterialTheme.colorScheme.primary
+                else MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.align(Alignment.CenterHorizontally)
+            )
+        }
         // IP / porta — solo in modalità server
         if (isServer) {
             Text(
-                "IP $localIp : $streamingPort",
+                "IP ${NetAddr.hostPort(localIp, streamingPort.toIntOrNull() ?: 9090)}",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.align(Alignment.CenterHorizontally)
@@ -3014,8 +3075,12 @@ fun NetworkSettingsContent(
         style = MaterialTheme.typography.bodySmall,
         color = MaterialTheme.colorScheme.onSurfaceVariant
     )
-    if (appSettings.wfasMode != WfasPolicy.MODE_ALWAYS &&
-        !appSettings.rtpEnabled && !appSettings.httpEnabled && !appSettings.usbModeEnabled
+    if (!WfasPolicy.canStartServerWith(
+            appSettings.wfasMode,
+            UsbLink.isReady(),
+            appSettings.rtpEnabled,
+            appSettings.httpEnabled
+        )
     ) {
         Surface(
             shape = RoundedCornerShape(12.dp),

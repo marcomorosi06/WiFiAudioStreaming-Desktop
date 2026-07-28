@@ -215,7 +215,9 @@ data class ServerCapabilities(
     val encrypted: Boolean = false,
     val serverSendsMic: Boolean = false,
     val serverWantsMic: Boolean = false
-)
+) {
+    val acceptsClientMic: Boolean get() = serverWantsMic
+}
 
 /**
  * Informazioni di un server scoperto via discovery.
@@ -535,7 +537,7 @@ object NetworkHandler_v1 {
         return try {
             var isUnicast = false
             withTimeout(1000) {
-                aSocket(selectorManager).udp().bind().use { sock ->
+                aSocket(selectorManager).udp().bind(InetSocketAddress(NetAddr.wildcardFor(ip), 0)).use { sock ->
                     val remoteAddress = InetSocketAddress(ip, port)
                     // Bussa alla porta con una richiesta speciale
                     sock.send(Datagram(buildPacket { writeText("MODE_PROBE") }, remoteAddress))
@@ -555,7 +557,7 @@ object NetworkHandler_v1 {
         return try {
             var online = false
             withTimeout(1000) {
-                aSocket(selectorManager).udp().bind().use { sock ->
+                aSocket(selectorManager).udp().bind(InetSocketAddress(NetAddr.wildcardFor(ip), 0)).use { sock ->
                     val remoteAddress = InetSocketAddress(ip, port)
                     sock.send(Datagram(buildPacket { writeText("MODE_PROBE") }, remoteAddress))
                     val ack = sock.receive()
@@ -569,6 +571,16 @@ object NetworkHandler_v1 {
             false
         }
     }
+
+    @Volatile var activePeerIp: String? = null
+
+    fun sessionUsesUsb(): Boolean = UsbLink.isUsbPeer(activePeerIp)
+
+    private fun peerHostOf(address: io.ktor.network.sockets.SocketAddress): String? =
+        NetAddr.literalHost(address)
+            ?: NetAddr.literalHostOfText(address.toString())
+            ?: WfasPolicy.hostOf(address.toString())
+
 
     @Volatile var currentServerVolume: Float = 1.0f
         private set
@@ -833,8 +845,11 @@ object NetworkHandler_v1 {
     }
 
     // ── Discovery ──────────────────────────────────────────────────────────────
+    private val discoveryBestAddress = java.util.concurrent.ConcurrentHashMap<String, Pair<String, Long>>()
+
     fun beginDeviceDiscovery(onDeviceFound: (hostname: String, serverInfo: ServerInfo) -> Unit) {
         if (listeningJob?.isActive == true) return
+        discoveryBestAddress.clear()
         listeningJob = scope.launch {
             var localIps = NetworkInterface.getNetworkInterfaces().toList()
                 .flatMap { it.inetAddresses.toList() }
@@ -875,6 +890,7 @@ object NetworkHandler_v1 {
 
                         if (message.contains("BYE")) {
                             AppDebug.log("[DISCOVERY] BYE da $hostname ($remoteIp), rimuovo dalla lista")
+                            discoveryBestAddress.remove(hostname)
                             onDeviceFound(hostname, ServerInfo("", false, 0, null, 0L))
                             continue
                         }
@@ -911,7 +927,18 @@ object NetworkHandler_v1 {
                             AudioSettings_V1(discoveredSr, discoveredBd, discoveredCh, 6400)
                         else null
                         AppDebug.log("[DISCOVERY] caps auth=${capabilities.securityMode} enc=${capabilities.encrypted} micTx=${capabilities.serverSendsMic} micRx=${capabilities.serverWantsMic}")
-                        onDeviceFound(hostname, ServerInfo(remoteIp, isMulticast, port, capabilities, System.currentTimeMillis(), discoveredAudio, UsbLink.isUsbPeer(remoteIp)))
+
+                        val nowMs = System.currentTimeMillis()
+                        val known = discoveryBestAddress[hostname]
+                        if (!MulticastNet.shouldAdoptPeer(known?.first, known?.second ?: 0L, remoteIp, nowMs)) {
+                            AppDebug.log("[DISCOVERY] $hostname: keeping ${known?.first} over $remoteIp")
+                            continue
+                        }
+                        discoveryBestAddress[hostname] = remoteIp to nowMs
+                        val viaUsb = UsbLink.isUsbPeerDetected(remoteIp)
+                        AppDebug.log("[DISCOVERY] $hostname @ $remoteIp transport=${if (viaUsb) "USB" else "WIFI"} " +
+                                "usbIface=${UsbLink.detectedInterface()?.name ?: "-"} usbEnabled=${UsbLink.enabled}")
+                        onDeviceFound(hostname, ServerInfo(remoteIp, isMulticast, port, capabilities, nowMs, discoveredAudio, viaUsb))
                     } catch (_: java.net.SocketTimeoutException) { continue }
                 }
             } catch (e: Exception) {
@@ -923,7 +950,9 @@ object NetworkHandler_v1 {
         }
     }
 
-    fun endDeviceDiscovery() { listeningJob?.cancel() }
+    fun endDeviceDiscovery() { listeningJob?.cancel(); discoveryBestAddress.clear() }
+
+    fun forgetDiscoveredAddresses() { discoveryBestAddress.clear() }
 
     private data class AnnounceParams(
         val isMulticast: Boolean,
@@ -2531,6 +2560,7 @@ object NetworkHandler_v1 {
 
                 } else { // Unicast
                     val localAddress = InetSocketAddress(NetAddr.wildcardHost(), port)
+                    AppDebug.log("[SERVER][UNICAST] binding $localAddress")
                     aSocket(selectorManager).udp().bind(localAddress) { reuseAddress = true }.use { socket ->
                         var pendCnonce = ""
                         var pendSnonce = ""
@@ -2539,8 +2569,10 @@ object NetworkHandler_v1 {
                             onStatusUpdate("Waiting for Unicast Client on Port %d...", arrayOf(port))
 
                             val clientDatagram = socket.receive()
+                            val rxAt = System.currentTimeMillis()
                             val msg = clientDatagram.packet.readText().trim()
                             val clientAddress = clientDatagram.address
+                            AppDebug.log("[SERVER][TIMING] rx '$msg' from $clientAddress")
 
                             if (msg == "MODE_PROBE") {
                                 socket.send(Datagram(buildPacket { writeText("UNICAST") }, clientAddress))
@@ -2550,8 +2582,14 @@ object NetworkHandler_v1 {
 
                             if (!msg.startsWith(CLIENT_HELLO_MESSAGE)) continue
 
-                            if (!WfasPolicy.enabledForPeerAddress(clientAddress.toString())) {
-                                AppDebug.log("[SERVER][UNICAST] WFAS disabled for $clientAddress, ignoring handshake")
+                            val peerHost = peerHostOf(clientAddress)
+                            activePeerIp = peerHost
+                            AppDebug.log("[SERVER][TIMING] peer=$peerHost usbPeer=${UsbLink.isUsbPeer(peerHost)} " +
+                                    "mode=${WfasPolicy.mode} allowed=${WfasPolicy.enabledForPeer(peerHost)} at +${System.currentTimeMillis() - rxAt}ms")
+                            if (!WfasPolicy.enabledForPeer(peerHost)) {
+                                AppDebug.log("[SERVER][UNICAST] WFAS not active for peer=$peerHost " +
+                                        "(usbPeer=${UsbLink.isUsbPeer(peerHost)} mode=${WfasPolicy.mode}), refusing")
+                                socket.send(Datagram(buildPacket { writeText(UNAUTHORIZED_MESSAGE) }, clientAddress))
                                 continue
                             }
 
@@ -2615,6 +2653,7 @@ object NetworkHandler_v1 {
                             stopAnnouncingPresence()
 
                             val ackText = helloAckMessage() + if (encrypting) ";enc=1" else ""
+                            AppDebug.log("[SERVER][TIMING] sending HELLO_ACK at +${System.currentTimeMillis() - rxAt}ms")
                             socket.send(Datagram(buildPacket { writeText(ackText) }, clientAddress))
                             WfasStats.add(WfasStats.Cat.HELLO, ackText.length)
 
@@ -2862,8 +2901,15 @@ object NetworkHandler_v1 {
         }
 
         micSendDir = null   // mic stays plaintext until the handshake derives the session key
-        if (sendMicrophone && micInputMixerInfo != null)
-            micReceiverJob = scope.launchMicSender(audioSettings, serverInfo, micInputMixerInfo, micPort)
+        val peerAcceptsMic = serverInfo.capabilities?.acceptsClientMic ?: true
+        if (sendMicrophone && micInputMixerInfo != null) {
+            if (peerAcceptsMic) {
+                micReceiverJob = scope.launchMicSender(audioSettings, serverInfo, micInputMixerInfo, micPort)
+            } else {
+                AppDebug.log("[CLIENT] mic requested but ${serverInfo.ip} advertises mic without rx, not sending")
+                onStatusUpdate("status_mic_not_accepted", emptyArray())
+            }
+        }
 
         streamingJob = scope.launch {
             var sourceDataLine: SourceDataLine? = null
@@ -2889,7 +2935,8 @@ object NetworkHandler_v1 {
                 if (!serverInfo.isMulticast) { // Unicast
                     val remoteAddress = InetSocketAddress(serverInfo.ip, serverInfo.port)
                     AppDebug.log("[CLIENT][UNICAST] unicast connection to $remoteAddress")
-                    aSocket(selectorManager).udp().bind().use { socket ->
+                    val localBind = InetSocketAddress(NetAddr.wildcardFor(serverInfo.ip), 0)
+                    aSocket(selectorManager).udp().bind(localBind).use { socket ->
                         sourceDataLine = prepareSourceDataLine(selectedMixerInfo, playbackSettings)
                         if (sourceDataLine == null) {
                             AppDebug.log("[CLIENT][UNICAST] Output device rejected ${describeFormat(playbackSettings)}")
@@ -2902,8 +2949,9 @@ object NetworkHandler_v1 {
                                 maxBufferMs = UsbLink.effectiveLatencyMs(audioSettings.latencyMs) + 280).also { p -> p.start() }
                         }
                         AppDebug.log("[CLIENT][UNICAST] SourceDataLine started, sending HELLO to $remoteAddress")
+                        activePeerIp = NetAddr.normalize(serverInfo.ip)
                         LinkMetrics.start(
-                            if (UsbLink.isReady()) "USB" else "WIFI",
+                            if (sessionUsesUsb()) "USB" else "WIFI",
                             playbackSettings.sampleRate.toInt()
                         )
 
@@ -2932,14 +2980,20 @@ object NetworkHandler_v1 {
                             return true
                         }
 
+                        var helloWaitMs = 150L
+                        var helloAttempts = 0
+                        val handshakeStartedAt = System.currentTimeMillis()
                         while (System.currentTimeMillis() < handshakeDeadline) {
                             val ackText = try {
-                                withTimeout(2000) { socket.receive() }.packet.readText().trim()
+                                withTimeout(helloWaitMs) { socket.receive() }.packet.readText().trim()
                             } catch (_: TimeoutCancellationException) {
+                                helloAttempts++
+                                helloWaitMs = (helloWaitMs * 2).coerceAtMost(2000L)
                                 socket.send(Datagram(buildPacket { writeText(helloMsg) }, remoteAddress))
+                                AppDebug.log("[CLIENT][UNICAST] no reply, resend #$helloAttempts, next wait ${helloWaitMs}ms")
                                 continue
                             }
-                            AppDebug.log("[CLIENT][UNICAST] reply: '$ackText'")
+                            AppDebug.log("[CLIENT][UNICAST] reply '$ackText' at +${System.currentTimeMillis() - handshakeStartedAt}ms")
                             when {
                                 ackText.startsWith(INCOMPATIBLE_PREFIX) -> {
                                     signalProtocolMismatch(parseProtocolVersion(ackText))
@@ -3011,7 +3065,8 @@ object NetworkHandler_v1 {
                             onStatusUpdate("status_handshake_failed", emptyArray())
                             return@use
                         }
-                        AppDebug.log("[CLIENT][UNICAST] handshake OK, streaming started from $remoteAddress")
+                        AppDebug.log("[CLIENT][UNICAST] handshake OK in ${System.currentTimeMillis() - handshakeStartedAt}ms " +
+                                "after $helloAttempts resend(s), streaming from $remoteAddress")
                         onStatusUpdate("status_connected_streaming_from", arrayOf(remoteAddress))
                         if (connectionSoundEnabled) playConnectionSound()
 
@@ -3157,7 +3212,7 @@ object NetworkHandler_v1 {
                         }
                         AppDebug.log("[CLIENT][MULTICAST] SourceDataLine started, waiting for multicast packets...")
                         LinkMetrics.start(
-                            if (UsbLink.isReady()) "USB" else "WIFI",
+                            if (sessionUsesUsb()) "USB" else "WIFI",
                             effectiveAudioSettings.sampleRate.toInt()
                         )
                         onStatusUpdate("status_multicast_streaming", arrayOf(serverInfo.port))
@@ -3274,6 +3329,7 @@ object NetworkHandler_v1 {
                     onStatusUpdate("Error: %s", arrayOf(e.message ?: e.toString()))
                 }
             } finally {
+                activePeerIp = null
                 LinkMetrics.stop()
                 AppDebug.log("[CLIENT] finally: closing player/SourceDataLine")
                 val p = player
@@ -3965,7 +4021,7 @@ fun startGuiApplication(cliArgs: CliArgs) = application {
     LaunchedEffect(Unit) { NetworkHandler_v1.startNetworkWatch() }
     LaunchedEffect(networkRevision) {
         if (networkRevision > 0 && !isServer) {
-            discoveredDevices.clear()
+            discoveredDevices.clear(); NetworkHandler_v1.forgetDiscoveredAddresses()
             NetworkHandler_v1.restartDeviceDiscovery { hostname, serverInfo ->
                 discoveredDevices[hostname] = serverInfo
             }
@@ -4313,7 +4369,7 @@ fun startGuiApplication(cliArgs: CliArgs) = application {
                 LaunchedEffect(Unit) {
                     if (appSettings.autoConnectClientEnabled) {
                         isServer = false
-                        discoveredDevices.clear()
+                        discoveredDevices.clear(); NetworkHandler_v1.forgetDiscoveredAddresses()
                         NetworkHandler_v1.beginDeviceDiscovery { hostname, serverInfo ->
                             discoveredDevices[hostname] = serverInfo
                         }
@@ -4515,7 +4571,7 @@ fun startGuiApplication(cliArgs: CliArgs) = application {
                                 isServer = isSrv
                                 isStreaming = false
                                 connectionStatus = Strings.get("status_inactive")
-                                discoveredDevices.clear() // Svuota SEMPRE al cambio modalità
+                                discoveredDevices.clear(); NetworkHandler_v1.forgetDiscoveredAddresses() // Svuota SEMPRE al cambio modalità
 
                                 if (!isSrv) {
                                     NetworkHandler_v1.requestStopCurrentStream()
@@ -4577,7 +4633,7 @@ fun startGuiApplication(cliArgs: CliArgs) = application {
                                 )
                             },
                             onRefreshDevices = {
-                                discoveredDevices.clear()
+                                discoveredDevices.clear(); NetworkHandler_v1.forgetDiscoveredAddresses()
                                 NetworkHandler_v1.endDeviceDiscovery()
                                 NetworkHandler_v1.beginDeviceDiscovery { hostname, serverInfo ->
                                     discoveredDevices[hostname] = serverInfo

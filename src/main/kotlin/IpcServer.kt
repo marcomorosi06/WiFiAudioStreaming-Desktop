@@ -112,7 +112,11 @@ object IpcServer {
                         "rtp"      to args.rtp,
                         "http"     to args.http,
                         "uptime"   to uptimeSec,
-                        "pid"      to pid
+                        "pid"      to pid,
+                        "usb"      to UsbLink.isReady(),
+                        "usb_iface" to (UsbLink.state.interfaceName ?: ""),
+                        "family"   to NetAddr.preferredFamily.name.lowercase(),
+                        "wfas"     to WfasPolicy.mode.lowercase()
                     ))
                 }
                 null -> buildResponse("error", mapOf("message" to "unknown command"))
