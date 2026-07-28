@@ -571,8 +571,12 @@ object NetworkHandler_v1 {
     }
 
     @Volatile var currentServerVolume: Float = 1.0f
+        private set
 
     @Volatile var currentClientVolume: Float = 1.0f
+        private set
+
+    fun setServerVolume(volume: Float) { currentServerVolume = volume.coerceIn(0f, 2f) }
 
     fun setClientVolume(volume: Float) { currentClientVolume = volume.coerceIn(0f, 2f) }
 
@@ -581,9 +585,6 @@ object NetworkHandler_v1 {
         currentServerVolume = v
         currentClientVolume = v
     }
-        private set
-
-    fun setServerVolume(volume: Float) { currentServerVolume = volume }
 
     private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
     private val selectorManager = SelectorManager(Dispatchers.IO)
