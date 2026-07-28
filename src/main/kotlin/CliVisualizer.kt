@@ -512,11 +512,13 @@ class AudioVisualizer(
         synchronized(lock) {
             var i = 0
             val n = samples.size
+            val gain = if (volumeEnabled) volPct / 100.0 else 1.0
             while (i + ch <= n) {
                 var acc = 0.0
                 var c = 0
                 while (c < ch) {
-                    val s = samples[i + c].toDouble()
+                    val s = (samples[i + c].toDouble() * gain)
+                        .coerceIn(Short.MIN_VALUE.toDouble(), Short.MAX_VALUE.toDouble())
                     acc += s
                     chSumSq[c] += s * s
                     c++

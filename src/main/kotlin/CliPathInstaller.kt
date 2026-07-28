@@ -254,9 +254,9 @@ object CliPathInstaller {
                 "set \"WFAS_RESDIR=$resourcesDir\"\r\n" +
                 "set \"WFAS_APPDIR=$appDir\"\r\n" +
                 "if \"%~1\"==\"\" (\r\n" +
-                "    \"%WFAS_JAVA%\" -Djava.net.preferIPv4Stack=true \"-Dskiko.library.path=%WFAS_APPDIR%\" -Dcompose.application.configure.swing.globals=true \"-Dcompose.application.resources.dir=%WFAS_RESDIR%\" -cp \"%WFAS_CP%\" MainKt --cli-no-args\r\n" +
+                "    \"%WFAS_JAVA%\" \"-Dskiko.library.path=%WFAS_APPDIR%\" -Dcompose.application.configure.swing.globals=true \"-Dcompose.application.resources.dir=%WFAS_RESDIR%\" -cp \"%WFAS_CP%\" MainKt --cli-no-args\r\n" +
                 ") else (\r\n" +
-                "    \"%WFAS_JAVA%\" -Djava.net.preferIPv4Stack=true \"-Dskiko.library.path=%WFAS_APPDIR%\" -Dcompose.application.configure.swing.globals=true \"-Dcompose.application.resources.dir=%WFAS_RESDIR%\" -cp \"%WFAS_CP%\" MainKt %*\r\n" +
+                "    \"%WFAS_JAVA%\" \"-Dskiko.library.path=%WFAS_APPDIR%\" -Dcompose.application.configure.swing.globals=true \"-Dcompose.application.resources.dir=%WFAS_RESDIR%\" -cp \"%WFAS_CP%\" MainKt %*\r\n" +
                 ")\r\n"
             )
         }.onFailure { return InstallResult.Failure("Cannot write wfas.bat: ${it.message}") }
@@ -307,9 +307,9 @@ object CliPathInstaller {
                 "WFAS_RESDIR=\"$resourcesDir\"\n" +
                 "WFAS_APPDIR=\"$appDirPath\"\n" +
                 "if [ \$# -eq 0 ]; then\n" +
-                "    exec \"\$WFAS_JAVA\" -Djava.net.preferIPv4Stack=true \"-Dskiko.library.path=\$WFAS_APPDIR\" -Dcompose.application.configure.swing.globals=true \"-Dcompose.application.resources.dir=\$WFAS_RESDIR\" -cp \"\$WFAS_CP\" MainKt --cli-no-args\n" +
+                "    exec \"\$WFAS_JAVA\" \"-Dskiko.library.path=\$WFAS_APPDIR\" -Dcompose.application.configure.swing.globals=true \"-Dcompose.application.resources.dir=\$WFAS_RESDIR\" -cp \"\$WFAS_CP\" MainKt --cli-no-args\n" +
                 "else\n" +
-                "    exec \"\$WFAS_JAVA\" -Djava.net.preferIPv4Stack=true \"-Dskiko.library.path=\$WFAS_APPDIR\" -Dcompose.application.configure.swing.globals=true \"-Dcompose.application.resources.dir=\$WFAS_RESDIR\" -cp \"\$WFAS_CP\" MainKt \"\$@\"\n" +
+                "    exec \"\$WFAS_JAVA\" \"-Dskiko.library.path=\$WFAS_APPDIR\" -Dcompose.application.configure.swing.globals=true \"-Dcompose.application.resources.dir=\$WFAS_RESDIR\" -cp \"\$WFAS_CP\" MainKt \"\$@\"\n" +
                 "fi\n"
             )
             script.setExecutable(true)

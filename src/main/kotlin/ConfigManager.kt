@@ -72,6 +72,12 @@ object ConfigManager {
             { it.app.httpPort.toIntOrNull() ?: 8080 }, { s, v -> appCopy(s) { copy(httpPort = coercePort("net.httpPort", v).toString()) } }),
         CfgField("net.interface", CfgKind.STRING, emptyList(), "Network interface name or 'Auto'",
             { it.app.networkInterface }, { s, v -> appCopy(s) { copy(networkInterface = coerceString("net.interface", v)) } }),
+        CfgField("server.wfasMode", CfgKind.ENUM, WfasPolicy.MODES, "When this device serves the native WFAS protocol",
+            { it.app.wfasMode }, { s, v -> appCopy(s) { copy(wfasMode = coerceEnum("server.wfasMode", v, WfasPolicy.MODES)) } }),
+        CfgField("net.usbMode", CfgKind.BOOL, emptyList(), "Stream over the USB link (Android USB tethering) instead of Wi-Fi",
+            { it.app.usbModeEnabled }, { s, v -> appCopy(s) { copy(usbModeEnabled = coerceBool("net.usbMode", v)) } }),
+        CfgField("net.usbLatencyMs", CfgKind.INT, emptyList(), "Jitter buffer in milliseconds used only while the USB link is active",
+            { it.app.usbLatencyMs }, { s, v -> appCopy(s) { copy(usbLatencyMs = coerceInt("net.usbLatencyMs", v).coerceIn(UsbLink.MIN_USB_LATENCY_MS, UsbLink.MAX_USB_LATENCY_MS)) } }),
         CfgField("net.micRoutingMode", CfgKind.ENUM, listOf("OFF", "MIX_INTO_STREAM", "VIRTUAL_MIC"), "Microphone routing mode",
             { it.micRoutingMode }, { s, v -> s.copy(micRoutingMode = coerceEnum("net.micRoutingMode", v, listOf("OFF", "MIX_INTO_STREAM", "VIRTUAL_MIC"))) }),
 

@@ -345,7 +345,9 @@ fun AppContent(
                             onSecurityModeChange = { onAppSettingsChange(appSettings.copy(securityMode = it)) },
                             onAuthKeyChange = { onAppSettingsChange(appSettings.copy(authKey = it)) },
                             encryptionEnabled = appSettings.encryptionEnabled,
-                            onEncryptionChange = { onAppSettingsChange(appSettings.copy(encryptionEnabled = it)) }
+                            onEncryptionChange = { onAppSettingsChange(appSettings.copy(encryptionEnabled = it)) },
+                            usbModeEnabled = appSettings.usbModeEnabled,
+                            onUsbModeChange = { onAppSettingsChange(appSettings.copy(usbModeEnabled = it)) }
                         )
                     }
                 }
@@ -364,7 +366,9 @@ fun AppContent(
                                 onSendMicrophoneChanged = onSendMicrophoneChange,
                                 inputDevices = inputDevices,
                                 selectedClientMic = selectedClientMic,
-                                onClientMicSelected = onSelectedClientMicChange
+                                onClientMicSelected = onSelectedClientMicChange,
+                                usbModeEnabled = appSettings.usbModeEnabled,
+                                onUsbModeChange = { onAppSettingsChange(appSettings.copy(usbModeEnabled = it)) }
                             )
 
                             var manualIp by remember { mutableStateOf("") }
@@ -1786,11 +1790,20 @@ fun ServerConfigCard(
     onSecurityModeChange: (String) -> Unit = {},
     onAuthKeyChange: (String) -> Unit = {},
     encryptionEnabled: Boolean = false,
-    onEncryptionChange: (Boolean) -> Unit = {}
+    onEncryptionChange: (Boolean) -> Unit = {},
+    usbModeEnabled: Boolean = false,
+    onUsbModeChange: (Boolean) -> Unit = {}
 ) {
     ElevatedCard(modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(24.dp)) {
         Column(Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
             Text(stringResource("server_configuration"), style = MaterialTheme.typography.titleLarge)
+
+            UsbLinkPanel(
+                isServer = true,
+                enabled = usbModeEnabled,
+                onEnabledChange = onUsbModeChange
+            )
+            HorizontalDivider()
 
             // Stato driver — badge compatto colorato (solo in modalità ffmpeg/legacy)
             if (!useNativeEngine) {
@@ -2313,7 +2326,9 @@ private fun MicRoutingInfoBanner(icon: ImageVector, text: String, accent: Boolea
 fun ClientConfigCard(
     outputDevices: List<Mixer.Info>, selectedOutputDevice: Mixer.Info?, onOutputDeviceSelected: (Mixer.Info) -> Unit,
     sendMicrophone: Boolean, onSendMicrophoneChanged: (Boolean) -> Unit,
-    inputDevices: List<Mixer.Info>, selectedClientMic: Mixer.Info?, onClientMicSelected: (Mixer.Info) -> Unit
+    inputDevices: List<Mixer.Info>, selectedClientMic: Mixer.Info?, onClientMicSelected: (Mixer.Info) -> Unit,
+    usbModeEnabled: Boolean = false,
+    onUsbModeChange: (Boolean) -> Unit = {}
 ) {
     ElevatedCard(modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(24.dp)) {
         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
@@ -2338,6 +2353,100 @@ fun ClientConfigCard(
                 }
                 AnimatedVisibility(sendMicrophone) {
                     DeviceDropdown(stringResource("select_mic_to_send"), inputDevices, selectedClientMic, onClientMicSelected)
+                }
+            }
+
+            HorizontalDivider()
+            UsbLinkPanel(
+                isServer = false,
+                enabled = usbModeEnabled,
+                onEnabledChange = onUsbModeChange
+            )
+        }
+    }
+}
+
+@Composable
+fun UsbLinkPanel(
+    isServer: Boolean,
+    enabled: Boolean,
+    onEnabledChange: (Boolean) -> Unit
+) {
+    var linkState by remember { mutableStateOf(UsbLink.refresh()) }
+    LaunchedEffect(enabled) {
+        while (enabled) {
+            linkState = UsbLink.refresh()
+            kotlinx.coroutines.delay(1500)
+        }
+    }
+
+    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            Icon(
+                Icons.Filled.Usb,
+                contentDescription = null,
+                tint = if (enabled && linkState.isReady) MaterialTheme.colorScheme.primary
+                else MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            Column(Modifier.weight(1f)) {
+                Text(
+                    stringResource(if (isServer) "usb_send_label" else "usb_receive_label"),
+                    style = MaterialTheme.typography.bodyLarge
+                )
+                Text(
+                    stringResource(if (isServer) "usb_send_hint" else "usb_receive_hint"),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+            Switch(checked = enabled, onCheckedChange = onEnabledChange)
+        }
+
+        AnimatedVisibility(enabled) {
+            Surface(
+                shape = RoundedCornerShape(16.dp),
+                color = if (linkState.isReady) MaterialTheme.colorScheme.primaryContainer
+                else MaterialTheme.colorScheme.surfaceVariant,
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Row(
+                    modifier = Modifier.padding(horizontal = 14.dp, vertical = 12.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    Icon(
+                        if (linkState.isReady) Icons.Outlined.CheckCircle else Icons.Outlined.Info,
+                        contentDescription = null,
+                        tint = if (linkState.isReady) MaterialTheme.colorScheme.onPrimaryContainer
+                        else MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Column(Modifier.weight(1f)) {
+                        Text(
+                            text = if (linkState.isReady) {
+                                Strings.get(
+                                    "usb_diag_ready",
+                                    linkState.displayName ?: "usb",
+                                    linkState.localAddress ?: "-"
+                                )
+                            } else {
+                                stringResource(UsbLink.diagnosticKey())
+                            },
+                            style = MaterialTheme.typography.bodyMedium,
+                            fontWeight = FontWeight.SemiBold
+                        )
+                        Text(
+                            stringResource(
+                                if (linkState.isReady) "usb_panel_hint_ready"
+                                else "usb_panel_hint_waiting"
+                            ),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
                 }
             }
         }
@@ -2417,6 +2526,7 @@ fun DeviceItem(
     onStarClick: () -> Unit
 ) {
     val modeText = if (serverInfo.isMulticast) stringResource("multicast") else stringResource("unicast")
+    val transportText = if (serverInfo.viaUsb) stringResource("usb_transport_label") else stringResource("usb_transport_wifi")
     Card(onClick = onClick, enabled = enabled, modifier = Modifier.fillMaxWidth()) {
         Row(
             modifier = Modifier.padding(12.dp),
@@ -2427,11 +2537,42 @@ fun DeviceItem(
                 modifier = Modifier.size(40.dp).clip(CircleShape).background(MaterialTheme.colorScheme.secondaryContainer),
                 contentAlignment = Alignment.Center
             ) {
-                Icon(if (serverInfo.isMulticast) Icons.Filled.Groups else Icons.Default.Person, contentDescription = modeText)
+                Icon(
+                    when {
+                        serverInfo.viaUsb -> Icons.Filled.Usb
+                        serverInfo.isMulticast -> Icons.Filled.Groups
+                        else -> Icons.Default.Person
+                    },
+                    contentDescription = transportText
+                )
             }
             Column(modifier = Modifier.weight(1f)) {
-                Text(hostname, fontWeight = FontWeight.Bold)
-                Text("${serverInfo.ip}:${serverInfo.port} ($modeText)", style = MaterialTheme.typography.bodySmall)
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Text(hostname, fontWeight = FontWeight.Bold)
+                    if (serverInfo.viaUsb) {
+                        Surface(shape = RoundedCornerShape(50), color = MaterialTheme.colorScheme.primary) {
+                            Row(
+                                modifier = Modifier.padding(horizontal = 7.dp, vertical = 2.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(3.dp)
+                            ) {
+                                Icon(
+                                    Icons.Filled.Usb,
+                                    contentDescription = null,
+                                    tint = MaterialTheme.colorScheme.onPrimary,
+                                    modifier = Modifier.size(12.dp)
+                                )
+                                Text(
+                                    stringResource("usb_transport_label"),
+                                    style = MaterialTheme.typography.labelSmall,
+                                    fontWeight = FontWeight.Bold,
+                                    color = MaterialTheme.colorScheme.onPrimary
+                                )
+                            }
+                        }
+                    }
+                }
+                Text("${NetAddr.hostPort(serverInfo.ip, serverInfo.port)} ($modeText · $transportText)", style = MaterialTheme.typography.bodySmall)
                 val caps = serverInfo.capabilities
                 if (caps != null && caps.protocols.size > 1) {
                     Spacer(Modifier.height(4.dp))
@@ -2754,6 +2895,70 @@ fun NetworkSettingsContent(
 
     HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp))
     Text(
+        stringResource("usb_section"),
+        style = MaterialTheme.typography.labelLarge,
+        modifier = Modifier.padding(top = 4.dp, bottom = 2.dp)
+    )
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(12.dp)
+    ) {
+        Column(modifier = Modifier.weight(1f)) {
+            Text(stringResource("usb_mode"), style = MaterialTheme.typography.bodyLarge)
+            Text(
+                stringResource("usb_mode_desc"),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+        Switch(
+            checked = appSettings.usbModeEnabled,
+            onCheckedChange = { onAppSettingsChange(appSettings.copy(usbModeEnabled = it)) }
+        )
+    }
+    if (appSettings.usbModeEnabled) {
+        var usbState by remember { mutableStateOf(UsbLink.refresh()) }
+        LaunchedEffect(appSettings.usbModeEnabled) {
+            while (true) {
+                usbState = UsbLink.refresh()
+                kotlinx.coroutines.delay(1500)
+            }
+        }
+        Text(
+            text = if (usbState.isReady) {
+                Strings.get("usb_diag_ready", usbState.displayName ?: "usb", usbState.localAddress ?: "-")
+            } else {
+                stringResource(UsbLink.diagnosticKey())
+            },
+            style = MaterialTheme.typography.bodySmall,
+            color = if (usbState.isReady) MaterialTheme.colorScheme.primary
+            else MaterialTheme.colorScheme.error,
+            modifier = Modifier.padding(top = 6.dp, bottom = 6.dp)
+        )
+        Text(
+            stringResource("usb_latency") + ": ${appSettings.usbLatencyMs} ms",
+            style = MaterialTheme.typography.bodyMedium
+        )
+        Slider(
+            value = appSettings.usbLatencyMs.toFloat(),
+            onValueChange = {
+                onAppSettingsChange(appSettings.copy(usbLatencyMs = it.toInt()))
+            },
+            valueRange = UsbLink.MIN_USB_LATENCY_MS.toFloat()..UsbLink.MAX_USB_LATENCY_MS.toFloat(),
+            steps = ((UsbLink.MAX_USB_LATENCY_MS - UsbLink.MIN_USB_LATENCY_MS) / 5) - 1,
+            modifier = Modifier.fillMaxWidth()
+        )
+        Text(
+            stringResource("usb_latency_desc"),
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.padding(bottom = 12.dp)
+        )
+    }
+
+    HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp))
+    Text(
         stringResource("server_protocols"),
         style = MaterialTheme.typography.labelLarge,
         modifier = Modifier.padding(top = 4.dp, bottom = 2.dp)
@@ -2787,17 +2992,52 @@ fun NetworkSettingsContent(
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
         }
-        // Badge "sempre attivo" al posto dello switch
+    }
+
+    ExposedDropdown(
+        label = stringResource("wfas_mode_label"),
+        value = when (appSettings.wfasMode) {
+            WfasPolicy.MODE_OFF -> stringResource("wfas_mode_off")
+            WfasPolicy.MODE_OFF_ON_USB -> stringResource("wfas_mode_off_on_usb")
+            else -> stringResource("wfas_mode_always")
+        },
+        options = listOf(
+            stringResource("wfas_mode_always") to WfasPolicy.MODE_ALWAYS,
+            stringResource("wfas_mode_off_on_usb") to WfasPolicy.MODE_OFF_ON_USB,
+            stringResource("wfas_mode_off") to WfasPolicy.MODE_OFF
+        ),
+        onOptionSelected = { onAppSettingsChange(appSettings.copy(wfasMode = it)) },
+        modifier = Modifier.fillMaxWidth()
+    )
+    Text(
+        stringResource("wfas_mode_desc"),
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant
+    )
+    if (appSettings.wfasMode != WfasPolicy.MODE_ALWAYS &&
+        !appSettings.rtpEnabled && !appSettings.httpEnabled && !appSettings.usbModeEnabled
+    ) {
         Surface(
-            shape = RoundedCornerShape(50),
-            color = MaterialTheme.colorScheme.primaryContainer
+            shape = RoundedCornerShape(12.dp),
+            color = MaterialTheme.colorScheme.errorContainer,
+            modifier = Modifier.fillMaxWidth()
         ) {
-            Text(
-                stringResource("always_on"),
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onPrimaryContainer,
-                modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
-            )
+            Row(
+                modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                Icon(
+                    Icons.Outlined.WarningAmber,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.onErrorContainer
+                )
+                Text(
+                    stringResource("wfas_no_protocol_desc"),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onErrorContainer
+                )
+            }
         }
     }
 

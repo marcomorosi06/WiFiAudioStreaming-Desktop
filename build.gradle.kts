@@ -258,7 +258,7 @@ compose.desktop {
     application {
         mainClass = "MainKt"
 
-        val baseArgs = mutableListOf("-Djava.net.preferIPv4Stack=true")
+        val baseArgs = mutableListOf("-Djava.net.preferIPv6Addresses=false")
         if (isWindows) {
             baseArgs.add("-XX:UseAVX=2")
         }
@@ -414,7 +414,7 @@ if (isWindows) {
                             "@echo off\r\n" +
                             "setlocal\r\n" +
                             "set \"APPHOME=%~dp0\"\r\n" +
-                            "\"%APPHOME%runtime\\bin\\java.exe\" -Djava.net.preferIPv4Stack=true -Dskiko.library.path=\"%APPHOME%app\" -Dcompose.application.resources.dir=\"%APPHOME%app\\resources\" -cp \"%APPHOME%app\\*\" MainKt %*\r\n" +
+                            "\"%APPHOME%runtime\\bin\\java.exe\" -Dskiko.library.path=\"%APPHOME%app\" -Dcompose.application.resources.dir=\"%APPHOME%app\\resources\" -cp \"%APPHOME%app\\*\" MainKt %*\r\n" +
                             "endlocal\r\n"
                         )
                         logger.lifecycle("[wfas] Creato wfas.cmd -> ${wfasCmd.absolutePath}")

@@ -53,7 +53,7 @@ object IpcServer {
 
         cs.launch {
             try {
-                val ss = ServerSocket(0)
+                val ss = ServerSocket(0, 0, java.net.InetAddress.getLoopbackAddress())
                 serverSocket = ss
                 portFile.writeText(ss.localPort.toString())
                 portFile.deleteOnExit()
@@ -87,7 +87,7 @@ object IpcServer {
 
             val response = when (cmd) {
                 is ControlCommand.Volume -> {
-                    NetworkHandler_v1.setServerVolume(cmd.value)
+                    NetworkHandler_v1.setPlaybackOrCaptureVolume(cmd.value)
                     buildResponse("ok", mapOf("volume" to cmd.value))
                 }
                 is ControlCommand.Mute -> {
@@ -129,7 +129,7 @@ object IpcServer {
         return when (cmd) {
             "volume" -> {
                 val v = extractNumber(json, "value")?.toFloat() ?: return null
-                ControlCommand.Volume(v.coerceIn(0f, 1f))
+                ControlCommand.Volume(v.coerceIn(0f, 2f))
             }
             "mute"   -> ControlCommand.Mute
             "unmute" -> ControlCommand.Unmute

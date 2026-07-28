@@ -49,7 +49,7 @@ object IpcClient {
         val pid = portFile.name.removePrefix("wfas-").removeSuffix(".port")
 
         try {
-            Socket("127.0.0.1", port).use { socket ->
+            Socket(java.net.InetAddress.getLoopbackAddress(), port).use { socket ->
                 socket.soTimeout = 3000
                 val writer = socket.getOutputStream().bufferedWriter()
                 val reader = socket.getInputStream().bufferedReader()

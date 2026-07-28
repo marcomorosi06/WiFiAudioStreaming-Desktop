@@ -179,7 +179,7 @@ data class CliArgs(
                                 i++
                                 val pct = raw.toFloatOrNull()
                                     ?: parseError("'control volume' value must be numeric, got '$raw'")
-                                ControlCommand.Volume((pct / 100f).coerceIn(0f, 1f))
+                                ControlCommand.Volume((pct / 100f).coerceIn(0f, 2f))
                             }
                             "mute"   -> ControlCommand.Mute
                             "unmute" -> ControlCommand.Unmute
@@ -284,7 +284,7 @@ data class CliArgs(
                         val raw = nextArg(args, i, "--volume") ?: parseError("--volume requires a value 0-100")
                         i++
                         val pct = raw.toFloatOrNull() ?: parseError("--volume must be numeric, got '$raw'")
-                        volume = (pct / 100f).coerceIn(0f, 1f)
+                        volume = (pct / 100f).coerceIn(0f, 2f)
                     }
                     "--mute" -> mute = true
 
@@ -677,7 +677,7 @@ SESSION EXCLUSIVITY  (unicast)
   is additive and optional: a peer that does not implement it just times out as
   before. Multicast has no session state and no such limit.
 
-DISCOVERY  (UDP multicast 239.255.0.1:9091, every ~3s)
+DISCOVERY  (UDP multicast 239.255.0.1:9091 and [ff02::5746]:9091, every ~3s)
   WIFI_AUDIO_STREAMER_DISCOVERY;<host>;<MULTICAST|UNICAST>;<port>;protocols=...
   Advertises capabilities only; version is enforced at connection time.
 

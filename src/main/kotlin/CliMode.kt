@@ -538,7 +538,7 @@ private suspend fun runCliClient(args: CliArgs, settings: AllSettings) {
 
     val micInput = if (args.sendMic) resolveInputDevice(args.micInput) else null
 
-    if (args.volume != null) NetworkHandler_v1.setServerVolume(args.volume)
+    if (args.volume != null) NetworkHandler_v1.setClientVolume(args.volume)
     if (args.mute)           NetworkHandler_v1.isMicMuted.value = true
 
     if (args.json) {
@@ -566,7 +566,7 @@ private suspend fun runCliClient(args: CliArgs, settings: AllSettings) {
 
     if (viz != null) {
         args.volume?.let { viz.setVolumePercent((it * 100).toInt()) }
-        viz.onVolume = { v -> NetworkHandler_v1.setServerVolume(v.coerceIn(0f, 2f)) }
+        viz.onVolume = { v -> NetworkHandler_v1.setClientVolume(v.coerceIn(0f, 2f)) }
         viz.onQuit = {
             userStopped = true
             kotlinx.coroutines.runBlocking { NetworkHandler_v1.stopCurrentStream() }
@@ -654,7 +654,7 @@ private suspend fun runCliClient(args: CliArgs, settings: AllSettings) {
                     }
                     cmd.matches(Regex("(?i)v(?:ol(?:ume)?)?\\s+(\\d+(?:\\.\\d+)?)")) -> {
                         val pct = cmd.split("\\s+".toRegex()).last().toFloatOrNull() ?: continue
-                        NetworkHandler_v1.setServerVolume((pct / 100f).coerceIn(0f, 2f))
+                        NetworkHandler_v1.setClientVolume((pct / 100f).coerceIn(0f, 2f))
                         if (!args.quiet && !args.json) out("  volume: ${pct.toInt()}%", args)
                     }
                 }
@@ -722,7 +722,7 @@ private suspend fun discoverAndChoose(args: CliArgs): ServerInfo? {
     out("", args)
     out("  Multiple servers found -choose one:", args)
     found.entries.forEachIndexed { i, (hostname, info) ->
-        out("  ${bold("${i + 1}.")}  ${cyan(hostname)}  ${dim("${info.ip}:${info.port}")}", args)
+        out("  ${bold("${i + 1}.")}  ${cyan(hostname)}  ${dim(NetAddr.hostPort(info.ip, info.port))}", args)
     }
     out("", args)
     print("  Enter number [1-${found.size}]: ")

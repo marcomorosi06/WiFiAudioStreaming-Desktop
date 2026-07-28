@@ -53,7 +53,10 @@ data class AppSettings(
     val encryptionEnabled: Boolean = false,
     val developerMode: Boolean = false,
     val noiseReductionEnabled: Boolean = false,
-    val noiseReductionStrength: Int = 50
+    val noiseReductionStrength: Int = 50,
+    val usbModeEnabled: Boolean = false,
+    val usbLatencyMs: Int = 20,
+    val wfasMode: String = WfasPolicy.MODE_OFF_ON_USB
 )
 
 object SettingsRepository {
@@ -96,6 +99,8 @@ object SettingsRepository {
     private const val SECURITY_MODE_KEY        = "server_security_mode"
     private const val AUTH_KEY_KEY             = "server_auth_key"
     private const val ENCRYPTION_KEY           = "server_encryption_enabled"
+    private const val USB_MODE_KEY             = "net_usb_mode_enabled"
+    private const val USB_LATENCY_KEY          = "net_usb_latency_ms"
 
     fun hasSeenWelcome(): Boolean    = prefs.getBoolean(HAS_SEEN_WELCOME_KEY,     false)
     fun markWelcomeSeen()            { prefs.putBoolean(HAS_SEEN_WELCOME_KEY,     true); runCatching { prefs.flush() } }
@@ -134,15 +139,21 @@ object SettingsRepository {
 
     fun saveSettings(settings: AllSettings) {
         runCatching { ConfigManager.save(settings) }
+        UsbLink.configure(settings.app.usbModeEnabled, settings.app.usbLatencyMs)
+        WfasPolicy.configure(settings.app.wfasMode)
     }
 
     fun loadSettings(): AllSettings {
-        if (ConfigManager.exists()) {
-            return runCatching { ConfigManager.load() }.getOrDefault(ConfigManager.DEFAULTS)
+        val settings = if (ConfigManager.exists()) {
+            runCatching { ConfigManager.load() }.getOrDefault(ConfigManager.DEFAULTS)
+        } else {
+            val migrated = if (hasLegacyPreferences()) loadFromPreferencesLegacy() else ConfigManager.DEFAULTS
+            runCatching { ConfigManager.save(migrated) }
+            migrated
         }
-        val migrated = if (hasLegacyPreferences()) loadFromPreferencesLegacy() else ConfigManager.DEFAULTS
-        runCatching { ConfigManager.save(migrated) }
-        return migrated
+        UsbLink.configure(settings.app.usbModeEnabled, settings.app.usbLatencyMs)
+        WfasPolicy.configure(settings.app.wfasMode)
+        return settings
     }
 
     private fun hasLegacyPreferences(): Boolean = try {
@@ -190,6 +201,8 @@ object SettingsRepository {
         val securityMode = prefs.get(SECURITY_MODE_KEY, "OFF")
         val authKey = prefs.get(AUTH_KEY_KEY, "")
         val encryptionEnabled = prefs.getBoolean(ENCRYPTION_KEY, false)
+        val usbModeEnabled = prefs.getBoolean(USB_MODE_KEY, false)
+        val usbLatencyMs = prefs.getInt(USB_LATENCY_KEY, UsbLink.DEFAULT_USB_LATENCY_MS)
 
         val appSettings = AppSettings(
             theme = theme,
@@ -216,8 +229,11 @@ object SettingsRepository {
             autoUpdateCheckEnabled = autoUpdateCheckEnabled,
             securityMode = securityMode,
             authKey = authKey,
-            encryptionEnabled = encryptionEnabled
+            encryptionEnabled = encryptionEnabled,
+            usbModeEnabled = usbModeEnabled,
+            usbLatencyMs = usbLatencyMs
         )
+        UsbLink.configure(usbModeEnabled, usbLatencyMs)
         return AllSettings(appSettings, audioSettings, streamingPort, micPort, micRoutingMode)
     }
 }
