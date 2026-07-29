@@ -37,7 +37,7 @@ This application allows you to send your PC's audio to any device on the same lo
 </tr>
 </table>
 
-<video src="https://raw.githubusercontent.com/marcomorosi06/WiFiAudioStreaming-Desktop/refs/heads/master/images/Spectrogram.mp4" controls></video>
+https://github.com/marcomorosi06/WiFiAudioStreaming-Desktop/raw/master/images/Spectrogram.mp4
 
 *Song: Toby Fox, Deltarune Chapter 4 - "Ever Higher"*
 
