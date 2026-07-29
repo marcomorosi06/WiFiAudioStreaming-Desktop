@@ -37,6 +37,10 @@ This application allows you to send your PC's audio to any device on the same lo
 </tr>
 </table>
 
+<video src="https://raw.githubusercontent.com/marcomorosi06/WiFiAudioStreaming-Desktop/refs/heads/master/images/Spectrogram.mp4" controls></video>
+
+*Song: Toby Fox, Deltarune Chapter 4 - "Ever Higher"*
+
 ---
 
 # ✨ Key Features
@@ -163,10 +167,6 @@ wfas --monitor --groove                 # visualize local system audio only
 wfas --debug                            # live UDP packet / state table
 wfas --help                             # full command reference
 ```
-
-<video src="https://raw.githubusercontent.com/marcomorosi06/WiFiAudioStreaming-Desktop/refs/heads/master/images/Spectrogram.mp4" controls="controls" width="100%"></video>
-
-*Song: Toby Fox, Deltarune Chapter 4 - "Ever Higher"*
 
 During first-run setup, the app offers to install `wfas` to your system's PATH automatically.
 
