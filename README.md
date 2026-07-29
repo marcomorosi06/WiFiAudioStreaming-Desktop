@@ -17,18 +17,17 @@ This application allows you to send your PC's audio to any device on the same lo
 # 📸 Overview
 
 *Screenshots of the Material You interface.*
-*(Note: The screenshots show the Italian interface, but the app automatically switches to **English** if your OS language is not set to Italian.)*
 
 <table>
 <tr>
 <td align="center">
-<img src="https://github.com/marcomorosi06/WiFiAudioStreaming-Desktop/blob/master/images/server_wfas.jpg?raw=true" alt="Server Mode">
+<img src="https://github.com/marcomorosi06/WiFiAudioStreaming-Desktop/blob/master/images/Server.jpg?raw=true" alt="Server Mode">
 </td>
 <td align="center">
-<img src="https://github.com/marcomorosi06/WiFiAudioStreaming-Desktop/blob/master/images/client_wfas.jpg?raw=true" alt="Client Mode">
+<img src="https://github.com/marcomorosi06/WiFiAudioStreaming-Desktop/blob/master/images/client.jpg?raw=true" alt="Client Mode">
 </td>
 <td align="center">
-<img src="https://github.com/marcomorosi06/WiFiAudioStreaming-Desktop/blob/master/images/settings_wfas.jpg?raw=true" alt="Settings">
+<img src="https://github.com/marcomorosi06/WiFiAudioStreaming-Desktop/blob/master/images/settings.jpg?raw=true" alt="Settings">
 </td>
 </tr>
 <tr>
@@ -66,7 +65,7 @@ This application allows you to send your PC's audio to any device on the same lo
   - **RTP** (compatible with any RTP-capable receiver)
   - **HTTP/AAC** (Safari, iOS)
   - **HTTP/Opus WebM** (Chrome, Firefox, any browser)
-  - **DLNA/UPnP** (AV receivers, soundbars, smart TVs — no app needed on the other side)
+  - **DLNA/UPnP** (AV receivers, soundbars, smart TVs — no app needed on the other side) *(Work in progress for the next release, but visible in the Settings screenshot)*
 
   Peers running an incompatible protocol version are rejected immediately during the handshake with a clear error, instead of hanging silently.
 
@@ -164,6 +163,10 @@ wfas --monitor --groove                 # visualize local system audio only
 wfas --debug                            # live UDP packet / state table
 wfas --help                             # full command reference
 ```
+
+<video src="https://raw.githubusercontent.com/marcomorosi06/WiFiAudioStreaming-Desktop/refs/heads/master/images/Spectrogram.mp4" controls="controls" width="100%"></video>
+
+*Song: Toby Fox, Deltarune Chapter 4 - "Ever Higher"*
 
 During first-run setup, the app offers to install `wfas` to your system's PATH automatically.
 
