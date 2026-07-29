@@ -163,7 +163,11 @@ private fun reportLink(args: CliArgs) {
     }
     if (args.usb == true && !UsbLink.isReady()) {
         err(yellow("!") + " --usb requested but no USB link is up. Streaming over Wi-Fi instead.")
-        if (UsbLink.platform == UsbLink.Platform.MACOS)
+        val stranded = UsbLink.state.takeIf { it.stage == UsbLink.Stage.FOUND_NO_IP }
+        if (stranded != null)
+            err(dim("  Adapter '${stranded.displayName ?: stranded.interfaceName}' is present but has no IP " +
+                    "address. USB tethering is probably still off on the device."))
+        else if (UsbLink.platform == UsbLink.Platform.MACOS)
             err(dim("  macOS has no built-in RNDIS driver, so Android USB tethering does not come up."))
         else
             err(dim("  Enable USB tethering on the phone, or run with --debug to list the interfaces."))
@@ -290,7 +294,8 @@ fun runCli(args: CliArgs) {
     UsbLink.configure(
         args.usb ?: settings.app.usbModeEnabled,
         args.usbLatency ?: settings.app.usbLatencyMs,
-        override = args.usb != null || args.usbLatency != null
+        args.usbIface ?: settings.app.usbInterface,
+        override = args.usb != null || args.usbLatency != null || args.usbIface != null
     )
     WfasPolicy.configure(args.wfasMode ?: settings.app.wfasMode, override = args.wfasMode != null)
 
@@ -475,6 +480,9 @@ private suspend fun runCliServer(args: CliArgs, settings: AllSettings) {
         rtpPort        = args.rtpPort,
         useNativeEngine = args.useNativeEngine,
         micMixInputInfo = micMixInput,
+        dlnaConfig      = SettingsRepository.loadSettings().app
+            .copy(dlnaEnabled = args.dlna, dlnaPort = args.dlnaPort.toString(), dlnaFormat = args.dlnaFormat)
+            .toDlnaConfig(),
         onAudioFrame    = viz?.let { v -> { samples -> v.feedFrame(samples) } },
     ) { key, fmtArgs ->
         val msg = if (fmtArgs.isEmpty()) Strings.get(key) else try { String.format(Strings.get(key), *fmtArgs) } catch (_: Exception) { key }

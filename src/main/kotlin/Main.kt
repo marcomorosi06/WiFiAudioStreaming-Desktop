@@ -660,6 +660,12 @@ object NetworkHandler_v1 {
     @Volatile private var aacPcmQueue:  java.util.concurrent.ArrayBlockingQueue<ByteArray>? = null
     @Volatile private var opusPcmQueue: java.util.concurrent.ArrayBlockingQueue<ByteArray>? = null
     @Volatile private var rtpPcmQueue:  java.util.concurrent.ArrayBlockingQueue<ByteArray>? = null
+    @Volatile private var dlnaManager: DlnaSessionManager? = null
+
+    val dlnaTargets: kotlinx.coroutines.flow.StateFlow<List<DlnaTargetState>>
+        get() = DlnaStatus.targets
+
+    fun dlnaClientCount(): Int = dlnaManager?.activeClientCount() ?: 0
 
     // ── Linux audio routing ────────────────────────────────────────────────────
     private var originalLinuxSink:   String? = null
@@ -2268,6 +2274,7 @@ object NetworkHandler_v1 {
         rtpPcmQueue?.let  { if (it.remainingCapacity() > 0) it.offer(pcmBytes.copyOf()) }
         aacPcmQueue?.let  { if (it.remainingCapacity() > 0) it.offer(pcmBytes.copyOf()) }
         opusPcmQueue?.let { if (it.remainingCapacity() > 0) it.offer(pcmBytes.copyOf()) }
+        dlnaManager?.submitPcm(pcmBytes.copyOf())
     }
 
     private suspend fun processEngineFrame(
@@ -2346,6 +2353,7 @@ object NetworkHandler_v1 {
         rtpPort: Int,
         useNativeEngine: Boolean = true,
         micMixInputInfo: Mixer.Info? = null,
+        dlnaConfig: DlnaServerConfig? = null,
         onAudioFrame: ((ShortArray) -> Unit)? = null,
         onStatusUpdate: (key: String, args: Array<out Any>) -> Unit
     ) {
@@ -2358,7 +2366,7 @@ object NetworkHandler_v1 {
                 startServerInstanceLocked(
                     audioSettings, port, isMulticast, capabilities,
                     micRoutingMode, micOutputMixerInfo, micPort, rtpPort,
-                    useNativeEngine, micMixInputInfo, onAudioFrame, onStatusUpdate
+                    useNativeEngine, micMixInputInfo, dlnaConfig, onAudioFrame, onStatusUpdate
                 )
             }
         }
@@ -2375,13 +2383,15 @@ object NetworkHandler_v1 {
         rtpPort: Int,
         useNativeEngine: Boolean = true,
         micMixInputInfo: Mixer.Info? = null,
+        dlnaConfig: DlnaServerConfig? = null,
         onAudioFrame: ((ShortArray) -> Unit)? = null,
         onStatusUpdate: (key: String, args: Array<out Any>) -> Unit
     ) {
         val annCaps = capabilities.copy(serverWantsMic = micRoutingMode != MicRoutingMode.OFF)
         if (!WfasPolicy.canStartServer(
                 StreamingProtocol.RTP in capabilities.protocols,
-                StreamingProtocol.HTTP in capabilities.protocols
+                StreamingProtocol.HTTP in capabilities.protocols,
+                dlnaConfig?.enabled == true
             )
         ) {
             AppDebug.log("[Server] refused: WFAS off and no other protocol or USB link available")
@@ -2418,7 +2428,34 @@ object NetworkHandler_v1 {
             rtpJob = scope.launchRtpSidecar(audioSettings, rtpPort, isMulticast)
         }
 
+        if (dlnaConfig != null && dlnaConfig.enabled) {
+            val manager = DlnaSessionManager(
+                scope = scope,
+                sampleRate = audioSettings.sampleRate.toInt(),
+                channels = audioSettings.channels,
+                mediaPort = dlnaConfig.port,
+                preference = dlnaConfig.preference,
+                selectedUdns = dlnaConfig.selectedUdns,
+                streamTitle = dlnaConfig.title,
+                localAddressProvider = { getLocalIpAddress() },
+                preferredInterfaceProvider = { getActiveNetworkInterface() }
+            )
+            dlnaManager = manager
+            manager.start()
+        }
+
         startAnnouncingPresence(isMulticast, port, annCaps, audioSettings)
+
+        if (!WfasPolicy.enabledOnNetwork()) {
+            val summary = ProtocolStatus.summary(
+                wfas = false,
+                rtp = StreamingProtocol.RTP in capabilities.protocols,
+                http = StreamingProtocol.HTTP in capabilities.protocols,
+                dlna = dlnaConfig?.enabled == true,
+                conjunction = Strings.get("list_and")
+            )
+            if (summary.isNotEmpty()) onStatusUpdate("status_serving_protocols", arrayOf(summary))
+        }
 
         streamingJob = scope.launch(Dispatchers.IO) {
             try {
@@ -3656,6 +3693,9 @@ object NetworkHandler_v1 {
         stopAnnouncingPresence()
         cancelDonationTimer()
 
+        runCatching { dlnaManager?.stop() }
+        dlnaManager = null
+
         httpServerJob?.cancelAndJoin();  httpServerJob   = null
         rtpJob?.cancelAndJoin();         rtpJob          = null
         localMicMixJob?.cancelAndJoin(); localMicMixJob  = null
@@ -3921,6 +3961,8 @@ fun main(args: Array<String>) {
         return
     }
 
+    if (cliArgs.noTray) LinuxTray.disableForThisRun()
+
     if (cliArgs.runMode != RunMode.GUI || isHeadless) {
         runCli(cliArgs)
     } else {
@@ -4141,19 +4183,11 @@ fun startGuiApplication(cliArgs: CliArgs) = application {
         LaunchedEffect(Unit) {
             dorkbox.systemTray.SystemTray.FORCE_GTK2 = false
 
-            val linuxTray = dorkbox.systemTray.SystemTray.get()
+            val iconUrl = Thread.currentThread().contextClassLoader?.getResource("app_icon.png")
+                ?: ClassLoader.getSystemResource("app_icon.png")
+                ?: object {}.javaClass.getResource("/app_icon.png")
 
-            if (linuxTray != null) {
-                val iconUrl = Thread.currentThread().contextClassLoader?.getResource("app_icon.png")
-                    ?: ClassLoader.getSystemResource("app_icon.png")
-                    ?: object {}.javaClass.getResource("/app_icon.png")
-
-                if (iconUrl != null) {
-                    linuxTray.setImage(iconUrl)
-                }
-
-                linuxTray.setTooltip("WiFi Audio Streamer")
-
+            LinuxTray.install(appSettings.linuxTray, iconUrl, "WiFi Audio Streamer") { linuxTray ->
                 val toggleItem = dorkbox.systemTray.MenuItem(Strings.get("tray_show_window"))
 
                 toggleItem.setCallback {
@@ -4174,9 +4208,6 @@ fun startGuiApplication(cliArgs: CliArgs) = application {
                 linuxTray.menu.add(toggleItem)
                 linuxTray.menu.add(dorkbox.systemTray.Separator())
                 linuxTray.menu.add(quitItem)
-
-            } else {
-                AppDebug.log("Warning: Dorkbox SystemTray is not supported on this system/DE.")
             }
         }
     }
@@ -4347,7 +4378,8 @@ fun startGuiApplication(cliArgs: CliArgs) = application {
                         NetworkHandler_v1.launchServerInstance(
                             audioSettings, port, isMulticastMode, serverCapabilities,
                             micRoutingMode, selectedServerMicOutput, mic, rtp,
-                            appSettings.useNativeEngine, selectedMicMixInput
+                            appSettings.useNativeEngine, selectedMicMixInput,
+                            dlnaConfig = appSettings.toDlnaConfig()
                         ) { key, args ->
                             if (key == "error_virtual_driver_missing") {
                                 isStreaming = false
@@ -4410,7 +4442,12 @@ fun startGuiApplication(cliArgs: CliArgs) = application {
                             NetworkHandler_v1.launchServerInstance(
                                 audioSettings, port, isMulticastMode, caps,
                                 micMode, selectedServerMicOutput, mic, rtp,
-                                cliArgs.useNativeEngine, selectedMicMixInput
+                                cliArgs.useNativeEngine, selectedMicMixInput,
+                                dlnaConfig = appSettings.copy(
+                                    dlnaEnabled = cliArgs.dlna || appSettings.dlnaEnabled,
+                                    dlnaPort = if (cliArgs.dlna) cliArgs.dlnaPort.toString() else appSettings.dlnaPort,
+                                    dlnaFormat = if (cliArgs.dlna) cliArgs.dlnaFormat else appSettings.dlnaFormat
+                                ).toDlnaConfig()
                             ) { key, args ->
                                 if (key == "error_virtual_driver_missing") {
                                     isStreaming = false
@@ -4598,7 +4635,8 @@ fun startGuiApplication(cliArgs: CliArgs) = application {
                                 NetworkHandler_v1.launchServerInstance(
                                     audioSettings, port, isMulticastMode, serverCapabilities,
                                     micRoutingMode, selectedServerMicOutput, mic, rtp,
-                                    appSettings.useNativeEngine, selectedMicMixInput
+                                    appSettings.useNativeEngine, selectedMicMixInput,
+                                    dlnaConfig = appSettings.toDlnaConfig()
                                 ) { key, args ->
                                     if (key == "error_virtual_driver_missing") {
                                         isStreaming          = false

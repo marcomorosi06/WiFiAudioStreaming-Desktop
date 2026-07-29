@@ -66,6 +66,7 @@ This application allows you to send your PC's audio to any device on the same lo
   - **RTP** (compatible with any RTP-capable receiver)
   - **HTTP/AAC** (Safari, iOS)
   - **HTTP/Opus WebM** (Chrome, Firefox, any browser)
+  - **DLNA/UPnP** (AV receivers, soundbars, smart TVs — no app needed on the other side)
 
   Peers running an incompatible protocol version are rejected immediately during the handshake with a clear error, instead of hanging silently.
 

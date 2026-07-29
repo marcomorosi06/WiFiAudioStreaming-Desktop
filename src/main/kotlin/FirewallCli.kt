@@ -84,8 +84,10 @@ object FirewallCli {
 
     private fun defaultTcpPorts(): List<Int> {
         val s = SettingsRepository.loadSettings()
-        if (!s.app.httpEnabled) return emptyList()
-        return listOfNotNull(s.app.httpPort.toIntOrNull()).filter { it in 1..65535 }
+        return listOfNotNull(
+            s.app.httpPort.toIntOrNull().takeIf { s.app.httpEnabled },
+            s.app.dlnaPort.toIntOrNull().takeIf { s.app.dlnaEnabled }
+        ).filter { it in 1..65535 }
     }
 
     private fun defaultPorts(): List<Int> {

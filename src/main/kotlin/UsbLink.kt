@@ -5,12 +5,14 @@ object UsbLink {
 
     const val DEFAULT_USB_LATENCY_MS = 20
     const val MIN_USB_LATENCY_MS = 5
-    const val MAX_USB_LATENCY_MS = 120
+    const val MAX_USB_LATENCY_MS = 300
 
     private val IFACE_TOKENS = listOf("rndis", "ncm", "usb")
     private val TETHER_SUBNETS = listOf("192.168.42.", "192.168.112.")
 
-    enum class Stage { DISABLED, NOT_FOUND, READY }
+    enum class Stage { DISABLED, NOT_FOUND, FOUND_NO_IP, READY }
+
+    private const val NO_IP_MIN_SCORE = 60
 
     enum class Platform { WINDOWS, MACOS, LINUX }
 
@@ -90,10 +92,16 @@ object UsbLink {
         val iface = findInterface()
         cachedInterface = iface
         val addr = iface?.let { firstIpv4(it) }
+        val stranded = if (iface != null && addr != null) null else strandedCandidate()
+        val shown = iface ?: stranded
         val next = State(
-            stage = if (iface != null && addr != null) Stage.READY else Stage.NOT_FOUND,
-            interfaceName = iface?.name,
-            displayName = iface?.displayName ?: iface?.name,
+            stage = when {
+                iface != null && addr != null -> Stage.READY
+                stranded != null -> Stage.FOUND_NO_IP
+                else -> Stage.NOT_FOUND
+            },
+            interfaceName = shown?.name,
+            displayName = shown?.displayName ?: shown?.name,
             localAddress = addr
         )
         if (next != state) {
@@ -116,7 +124,7 @@ object UsbLink {
     fun isReady(): Boolean = enabled && activeInterface() != null
 
     fun effectiveLatencyMs(configured: Int): Int =
-        if (isReady()) minOf(configured, latencyMs) else configured
+        if (isReady()) latencyMs else configured
 
     fun isUsbAddress(host: String?): Boolean {
         if (host == null) return false
@@ -170,26 +178,40 @@ object UsbLink {
                 ((bytes[2].toInt() and 0xFF) shl 8) or
                 (bytes[3].toInt() and 0xFF)
 
+    private fun forcedInterface(): NetworkInterface? = runCatching {
+        NetworkInterface.getNetworkInterfaces().toList()
+            .firstOrNull { it.name == preferredName || it.displayName == preferredName }
+    }.getOrNull()
+
     fun findInterface(): NetworkInterface? {
         if (preferredName != "Auto") {
-            val forced = runCatching {
-                NetworkInterface.getNetworkInterfaces().toList()
-                    .firstOrNull { it.name == preferredName || it.displayName == preferredName }
-            }.getOrNull()
-            if (forced != null && firstIpv4(forced) != null) return forced
+            val forced = forcedInterface()
+            return if (forced != null && firstIpv4(forced) != null) forced else null
         }
         return scored().maxByOrNull { it.second }?.first
     }
 
-    fun candidates(): List<NetworkInterface> =
-        scored().sortedByDescending { it.second }.map { it.first }
+    private fun strandedCandidate(): NetworkInterface? {
+        if (preferredName != "Auto") {
+            val forced = forcedInterface()
+            return if (forced != null && firstIpv4(forced) == null) forced else null
+        }
+        return scored(requireIpv4 = false)
+            .filter { firstIpv4(it.first) == null && it.second >= NO_IP_MIN_SCORE }
+            .maxByOrNull { it.second }?.first
+    }
 
-    private fun scored(): List<Pair<NetworkInterface, Int>> {
+    fun candidates(): List<NetworkInterface> =
+        scored(requireIpv4 = false).sortedByDescending { it.second }.map { it.first }
+
+    private fun scored(requireIpv4: Boolean = true): List<Pair<NetworkInterface, Int>> {
         val all = runCatching { NetworkInterface.getNetworkInterfaces()?.toList() }
             .getOrNull() ?: return emptyList()
         return all.mapNotNull { iface ->
             val usable = runCatching { iface.isUp && !iface.isLoopback }.getOrDefault(false)
-            if (!usable || firstIpv4(iface) == null) null else iface to score(iface)
+            if (!usable) return@mapNotNull null
+            if (requireIpv4 && firstIpv4(iface) == null) return@mapNotNull null
+            iface to score(iface)
         }.filter { it.second > 0 }
     }
 
@@ -254,8 +276,28 @@ object UsbLink {
     fun diagnosticKey(): String = when {
         !enabled -> "usb_diag_disabled"
         state.isReady -> "usb_diag_ready"
+        state.stage == Stage.FOUND_NO_IP -> "usb_diag_no_ip"
         platform == Platform.MACOS -> "usb_diag_macos"
         platform == Platform.WINDOWS -> "usb_diag_windows"
         else -> "usb_diag_linux"
+    }
+
+    fun diagnosticText(): String {
+        val s = state
+        return when (diagnosticKey()) {
+            "usb_diag_ready" -> Strings.get(
+                "usb_diag_ready", s.displayName ?: "usb", s.localAddress ?: "-"
+            )
+            "usb_diag_no_ip" -> Strings.get(
+                "usb_diag_no_ip", s.displayName ?: s.interfaceName ?: "usb"
+            )
+            else -> Strings.get(diagnosticKey())
+        }
+    }
+
+    fun hintKey(): String = when {
+        state.isReady -> "usb_panel_hint_ready"
+        state.stage == Stage.FOUND_NO_IP -> "usb_panel_hint_no_ip"
+        else -> "usb_panel_hint_waiting"
     }
 }

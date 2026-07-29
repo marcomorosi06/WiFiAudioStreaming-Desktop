@@ -38,6 +38,9 @@ data class CliArgs(
     val http:            Boolean         = false,
     val httpPort:        Int             = 8080,
     val httpSafari:      Boolean         = false,
+    val dlna:            Boolean         = false,
+    val dlnaPort:        Int             = 8081,
+    val dlnaFormat:      String          = "auto",
     val serverIp:        String?         = null,
     val outputDevice:    String?         = null,
     val mic:             Boolean         = false,
@@ -58,6 +61,8 @@ data class CliArgs(
     val ipFamily:        NetAddr.Family  = NetAddr.Family.AUTO,
     val usb:             Boolean?        = null,
     val usbLatency:      Int?            = null,
+    val usbIface:        String?         = null,
+    val noTray:          Boolean         = false,
     val wfasMode:        String?         = null,
     val useNativeEngine: Boolean         = true,
     val viz:             Boolean         = false,
@@ -114,6 +119,9 @@ data class CliArgs(
             var http            = false
             var httpPort        = 8080
             var httpSafari      = false
+            var dlna            = false
+            var dlnaPort        = 8081
+            var dlnaFormat      = "auto"
             var serverIp: String?           = null
             var outputDevice: String?       = null
             var mic             = false
@@ -131,6 +139,8 @@ data class CliArgs(
             var ipFamily        = NetAddr.Family.AUTO
             var usb: Boolean?               = null
             var usbLatency: Int?            = null
+            var usbIface: String?           = null
+            var noTray = false
             var wfasMode: String?           = null
             var configCmd: ConfigCommand?   = null
             var firewallCmd: FirewallCommand? = null
@@ -261,6 +271,15 @@ data class CliArgs(
                     "--http"        -> http       = true
                     "--http-port"   -> { httpPort = nextInt(args, i, "--http-port", 1024, 65535); i++ }
                     "--http-safari" -> { httpSafari = true; http = true }
+                    "--dlna"        -> dlna       = true
+                    "--dlna-port"   -> { dlnaPort = nextInt(args, i, "--dlna-port", 1024, 65535); i++; dlna = true }
+                    "--dlna-format" -> {
+                        val value = nextArg(args, i, "--dlna-format")?.lowercase()
+                            ?: parseError("--dlna-format requires one of: auto, lpcm, wav, mp3, adts")
+                        if (value !in listOf("auto", "lpcm", "wav", "mp3", "adts"))
+                            parseError("--dlna-format must be one of: auto, lpcm, wav, mp3, adts")
+                        dlnaFormat = value; i++; dlna = true
+                    }
 
                     "--connect" -> {
                         serverIp = nextArg(args, i, "--connect") ?: parseError("--connect requires an IP address")
@@ -323,6 +342,13 @@ data class CliArgs(
                         if (ms < UsbLink.MIN_USB_LATENCY_MS || ms > UsbLink.MAX_USB_LATENCY_MS)
                             parseError("--usb-latency must be between ${UsbLink.MIN_USB_LATENCY_MS} and ${UsbLink.MAX_USB_LATENCY_MS}, got $ms")
                         usbLatency = ms
+                        usb = usb ?: true
+                    }
+                    "--no-tray" -> noTray = true
+                    "--usb-iface" -> {
+                        usbIface = nextArg(args, i, "--usb-iface")
+                            ?: parseError("--usb-iface requires an interface name, or 'Auto'")
+                        i++
                         usb = usb ?: true
                     }
                     "--wfas-mode" -> {
@@ -434,6 +460,9 @@ data class CliArgs(
                 http            = http,
                 httpPort        = httpPort,
                 httpSafari      = httpSafari,
+                dlna            = dlna,
+                dlnaPort        = dlnaPort,
+                dlnaFormat      = dlnaFormat,
                 serverIp        = serverIp,
                 outputDevice    = outputDevice,
                 mic             = mic,
@@ -454,6 +483,8 @@ data class CliArgs(
                 ipFamily        = ipFamily,
                 usb             = usb,
                 usbLatency      = usbLatency,
+                usbIface        = usbIface,
+                noTray          = noTray,
                 wfasMode        = wfasMode,
                 useNativeEngine = useNativeEngine,
                 viz             = viz,
@@ -509,6 +540,9 @@ SERVER OPTIONS
   --http              Enable HTTP stream            (implies --multicast)
   --http-port <n>     HTTP port                    (default: 8080)
   --http-safari       Enable Safari-compatible AAC  (implies --http)
+  --dlna              Push audio to the DLNA renderers saved in settings
+  --dlna-port <n>     DLNA media endpoint port     (default: 8081)
+  --dlna-format <f>   auto | lpcm | wav | mp3 | adts               (default: auto)
   --auth-mode <m>     Connection authorization: off | ask | key  (default: off;
                       unicast only). 'ask' prompts on the terminal per client.
   --auth-key <key>    Pre-shared key (implies --auth-mode key). The key is never
@@ -587,6 +621,14 @@ LINK OPTIONS  (transport and address family)
   --usb-latency <ms>  Jitter buffer used only while the USB link is up
                       (default: 20, range 5-120). The Wi-Fi buffer set by
                       --latency is left untouched. Implies --usb.
+  --no-tray           Start the GUI without the Linux tray icon. Use this if the
+                      app segfaults inside libgtk-3 on launch; the tray is the
+                      only part that touches GTK. Same as WFAS_NO_TRAY=1, or
+                      'wfas config set ui.linuxTray OFF' to make it permanent.
+  --usb-iface <name>  Force a specific tethering interface instead of picking
+                      one automatically. Accepts the interface name or its
+                      display name as listed by --debug, or 'Auto' to restore
+                      detection. Implies --usb.
   --wfas-mode <m>     When this device serves the native WFAS protocol:
                         always      always, over Wi-Fi and over the cable
                         not-on-usb  over Wi-Fi, but suppressed as soon as the

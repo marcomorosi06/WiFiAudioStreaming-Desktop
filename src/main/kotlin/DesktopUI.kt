@@ -293,6 +293,17 @@ fun AppContent(
                 }
             }
 
+            if (isServer && isStreaming && appSettings.dlnaEnabled) {
+                item {
+                    DlnaStatusCard(
+                        localIp = localIp,
+                        port = appSettings.dlnaPort.toIntOrNull() ?: 8081,
+                        formatPreference = DlnaFormatPreference.fromId(appSettings.dlnaFormat),
+                        hasSelection = appSettings.dlnaDevices.isNotEmpty()
+                    )
+                }
+            }
+
             item {
                 StreamingControlCenter(
                     isStreaming = isStreaming,
@@ -309,7 +320,8 @@ fun AppContent(
                         appSettings.wfasMode,
                         UsbLink.isReady(),
                         appSettings.rtpEnabled,
-                        appSettings.httpEnabled
+                        appSettings.httpEnabled,
+                        appSettings.dlnaEnabled
                     ),
                     onActivateWfas = {
                         onAppSettingsChange(appSettings.copy(wfasMode = WfasPolicy.MODE_OFF_ON_USB))
@@ -760,8 +772,10 @@ fun SettingsScreen(
     var cliIsInstalled by remember { mutableStateOf(CliPathInstaller.isInstalled()) }
     var cliInstalling by remember { mutableStateOf(false) }
     var fwPorts by remember(streamingPort, micPort) { mutableStateOf(listOf(streamingPort, "9091", micPort).filter { it.isNotBlank() }.joinToString(", ")) }
-    val fwTcpPorts = if (appSettings.httpEnabled)
-        listOfNotNull(appSettings.httpPort.toIntOrNull()) else emptyList()
+    val fwTcpPorts = listOfNotNull(
+        appSettings.httpPort.toIntOrNull().takeIf { appSettings.httpEnabled },
+        appSettings.dlnaPort.toIntOrNull().takeIf { appSettings.dlnaEnabled }
+    )
     var fwBusy by remember { mutableStateOf(false) }
     var fwActive by remember { mutableStateOf(FirewallHelper.rulesActive()) }
     var fwResult by remember { mutableStateOf<FirewallHelper.Result?>(null) }
@@ -1063,6 +1077,7 @@ fun SettingsScreen(
                             micPort = micPort,
                             onMicPortChange = onMicPortChange,
                             appSettings = appSettings,
+                            audioSettings = audioSettings,
                             onAppSettingsChange = onAppSettingsChange
                         )
                     }
@@ -2475,23 +2490,12 @@ fun UsbLinkPanel(
                     )
                     Column(Modifier.weight(1f)) {
                         Text(
-                            text = if (linkState.isReady) {
-                                Strings.get(
-                                    "usb_diag_ready",
-                                    linkState.displayName ?: "usb",
-                                    linkState.localAddress ?: "-"
-                                )
-                            } else {
-                                stringResource(UsbLink.diagnosticKey())
-                            },
+                            text = UsbLink.diagnosticText(),
                             style = MaterialTheme.typography.bodyMedium,
                             fontWeight = FontWeight.SemiBold
                         )
                         Text(
-                            stringResource(
-                                if (linkState.isReady) "usb_panel_hint_ready"
-                                else "usb_panel_hint_waiting"
-                            ),
+                            stringResource(UsbLink.hintKey()),
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
@@ -2911,6 +2915,7 @@ fun NetworkSettingsContent(
     port: String, onPortChange: (String) -> Unit,
     micPort: String, onMicPortChange: (String) -> Unit,
     appSettings: AppSettings,
+    audioSettings: AudioSettings_V1,
     onAppSettingsChange: (AppSettings) -> Unit
 ) {
     OutlinedTextField(
@@ -2987,16 +2992,43 @@ fun NetworkSettingsContent(
             }
         }
         Text(
-            text = if (usbState.isReady) {
-                Strings.get("usb_diag_ready", usbState.displayName ?: "usb", usbState.localAddress ?: "-")
-            } else {
-                stringResource(UsbLink.diagnosticKey())
-            },
+            text = UsbLink.diagnosticText(),
             style = MaterialTheme.typography.bodySmall,
-            color = if (usbState.isReady) MaterialTheme.colorScheme.primary
-            else MaterialTheme.colorScheme.error,
+            color = when (usbState.stage) {
+                UsbLink.Stage.READY -> MaterialTheme.colorScheme.primary
+                UsbLink.Stage.FOUND_NO_IP -> MaterialTheme.colorScheme.tertiary
+                else -> MaterialTheme.colorScheme.error
+            },
             modifier = Modifier.padding(top = 6.dp, bottom = 6.dp)
         )
+
+        val usbOptions = remember(usbState) {
+            listOf(Strings.get("usb_interface_auto") to "Auto") +
+                UsbLink.candidates().map { iface ->
+                    val name = iface.displayName ?: iface.name
+                    val hasIp = runCatching {
+                        iface.inetAddresses.toList().any {
+                            it is java.net.Inet4Address && !it.isLoopbackAddress
+                        }
+                    }.getOrDefault(false)
+                    (if (hasIp) name else Strings.get("usb_interface_no_ip", name)) to name
+                }
+        }
+
+        ExposedDropdown(
+            label = stringResource("usb_interface"),
+            value = appSettings.usbInterface,
+            options = usbOptions,
+            onOptionSelected = { onAppSettingsChange(appSettings.copy(usbInterface = it)) },
+            modifier = Modifier.fillMaxWidth()
+        )
+        Text(
+            stringResource("usb_interface_desc"),
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.padding(top = 4.dp, bottom = 12.dp)
+        )
+
         Text(
             stringResource("usb_latency") + ": ${appSettings.usbLatencyMs} ms",
             style = MaterialTheme.typography.bodyMedium
@@ -3079,7 +3111,8 @@ fun NetworkSettingsContent(
             appSettings.wfasMode,
             UsbLink.isReady(),
             appSettings.rtpEnabled,
-            appSettings.httpEnabled
+            appSettings.httpEnabled,
+            appSettings.dlnaEnabled
         )
     ) {
         Surface(
@@ -3182,6 +3215,12 @@ fun NetworkSettingsContent(
             }
         }
     }
+
+    DlnaSettingsSection(
+        appSettings = appSettings,
+        audioSettings = audioSettings,
+        onAppSettingsChange = onAppSettingsChange
+    )
 }
 
 @OptIn(ExperimentalMaterial3Api::class)

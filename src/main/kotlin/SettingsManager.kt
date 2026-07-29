@@ -34,6 +34,10 @@ data class AppSettings(
     val httpEnabled: Boolean = false,
     val httpPort: String = "8080",
     val httpSafariMode: Boolean = false,
+    val dlnaEnabled: Boolean = false,
+    val dlnaPort: String = "8081",
+    val dlnaFormat: String = "auto",
+    val dlnaDevices: List<String> = emptyList(),
     val networkInterface: String = "Auto",
     val rtpPort: String = "9094",
     val launchAtStartup: Boolean = false,
@@ -56,7 +60,17 @@ data class AppSettings(
     val noiseReductionStrength: Int = 50,
     val usbModeEnabled: Boolean = false,
     val usbLatencyMs: Int = 20,
+    val usbInterface: String = "Auto",
+    val linuxTray: String = LinuxTray.MODE_AUTO,
     val wfasMode: String = WfasPolicy.MODE_OFF_ON_USB
+)
+
+fun AppSettings.toDlnaConfig(): DlnaServerConfig = DlnaServerConfig(
+    enabled = dlnaEnabled,
+    port = dlnaPort.toIntOrNull() ?: 8081,
+    preference = DlnaFormatPreference.fromId(dlnaFormat),
+    selectedUdns = DlnaSelection.udns(dlnaDevices),
+    title = "WiFi Audio Streaming"
 )
 
 object SettingsRepository {
@@ -101,6 +115,7 @@ object SettingsRepository {
     private const val ENCRYPTION_KEY           = "server_encryption_enabled"
     private const val USB_MODE_KEY             = "net_usb_mode_enabled"
     private const val USB_LATENCY_KEY          = "net_usb_latency_ms"
+    private const val USB_IFACE_KEY            = "net_usb_interface"
 
     fun hasSeenWelcome(): Boolean    = prefs.getBoolean(HAS_SEEN_WELCOME_KEY,     false)
     fun markWelcomeSeen()            { prefs.putBoolean(HAS_SEEN_WELCOME_KEY,     true); runCatching { prefs.flush() } }
@@ -139,7 +154,7 @@ object SettingsRepository {
 
     fun saveSettings(settings: AllSettings) {
         runCatching { ConfigManager.save(settings) }
-        UsbLink.configure(settings.app.usbModeEnabled, settings.app.usbLatencyMs)
+        UsbLink.configure(settings.app.usbModeEnabled, settings.app.usbLatencyMs, settings.app.usbInterface)
         WfasPolicy.configure(settings.app.wfasMode)
     }
 
@@ -151,7 +166,7 @@ object SettingsRepository {
             runCatching { ConfigManager.save(migrated) }
             migrated
         }
-        UsbLink.configure(settings.app.usbModeEnabled, settings.app.usbLatencyMs)
+        UsbLink.configure(settings.app.usbModeEnabled, settings.app.usbLatencyMs, settings.app.usbInterface)
         WfasPolicy.configure(settings.app.wfasMode)
         return settings
     }
@@ -203,6 +218,7 @@ object SettingsRepository {
         val encryptionEnabled = prefs.getBoolean(ENCRYPTION_KEY, false)
         val usbModeEnabled = prefs.getBoolean(USB_MODE_KEY, false)
         val usbLatencyMs = prefs.getInt(USB_LATENCY_KEY, UsbLink.DEFAULT_USB_LATENCY_MS)
+        val usbInterface = prefs.get(USB_IFACE_KEY, "Auto")
 
         val appSettings = AppSettings(
             theme = theme,
@@ -231,9 +247,10 @@ object SettingsRepository {
             authKey = authKey,
             encryptionEnabled = encryptionEnabled,
             usbModeEnabled = usbModeEnabled,
-            usbLatencyMs = usbLatencyMs
+            usbLatencyMs = usbLatencyMs,
+            usbInterface = usbInterface
         )
-        UsbLink.configure(usbModeEnabled, usbLatencyMs)
+        UsbLink.configure(usbModeEnabled, usbLatencyMs, usbInterface)
         return AllSettings(appSettings, audioSettings, streamingPort, micPort, micRoutingMode)
     }
 }

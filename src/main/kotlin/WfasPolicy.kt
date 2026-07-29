@@ -55,8 +55,8 @@ object WfasPolicy {
 
     fun enabledAnywhere(): Boolean = enabledOnNetwork() || enabledOnUsb()
 
-    fun canStartServer(rtpEnabled: Boolean, httpEnabled: Boolean): Boolean =
-        enabledAnywhere() || rtpEnabled || httpEnabled
+    fun canStartServer(rtpEnabled: Boolean, httpEnabled: Boolean, dlnaEnabled: Boolean = false): Boolean =
+        enabledAnywhere() || rtpEnabled || httpEnabled || dlnaEnabled
 
     // Versione pura per la UI: Compose non ricompone leggendo UsbLink.isReady(),
     // quindi lo stato del collegamento va passato come parametro osservabile.
@@ -64,13 +64,14 @@ object WfasPolicy {
         mode: String,
         usbReady: Boolean,
         rtpEnabled: Boolean,
-        httpEnabled: Boolean
+        httpEnabled: Boolean,
+        dlnaEnabled: Boolean = false
     ): Boolean {
         val onNetwork = when (mode) {
             MODE_OFF -> false
             MODE_ALWAYS -> true
             else -> !usbReady
         }
-        return onNetwork || usbReady || rtpEnabled || httpEnabled
+        return onNetwork || usbReady || rtpEnabled || httpEnabled || dlnaEnabled
     }
 }
