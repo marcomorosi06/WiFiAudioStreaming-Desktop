@@ -31,6 +31,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Surface
 import androidx.compose.material.icons.outlined.ContentCopy
+import androidx.compose.material.icons.outlined.Subtitles
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
@@ -1067,6 +1068,11 @@ fun SettingsScreen(
                             checked = appSettings.useNativeEngine,
                             onCheckedChange = { onAppSettingsChange(appSettings.copy(useNativeEngine = it)) }
                         )
+                    }
+                }
+                item {
+                    SettingsGroup(title = stringResource("captions_title"), icon = Icons.Outlined.Subtitles) {
+                        CaptionsSettingsPanel()
                     }
                 }
                 item {

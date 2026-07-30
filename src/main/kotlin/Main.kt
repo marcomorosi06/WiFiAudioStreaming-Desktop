@@ -214,7 +214,8 @@ data class ServerCapabilities(
     val securityMode: String? = null,
     val encrypted: Boolean = false,
     val serverSendsMic: Boolean = false,
-    val serverWantsMic: Boolean = false
+    val serverWantsMic: Boolean = false,
+    val captionPort: Int? = null
 ) {
     val acceptsClientMic: Boolean get() = serverWantsMic
 }
@@ -991,6 +992,7 @@ object NetworkHandler_v1 {
             val audioStr     = if (audioSettings != null) ";sr=${audioSettings.sampleRate.toInt()};ch=${audioSettings.channels};bd=${audioSettings.bitDepth}" else ""
             val micCode      = "${if (capabilities.serverSendsMic) "tx" else ""}${if (capabilities.serverWantsMic) "rx" else ""}"
             val micStr       = if (micCode.isNotEmpty()) ";mic=$micCode" else ""
+            val capStr       = capabilities.captionPort?.let { ";cap=$it" } ?: ""
             val staticPrefix = "$DISCOVERY_MESSAGE;$hostname;$mode;$port;protocols=$protocolsStr$httpPortStr$audioStr"
             val groupAddress = InetAddress.getByName(MULTICAST_GROUP_IP)
             MulticastSocket().use { socket ->
@@ -1000,7 +1002,7 @@ object NetworkHandler_v1 {
                 while (isActive) {
                     val encOn   = encryptionEnabled && securityMode.equals("KEY", ignoreCase = true)
                     val secStr  = ";auth=$securityMode;enc=${if (encOn) 1 else 0}"
-                    val message = "$staticPrefix$secStr$micStr"
+                    val message = "$staticPrefix$secStr$micStr$capStr"
                     runCatching {
                         val bytes = message.toByteArray()
                         val packet = DatagramPacket(bytes, bytes.size, groupAddress, DISCOVERY_PORT)
@@ -2694,6 +2696,21 @@ object NetworkHandler_v1 {
                             socket.send(Datagram(buildPacket { writeText(ackText) }, clientAddress))
                             WfasStats.add(WfasStats.Cat.HELLO, ackText.length)
 
+                            runCatching {
+                                CaptionController.onSessionStart(
+                                    scope = scope,
+                                    streamingPort = port,
+                                    clientHost = peerHost,
+                                    authKey = authKey,
+                                    encrypting = encrypting,
+                                    requireProof = SecurityMode.fromStringSafe(securityMode) == SecurityMode.KEY,
+                                    cnonceHex = pendCnonce,
+                                    snonceHex = pendSnonce,
+                                    audioRate = audioSettings.sampleRate.toInt(),
+                                    audioChannels = audioSettings.channels
+                                )
+                            }.onFailure { AppDebug.log("[CAP] session start failed: ${it.message}") }
+
                             if (useNativeEngine) {
                                 serverEngine = buildAndStartEngine(audioSettings)
                                 if (serverEngine == null) {
@@ -2752,6 +2769,7 @@ object NetworkHandler_v1 {
                                             AppDebug.log("---Received CLIENT_BYE from $clientAddress ---")
                                             clientAlive.set(false)
                                             if (useNativeEngine) {
+                                                runCatching { CaptionController.onSessionEnd() }
                                                 runCatching { serverEngine?.stop() }
                                             } else {
                                                 runCatching { serverGrabber?.stop() }
@@ -2786,6 +2804,7 @@ object NetworkHandler_v1 {
                                         if (!clientAlive.get()) break
                                         if (samples.isEmpty()) continue
                                         onAudioFrame?.invoke(samples)
+                                        CaptionController.onPcm(samples, samples.size / audioSettings.channels, audioSamplePos)
                                         processEngineFrame(samples, chunkArray, byteBuffer, maxShortsPerPacket, audioSettings.channels) { bytesToSend ->
                                             byteBuffer.array().copyInto(packetArray, 0, 0, bytesToSend)
                                             val outBytes = frameForSend(packetArray, bytesToSend)
@@ -3699,6 +3718,7 @@ object NetworkHandler_v1 {
         httpServerJob?.cancelAndJoin();  httpServerJob   = null
         rtpJob?.cancelAndJoin();         rtpJob          = null
         localMicMixJob?.cancelAndJoin(); localMicMixJob  = null
+        runCatching { CaptionController.onSessionEnd() }
         runCatching { serverEngine?.setMicMixEnabled(false) }
         runCatching { serverEngine?.stop() }
         runCatching { serverGrabber?.stop() }
@@ -4054,7 +4074,10 @@ fun startGuiApplication(cliArgs: CliArgs) = application {
             if (appSettings.rtpEnabled)  protocols.add(StreamingProtocol.RTP)
             if (appSettings.httpEnabled) protocols.add(StreamingProtocol.HTTP)
             val httpPort = if (appSettings.httpEnabled) appSettings.httpPort.toIntOrNull() ?: 8080 else null
-            ServerCapabilities(protocols, httpPort, appSettings.httpSafariMode)
+            ServerCapabilities(
+                protocols, httpPort, appSettings.httpSafariMode,
+                captionPort = CaptionController.captionPort(streamingPort.toIntOrNull() ?: 9090)
+            )
         }
     }
 
