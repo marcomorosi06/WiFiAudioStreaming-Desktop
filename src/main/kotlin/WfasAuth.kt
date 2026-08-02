@@ -16,16 +16,70 @@ import javax.crypto.spec.SecretKeySpec
 enum class SecurityMode {
     OFF, ASK, KEY;
 
+    val requiresKey: Boolean get() = this == KEY
+
     companion object {
+        const val UI_MODE_QR = "QR"
+
         fun fromStringSafe(s: String?): SecurityMode =
             runCatching { valueOf((s ?: "OFF").uppercase()) }.getOrDefault(OFF)
+
+        fun requiresKey(s: String?): Boolean = fromStringSafe(s).requiresKey
+
+        fun uiMode(stored: String?, qrPairing: Boolean): String =
+            if (qrPairing && fromStringSafe(stored) == KEY) UI_MODE_QR
+            else fromStringSafe(stored).name
+
+        fun storedMode(uiMode: String): String =
+            if (uiMode.equals(UI_MODE_QR, ignoreCase = true)) KEY.name
+            else fromStringSafe(uiMode).name
+
+        fun isQrUiMode(uiMode: String): Boolean = uiMode.equals(UI_MODE_QR, ignoreCase = true)
     }
 }
 
 object WfasAuth {
     private val rng = SecureRandom()
 
+    const val PAIRING_KEY_BYTES = 32
+
     fun nonceHex(): String = ByteArray(16).also { rng.nextBytes(it) }.toHex()
+
+    fun randomPairingKey(): String {
+        val raw = ByteArray(PAIRING_KEY_BYTES).also { rng.nextBytes(it) }
+        return java.util.Base64.getUrlEncoder().withoutPadding().encodeToString(raw)
+    }
+
+    fun groupKeyForDisplay(key: String, blockSize: Int = 5): String =
+        key.chunked(blockSize).joinToString("-")
+
+    fun nextSecurityState(
+        storedMode: String,
+        authKey: String,
+        manualAuthKey: String,
+        qrPairingEnabled: Boolean,
+        uiMode: String
+    ): SecurityState {
+        val wasQr = qrPairingEnabled && SecurityMode.requiresKey(storedMode)
+        val nowQr = SecurityMode.isQrUiMode(uiMode)
+
+        if (nowQr) {
+            val seeded =
+                if (!wasQr && manualAuthKey.isBlank() && SecurityMode.requiresKey(storedMode)) authKey
+                else manualAuthKey
+            return SecurityState(SecurityMode.KEY.name, authKey, seeded, true)
+        }
+
+        val effective = if (wasQr) manualAuthKey else authKey
+        return SecurityState(SecurityMode.storedMode(uiMode), effective, effective, false)
+    }
+
+    data class SecurityState(
+        val storedMode: String,
+        val authKey: String,
+        val manualAuthKey: String,
+        val qrPairingEnabled: Boolean
+    )
 
     fun proof(key: String, side: Char, cnonce: String, snonce: String): String {
         val mac = Mac.getInstance("HmacSHA256")

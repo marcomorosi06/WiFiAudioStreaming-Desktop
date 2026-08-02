@@ -214,6 +214,7 @@ fun main() {
     eq("udns set", DlnaSelection.udns(listOf(encoded, "x|Y")), setOf(denon.udn, "x"))
 
     protocolStatusChecks()
+    wfasPairingUriChecks()
 
     println()
     if (failures == 0) println("ALL CHECKS PASSED") else println("$failures CHECK(S) FAILED")

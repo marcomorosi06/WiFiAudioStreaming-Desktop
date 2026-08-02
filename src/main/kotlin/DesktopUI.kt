@@ -93,6 +93,22 @@ import kotlinx.coroutines.launch
 import java.awt.image.BufferedImage
 import javax.imageio.ImageIO
 
+fun applySecurityUiMode(settings: AppSettings, uiMode: String): AppSettings {
+    val next = WfasAuth.nextSecurityState(
+        storedMode = settings.securityMode,
+        authKey = settings.authKey,
+        manualAuthKey = settings.manualAuthKey,
+        qrPairingEnabled = settings.qrPairingEnabled,
+        uiMode = uiMode
+    )
+    return settings.copy(
+        securityMode = next.storedMode,
+        authKey = next.authKey,
+        manualAuthKey = next.manualAuthKey,
+        qrPairingEnabled = next.qrPairingEnabled
+    )
+}
+
 fun openUrl(url: String) {
     val os = System.getProperty("os.name").lowercase()
     try {
@@ -281,6 +297,27 @@ fun AppContent(
                 )
             }
 
+            item {
+                QrPairingBar(
+                    appSettings = appSettings,
+                    isServer = isServer,
+                    isStreaming = isStreaming,
+                    isMulticastMode = isMulticastMode,
+                    localIp = localIp,
+                    streamingPort = streamingPort,
+                    onAppSettingsChange = onAppSettingsChange,
+                    onPairingReady = { payload ->
+                        onConnectToServer(
+                            ServerInfo(
+                                ip = NetAddr.normalize(payload.ip),
+                                isMulticast = payload.isMulticast,
+                                port = payload.port
+                            )
+                        )
+                    }
+                )
+            }
+
             if (isServer && isStreaming && appSettings.rtpEnabled) {
                 item {
                     RtpSdpBanner(
@@ -361,10 +398,19 @@ fun AppContent(
                             virtualMicDisabled = isMulticastMode,
                             selectedMicMixInput = selectedMicMixInput,
                             onMicMixInputSelected = onMicMixInputSelected,
-                            securityMode = appSettings.securityMode,
+                            securityMode = SecurityMode.uiMode(
+                                appSettings.securityMode,
+                                appSettings.qrPairingEnabled
+                            ),
                             authKey = appSettings.authKey,
-                            onSecurityModeChange = { onAppSettingsChange(appSettings.copy(securityMode = it)) },
-                            onAuthKeyChange = { onAppSettingsChange(appSettings.copy(authKey = it)) },
+                            onSecurityModeChange = {
+                                onAppSettingsChange(applySecurityUiMode(appSettings, it))
+                            },
+                            onAuthKeyChange = {
+                                onAppSettingsChange(
+                                    appSettings.copy(authKey = it, manualAuthKey = it)
+                                )
+                            },
                             encryptionEnabled = appSettings.encryptionEnabled,
                             onEncryptionChange = { onAppSettingsChange(appSettings.copy(encryptionEnabled = it)) },
                             usbModeEnabled = appSettings.usbModeEnabled,
@@ -1988,6 +2034,17 @@ fun ServerConfigCard(
                     leadingIcon = { Icon(Icons.Outlined.Key, contentDescription = null, modifier = Modifier.size(18.dp)) },
                     modifier = Modifier.weight(1f)
                 )
+                FilterChip(
+                    selected = mode == "QR",
+                    onClick = { onSecurityModeChange("QR") },
+                    label = { Text(stringResource("sec_mode_qr"), maxLines = 1) },
+                    leadingIcon = { Icon(Icons.Outlined.QrCode2, contentDescription = null, modifier = Modifier.size(18.dp)) },
+                    modifier = Modifier.weight(1f)
+                )
+            }
+
+            if (mode == "QR") {
+                QrSecurityInfoCard()
             }
 
             if (mode == "KEY") {
@@ -2031,9 +2088,9 @@ fun ServerConfigCard(
                         )
                     }
                     Switch(
-                        checked = encryptionEnabled && mode == "KEY",
+                        checked = encryptionEnabled && (mode == "KEY" || mode == "QR"),
                         onCheckedChange = onEncryptionChange,
-                        enabled = mode == "KEY"
+                        enabled = mode == "KEY" || mode == "QR"
                     )
                 }
             }
@@ -2668,11 +2725,9 @@ fun DeviceSecurityRow(caps: ServerCapabilities?) {
     if (!hasSec && !caps.serverSendsMic && !caps.serverWantsMic) return
     Spacer(Modifier.height(6.dp))
     Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-        when {
-            caps.encrypted -> DeviceBadge(Icons.Filled.Lock, stringResource("sec_encrypted"), true)
-            mode == "KEY"  -> DeviceBadge(Icons.Outlined.Key, stringResource("sec_key"), true)
-            mode == "ASK"  -> DeviceBadge(Icons.Outlined.Security, stringResource("sec_ask"), true)
-        }
+        if (mode == "KEY") DeviceBadge(Icons.Outlined.Key, stringResource("sec_key"), true)
+        if (mode == "ASK") DeviceBadge(Icons.Outlined.Security, stringResource("sec_ask"), true)
+        if (caps.encrypted) DeviceBadge(Icons.Filled.Lock, stringResource("sec_encrypted"), true)
         if (caps.serverSendsMic) DeviceBadge(Icons.Filled.Mic, stringResource("mic_sends"), false)
         if (caps.serverWantsMic) DeviceBadge(Icons.Filled.Hearing, stringResource("mic_wants"), false)
     }

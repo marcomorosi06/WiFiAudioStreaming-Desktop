@@ -173,6 +173,18 @@ object NetAddr {
     fun bestLocalAddress(): String =
         localAddresses().firstOrNull()?.host ?: "127.0.0.1"
 
+    fun isSelfAddress(host: String?): Boolean {
+        val bare = normalize(host)
+            .removeSurrounding("[", "]")
+            .substringBefore('%')
+            .lowercase()
+        if (bare.isBlank()) return false
+        if (bare == "127.0.0.1" || bare == "::1" || bare == "localhost") return true
+        return localAddresses().any {
+            it.hostNoZone.removeSurrounding("[", "]").lowercase() == bare
+        }
+    }
+
     fun hasIpv4(): Boolean = localAddresses().any { !it.isV6 }
 
     fun hasIpv6(): Boolean = localAddresses().any { it.isV6 }

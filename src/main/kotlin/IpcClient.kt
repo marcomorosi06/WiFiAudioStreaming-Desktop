@@ -82,6 +82,8 @@ object IpcClient {
         is ControlCommand.Unmute -> "{\"cmd\": \"unmute\"}"
         is ControlCommand.Stop   -> "{\"cmd\": \"stop\"}"
         is ControlCommand.Status -> "{\"cmd\": \"status\"}"
+        is ControlCommand.PairInvite -> "{\"cmd\": \"pair\", \"rekey\": ${cmd.forceNewKey}}"
+        is ControlCommand.DeepLink   -> "{\"cmd\": \"deeplink\", \"uri\": \"${cmd.uri.replace("\"", "\\\"")}\"}"
     }
 
     private fun prettyPrint(cmd: ControlCommand, response: String, pid: String, args: CliArgs) {
@@ -106,6 +108,8 @@ object IpcClient {
                 else    System.err.println("  ✗  Failed to stop.")
             }
             is ControlCommand.Status -> printStatus(response, pid)
+            is ControlCommand.PairInvite -> println(response)
+            is ControlCommand.DeepLink   -> println(response)
         }
     }
 

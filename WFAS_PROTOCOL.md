@@ -233,6 +233,36 @@ IP or from a stale list entry, which is exactly why `WFAS_BUSY` exists.
 Multicast has no session state and therefore no exclusivity: any number of
 receivers may join the group.
 
+### 5.7 Multicast teardown
+
+A multicast server that stops sends `BYE` to the group three times, from a
+cancellation-safe path so that it is emitted however the send loop ends — clean
+break, exception, or coroutine cancellation. Receivers stop on the first one.
+
+`BYE` is best effort and MUST NOT be relied on. There is no handshake, so there
+is nothing to acknowledge it, and multicast on Wi-Fi is transmitted unreliably at
+the lowest basic rate: losing all three copies is realistic, and the sender may
+also be killed without running any teardown at all.
+
+The only thing a receiver can rely on is the **encryption beacon**, which an
+encrypted multicast server already emits every 400 ms (Section 8.4). Where that
+heartbeat exists, a receiver **MUST** stop after **6 seconds** without any
+datagram and report the server as gone.
+
+The heartbeat only holds if the server drives it from a timer **independent of
+the audio source**. A server that sends the beacon from inside its capture loop
+will stop beaconing whenever the loop stalls — and it will: a loopback capture on
+a machine that is playing nothing delivers no buffer at all, so the read blocks
+and neither audio nor beacon leaves the machine. The session looks alive on the
+sender and is dead on the wire. A conforming multicast server therefore **MUST**
+send the beacon from its own timer.
+
+There is deliberately **no keep-alive for the unencrypted case**: adding one would
+mean putting a packet shape on the wire that no existing v2 peer emits, which is
+not worth it for a liveness hint. An unencrypted multicast receiver therefore has
+no heartbeat, and must not apply the timeout: if it misses `BYE` it waits, exactly
+as before. Encryption is what buys reliable teardown detection.
+
 ---
 
 ## 6. Versioning policy
@@ -257,6 +287,7 @@ An **optional** server-side toggle gates who may connect. It has three modes:
 
 Security applies to **unicast only**: multicast has no per-client handshake or
 back-channel, so a multicast server cannot authorize individual receivers.
+(Multicast *encryption* is still possible via a shared key — see Section 8.)
 
 The audio packet format (Section 2) is **unchanged**. Security lives entirely in
 the handshake (Section 5), as additional ASCII control messages. The extension is
@@ -436,3 +467,151 @@ encrypt. Consequences, accepted by design:
 - **Ghost replay** of an entire past session is mitigated by the monotonic `epoch`
   (8.4); a brand-new client with no history and the real server offline may accept
   a replayed session once — an inherent limit of multicast without a back-channel.
+
+---
+
+## 9. QR pairing (application-level bootstrap)
+
+**This section is not part of the WFAS v2 wire protocol.** Nothing here changes the packet
+format (Section 2), the handshake (Sections 5 and 7) or the key schedule (Section 8). QR
+pairing is a *bootstrap and UX layer sitting on top of Key mode*: it decides how the
+pre-shared key `K` reaches the second device, not how `K` is used once both ends have it.
+
+An implementation that does not support QR pairing remains fully conformant.
+
+### 9.1 QR pairing is Key mode
+
+`SecurityMode` is **unchanged**: it remains `OFF` / `ASK` / `KEY`. QR pairing is not a
+fourth mode. A device doing QR pairing *is* in Key mode, and everything it puts on the
+wire is byte-identical to Key mode:
+
+* same challenge-response (`WFAS_AUTH_REQUIRED` / `cproof` / `sproof`, Section 7.3),
+* same HKDF-SHA256 derivation and ChaCha20-Poly1305 sealing (Section 8),
+* same advisory beacon hint, `auth=KEY` (Section 7.4).
+
+The only difference is the **provenance of `K`**, which never appears on the wire:
+
+| | `K` comes from |
+|---|---|
+| Key mode, manual | a passphrase typed by the user on both devices |
+| Key mode, QR pairing | 256 bits from a CSPRNG, encoded Base64 URL-safe without padding, transferred out-of-band via QR |
+
+Because a QR-paired key is a full-entropy 256-bit secret rather than a human-chosen
+passphrase, it removes the weakest link of Key mode without adding a single cryptographic
+primitive.
+
+**This is deliberate, and it is a compatibility requirement, not an implementation
+detail.** Announcing a new `auth=` value would have three costs, all avoidable:
+
+1. peers built before this section would classify the server as "no security" in their
+   device list and CLI output, because they match `auth=` against a closed set;
+2. a user who downgrades to an earlier build would find the persisted mode unrecognised,
+   silently falling back to `OFF` — a security regression triggered by an app rollback;
+3. it would put a value on the wire that Section 7 never defined.
+
+Implementations MUST therefore persist and announce `KEY`, and track "this key came from a
+QR invite" as **local UI state only**.
+
+### 9.2 Pairing URI
+
+Unicast:
+
+```
+wifiaudio://pair?ip=<ip>&port=<port>&mode=unicast&key=<base64url>&exp=<unix_ts>&v=2
+```
+
+Multicast:
+
+```
+wifiaudio://pair?ip=<group_ip>&port=<port>&mode=multicast&key=<base64url>&epoch=<n>&exp=<unix_ts>&v=2
+```
+
+| Field | Presence | Meaning |
+|---|---|---|
+| `ip` | always | Peer address (unicast) or multicast group (multicast). |
+| `port` | always | WFAS streaming port, 1–65535. |
+| `mode` | always | `unicast` or `multicast`. |
+| `key` | always | `K`, 256 bits, Base64 URL-safe, unpadded (43 chars). |
+| `exp` | always | Unix seconds. Expiry of **the invite**, not of the key. |
+| `epoch` | multicast only, optional | Current value of the server-persisted multicast `epoch` (Section 8.4). |
+| `v` | always | URI schema version. `2`, aligned with the WFAS protocol version. |
+
+`epoch` is what makes a late join work. A receiver that joins after one or more server
+restarts must know which epoch to expect, otherwise the anti-replay rule of Section 8.4
+(`reject any beacon with epoch ≤ the highest accepted`) discards the session silently and
+the user sees nothing but silence. It is present only when the multicast beacon is
+actually running, i.e. when encryption is enabled.
+
+An equivalent HTTPS App Link form carries the same fields **in the fragment**:
+
+```
+https://www.marcomorosi.eu/wifi-audio-streaming/pair#<same fields>
+https://www.marcomorosi.eu/it/wifi-audio-streaming/pair#<same fields>
+```
+
+This is the form the QR encodes, so that a scanner without the app lands on a page that
+offers the download instead of a dead custom scheme. The fragment is not a cosmetic
+choice: per RFC 3986 it is never transmitted to the origin server, so `key` cannot reach
+an access log, a `Referer` header, or a reverse proxy. The path alone is requested.
+
+A parser MUST read the fields from the fragment when present and fall back to the query
+string otherwise, so that both forms — and links produced by earlier builds — resolve
+identically. The custom-scheme form keeps the query string: it never reaches a server.
+
+### 9.3 Parsing rules
+
+A conforming parser MUST reject the URI, in this order, before using any field:
+
+1. scheme is not `wifiaudio` with host `pair` (or the HTTPS App Link form above);
+2. `v` is not a supported version;
+3. a field required for the given `mode` is missing or out of range;
+4. `exp` is in the past, allowing a clock-skew tolerance (30 s in the reference).
+
+Rejection is reported as a single "invalid" outcome; the caller decides what to show. The
+distinction between *expired* and *malformed* is made by re-parsing with the expiry check
+disabled.
+
+The URI MUST be parsed with a real URI parser, not by string splitting: `ip` can be an
+IPv6 literal in brackets and is therefore percent-encoded inside the query.
+
+### 9.4 Invite lifetime
+
+The reference TTL is **120 seconds**. Expiry bounds the window in which a QR photographed
+by a bystander, or left on screen, is usable. It does not bound the life of `K`: once the
+handshake has completed, the session is governed by Sections 7 and 8 as usual.
+
+* **Unicast** — every invite carries a **freshly generated** `K`. A unicast session serves
+  one client, so an invite and a new key are the same act.
+* **Multicast** — an invite **reuses the current group key** and only carries a new `exp`.
+  Generating a new key would evict every already-connected receiver, so it is a separate,
+  explicitly confirmed action.
+
+### 9.5 Multicast re-key
+
+Replacing the group key is an operation the user performs deliberately, for example after
+a device is believed to be compromised. It:
+
+1. generates a fresh `K'`;
+2. draws a fresh salt and increments the persisted `epoch` (Section 8.4);
+3. rebuilds the beacon and the multicast direction from `K'`.
+
+Receivers holding the old key can no longer authenticate the beacon MAC, so they stop
+deriving new material and fall silent — the intended outcome. Receivers that pair again
+from a new QR pick up `K'` and the new epoch. The audio stream itself is not interrupted
+for the sender; no re-handshake exists in multicast to interrupt.
+
+### 9.6 What QR pairing does not do
+
+* It does not authenticate the **channel** the QR travels over. Anyone who can photograph
+  the screen within the TTL obtains `K`. This is the same trust model as reading a
+  passphrase aloud, with a shorter window and a stronger secret.
+* It does not change the multicast threat model of Section 8.6: the group key remains
+  symmetric, so any member can both decrypt and inject.
+* It does not remove the anti-downgrade obligation of Section 7.4. A client paired in `QR`
+  mode MUST still abort if the handshake does not actually perform the key exchange.
+
+### 9.7 Implementation note
+
+`WfasPairingUri` (`build` / `parse`) is a pure, dependency-free function pair and is
+**duplicated verbatim** in the Android and Desktop code bases. The two copies must stay
+byte-identical; a change to the URI schema is a change to this section and to both files.

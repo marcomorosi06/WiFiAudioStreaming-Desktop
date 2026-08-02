@@ -30,6 +30,9 @@ Apache License 2.0  (https://www.apache.org/licenses/LICENSE-2.0)
   Java Native Access (JNA)   (c) Timothy Wall and contributors
                              (dual Apache-2.0 / LGPL-2.1; used as Apache-2.0)
   Java UUID Generator        (c) FasterXML, LLC
+  ZXing Core                 (c) ZXing authors
+                             QR encoding for pairing invites, and decoding of the
+                             codes read from the webcam.  https://github.com/zxing/zxing
 
 Bouncy Castle Licence (MIT-style)
   bcprov / bctls / bcpkix (jdk18on)

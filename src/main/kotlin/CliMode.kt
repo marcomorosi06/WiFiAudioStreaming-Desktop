@@ -245,6 +245,37 @@ private fun resolveInputDevice(name: String?): Mixer.Info? {
 // Main entry point
 // ─────────────────────────────────────────────────────────────────────────────
 
+private fun inheritSecurity(args: CliArgs, settings: AllSettings): CliArgs {
+    if (args.authExplicit) return args
+    val app = settings.app
+    val mode = SecurityMode.fromStringSafe(app.securityMode)
+    if (mode == SecurityMode.OFF) return args
+    if (mode.requiresKey && app.authKey.isBlank()) return args
+    return args.copy(
+        authMode = mode.name,
+        authKey = app.authKey,
+        encrypt = app.encryptionEnabled && mode.requiresKey
+    )
+}
+
+private fun prepareQrKey(args: CliArgs): CliArgs {
+    if (args.authKey.isNotBlank()) return args
+    val all = SettingsRepository.loadSettings()
+    val app = all.app
+    val reusable = app.qrPairingEnabled &&
+        app.authKey.isNotBlank() &&
+        app.authKey != app.manualAuthKey
+    val key = if (reusable) app.authKey else WfasAuth.randomPairingKey()
+    val next = app.copy(
+        securityMode = SecurityMode.KEY.name,
+        authKey = key,
+        qrPairingEnabled = true,
+        encryptionEnabled = true
+    )
+    if (next != app) SettingsRepository.saveSettings(all.copy(app = next))
+    return args.copy(authMode = SecurityMode.KEY.name, authKey = key, encrypt = true)
+}
+
 private fun printCliWelcome() {
     val w = 58
     val line = "-".repeat(w)
@@ -286,9 +317,11 @@ private fun maybeNotifyUpdate(args: CliArgs) {
     }
 }
 
-fun runCli(args: CliArgs) {
-    AppDebug.enabled = args.debug
+fun runCli(rawArgs: CliArgs) {
+    AppDebug.enabled = rawArgs.debug
     val settings = SettingsRepository.loadSettings()
+    val args = inheritSecurity(rawArgs, settings)
+    PairCli.applyInviteToNetwork(args)
 
     NetAddr.configureFamily(args.ipFamily)
     UsbLink.configure(
@@ -394,7 +427,8 @@ private suspend fun runCliMonitor(args: CliArgs, settings: AllSettings) {
 // Server mode
 // ─────────────────────────────────────────────────────────────────────────────
 
-private suspend fun runCliServer(args: CliArgs, settings: AllSettings) {
+private suspend fun runCliServer(rawArgs: CliArgs, settings: AllSettings) {
+    val args = if (rawArgs.qr) prepareQrKey(rawArgs) else rawArgs
     assertPortFree(args.port,    "streaming", args)
     assertPortFree(args.micPort, "mic",       args)
     if (args.rtp)  assertPortFree(args.rtpPort,  "RTP",  args)
@@ -438,7 +472,7 @@ private suspend fun runCliServer(args: CliArgs, settings: AllSettings) {
         if (args.mic)  out("  ${dim("Mic")}     ${args.micRouting.name.lowercase().replace('_', '-')}", args)
         reportLink(args)
         out("", args)
-        out(dim("  Commands: q=stop, v <0-100>=volume"), args)
+        out(dim("  Commands: q=stop, v <0-100>=volume" + if (args.qr) ", p=new invite, r=new key" else ""), args)
         out("", args)
     } else {
         reportLink(args)
@@ -510,6 +544,21 @@ private suspend fun runCliServer(args: CliArgs, settings: AllSettings) {
         }
     }
 
+    if (args.qr && viz != null && !args.json) {
+        err(yellow("!") + " --qr and --viz share the terminal: run 'wfas pair invite' elsewhere for the code.")
+    }
+    if (args.qr && viz == null) {
+        if (args.multicast) {
+            var waited = 0
+            while (NetworkHandler_v1.mcastSession.value == null && waited < 4000) {
+                delay(100); waited += 100
+            }
+        } else {
+            delay(250)
+        }
+        PairCli.serverInvite(args)
+    }
+
     if (args.debug && !args.viz && !args.json)
         DebugHud.start(sending = true, peer = "$serverIp:${args.port}")
 
@@ -554,6 +603,11 @@ private suspend fun runCliServer(args: CliArgs, settings: AllSettings) {
                         NetworkHandler_v1.setServerVolume((pct / 100f).coerceIn(0f, 2f))
                         if (!args.quiet && !args.json) out("  volume: ${pct.toInt()}%", args)
                     }
+                    line.equals("p", ignoreCase = true) ||
+                    line.equals("pair", ignoreCase = true) ||
+                    line.equals("qr", ignoreCase = true) -> PairCli.serverInvite(args)
+                    line.equals("r", ignoreCase = true) ||
+                    line.equals("rekey", ignoreCase = true) -> PairCli.serverInvite(args, forceNewKey = true)
                 }
             }
         } catch (_: Exception) {}

@@ -55,6 +55,8 @@ data class AppSettings(
     val securityMode: String = "OFF",
     val authKey: String = "",
     val encryptionEnabled: Boolean = false,
+    val qrPairingEnabled: Boolean = false,
+    val manualAuthKey: String = "",
     val developerMode: Boolean = false,
     val noiseReductionEnabled: Boolean = false,
     val noiseReductionStrength: Int = 50,

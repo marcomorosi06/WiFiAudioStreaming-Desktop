@@ -30,6 +30,7 @@ licence. We are grateful to all of these projects.
 | Kotlin standard library | 2.1.0 | Apache License 2.0 | JetBrains s.r.o. |
 | kotlinx.coroutines | 1.9.0 | Apache License 2.0 | JetBrains s.r.o. |
 | Ktor (`ktor-network`, `ktor-network-tls`) | 3.0.3 | Apache License 2.0 | JetBrains s.r.o. |
+| ZXing Core | 3.5.3 | Apache License 2.0 | ZXing authors |
 | Bouncy Castle (`bcprov`, `bctls`, `bcpkix` jdk18on) | 1.78.1 | Bouncy Castle Licence (MIT-style) | The Legion of the Bouncy Castle Inc. |
 | dorkbox SystemTray (+ Utilities, OS, Collections, Executor, Updates) | 4.4 | Apache License 2.0 | dorkbox, llc |
 | Java Native Access (JNA, JNA Platform) | 5.13.0 | Apache License 2.0 / LGPL 2.1 (dual) | Timothy Wall and contributors |
@@ -96,6 +97,11 @@ The following components are licensed under the Apache License, Version 2.0
 * dorkbox SystemTray, Utilities, OS, Collections, Executor, Updates — © dorkbox, llc
 * Java Native Access (JNA) — © Timothy Wall and contributors (dual-licensed Apache 2.0 / LGPL 2.1; used here under Apache 2.0)
 * Java UUID Generator — © FasterXML, LLC
+* ZXing Core — © ZXing authors (<https://github.com/zxing/zxing>). Used both to
+  encode pairing invites (on screen and as terminal ASCII art) and to decode the
+  QR codes read from the webcam. The `javase` module is deliberately **not** a
+  dependency: the project supplies its own `LuminanceSource`, so no AWT-only
+  ZXing code is shipped.
 
 > A full copy of the Apache License 2.0 is distributed with each of these
 > projects and is reproduced at the URL above. Any `NOTICE` files shipped by

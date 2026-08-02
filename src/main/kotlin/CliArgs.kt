@@ -25,6 +25,8 @@ sealed class ControlCommand {
     object Unmute : ControlCommand()
     object Stop   : ControlCommand()
     object Status : ControlCommand()
+    data class PairInvite(val forceNewKey: Boolean) : ControlCommand()
+    data class DeepLink(val uri: String) : ControlCommand()
 }
 
 data class CliArgs(
@@ -57,6 +59,12 @@ data class CliArgs(
     val controlCmd:      ControlCommand? = null,
     val configCmd:       ConfigCommand?  = null,
     val firewallCmd:     FirewallCommand? = null,
+    val pairCmd:         PairCommand?    = null,
+    val qr:              Boolean         = false,
+    val noQr:            Boolean         = false,
+    val qrPlain:         Boolean         = false,
+    val qrInvert:        Boolean         = false,
+    val qrShowKey:       Boolean         = false,
     val networkIface:    String          = "Auto",
     val ipFamily:        NetAddr.Family  = NetAddr.Family.AUTO,
     val usb:             Boolean?        = null,
@@ -81,7 +89,17 @@ data class CliArgs(
     val authMode:        String          = "OFF",
     val authKey:         String          = "",
     val encrypt:         Boolean         = false,
+    val authExplicit:    Boolean         = false,
+    val fromInvite:      Boolean         = false,
+    val inviteEpoch:     Long?           = null,
 ) {
+    fun qrOptions(): QrRenderOptions = QrRenderOptions(
+        enabled = !noQr,
+        plain = qrPlain,
+        invert = qrInvert,
+        revealKey = qrShowKey,
+    )
+
     companion object {
 
         private val VERSION: String by lazy {
@@ -144,6 +162,13 @@ data class CliArgs(
             var wfasMode: String?           = null
             var configCmd: ConfigCommand?   = null
             var firewallCmd: FirewallCommand? = null
+            var pairCmd: PairCommand?       = null
+            var qr              = false
+            var noQr            = false
+            var qrPlain         = false
+            var qrInvert        = false
+            var qrShowKey       = false
+            var authExplicit    = false
             var networkIface    = "Auto"
             var useNativeEngine = true
             var viz             = false
@@ -241,6 +266,57 @@ data class CliArgs(
                             else -> parseError("Unknown config subcommand '$sub'. Valid: list, get, set, path, edit, reset, export, import")
                         }
                     }
+
+                    "pair", "qr" -> {
+                        modeExplicit = true
+                        val sub = args.getOrNull(i + 1)?.lowercase()
+                        pairCmd = when (sub) {
+                            null, "invite", "show-qr" -> {
+                                if (sub != null) i++
+                                PairCommand.Invite(forceNewKey = false)
+                            }
+                            "regenerate", "rekey", "new-key" -> { i++; PairCommand.Invite(forceNewKey = true) }
+                            "status", "show", "info"         -> { i++; PairCommand.Show }
+                            "off", "disable"                 -> { i++; PairCommand.Off }
+                            "register"                       -> { i++; PairCommand.Register }
+                            "unregister"                     -> { i++; PairCommand.Unregister }
+                            "connect", "join" -> {
+                                val u = args.getOrNull(i + 2)
+                                    ?: parseError("'pair connect' requires an invite link")
+                                i += 2
+                                PairCommand.Connect(u)
+                            }
+                            "inspect", "check", "parse" -> {
+                                val u = args.getOrNull(i + 2)
+                                    ?: parseError("'pair inspect' requires an invite link")
+                                i += 2
+                                PairCommand.Inspect(u)
+                            }
+                            "encode", "render" -> {
+                                val t = args.getOrNull(i + 2)
+                                    ?: parseError("'pair encode' requires the text to encode")
+                                i += 2
+                                PairCommand.Encode(t)
+                            }
+                            else -> {
+                                if (PendingDeepLink.looksLikePairing(args[i + 1])) {
+                                    i++
+                                    PairCommand.Connect(args[i])
+                                } else parseError(
+                                    "Unknown pair subcommand '$sub'. Valid: invite, regenerate, " +
+                                        "connect <link>, inspect <link>, encode <text>, status, off, " +
+                                        "register, unregister"
+                                )
+                            }
+                        }
+                        if (pairCmd is PairCommand.Connect) runMode = RunMode.CLI_CLIENT
+                    }
+
+                    "--qr"        -> qr = true
+                    "--no-qr"     -> noQr = true
+                    "--plain"     -> qrPlain = true
+                    "--invert"    -> qrInvert = true
+                    "--show-key"  -> qrShowKey = true
 
                     "firewall", "fw" -> {
                         modeExplicit = true
@@ -407,6 +483,7 @@ data class CliArgs(
                     "--auth-mode" -> {
                         val v = nextArg(args, i, "--auth-mode") ?: parseError("--auth-mode requires a value: off, ask or key")
                         i++
+                        authExplicit = true
                         authMode = when (v.lowercase()) {
                             "off"  -> "OFF"
                             "ask"  -> "ASK"
@@ -418,10 +495,12 @@ data class CliArgs(
                         val v = nextArg(args, i, "--auth-key") ?: parseError("--auth-key requires a value")
                         i++
                         authKey = v
+                        authExplicit = true
                         if (authMode == "OFF") authMode = "KEY"
                     }
                     "--encrypt" -> {
                         encrypt = true
+                        authExplicit = true
                         if (authMode == "OFF") authMode = "KEY"
                     }
                     "--check-update", "--check-updates" -> checkUpdate = true
@@ -448,6 +527,24 @@ data class CliArgs(
             }
 
             if (groove > 0f && !viz) parseError("--groove requires --viz")
+
+            if (qr && pairCmd == null) {
+                if (runMode != RunMode.CLI_SERVER && runMode != RunMode.GUI)
+                    parseError("--qr shows a pairing code for a server. Use 'wfas pair connect <link>' to join one.")
+                authMode = SecurityMode.KEY.name
+                encrypt = true
+                authExplicit = true
+            }
+
+            if (authMode == SecurityMode.KEY.name && authKey.isBlank() && !qr) {
+                parseError(
+                    "key authentication needs a key. Pass --auth-key <key>, or --qr to have " +
+                        "one generated and shown as a pairing code."
+                )
+            }
+            if (encrypt && authMode != SecurityMode.KEY.name) {
+                parseError("--encrypt needs a key: it implies --auth-mode key, not '${authMode.lowercase()}'.")
+            }
 
             return CliArgs(
                 runMode         = runMode,
@@ -479,6 +576,12 @@ data class CliArgs(
                 controlCmd      = controlCmd,
                 configCmd       = configCmd,
                 firewallCmd     = firewallCmd,
+                pairCmd         = pairCmd,
+                qr              = qr,
+                noQr            = noQr,
+                qrPlain         = qrPlain,
+                qrInvert        = qrInvert,
+                qrShowKey       = qrShowKey,
                 networkIface    = networkIface,
                 ipFamily        = ipFamily,
                 usb             = usb,
@@ -503,6 +606,7 @@ data class CliArgs(
                 authMode        = authMode,
                 authKey         = authKey,
                 encrypt         = encrypt,
+                authExplicit    = authExplicit,
             )
         }
 
@@ -547,8 +651,9 @@ SERVER OPTIONS
                       unicast only). 'ask' prompts on the terminal per client.
   --auth-key <key>    Pre-shared key (implies --auth-mode key). The key is never
                       sent on the wire (mutual HMAC challenge-response).
-  --encrypt           Encrypt the audio with ChaCha20-Poly1305 (implies a key;
-                      use with --auth-key). See --protocol for the wire details.
+  --encrypt           Encrypt the audio with ChaCha20-Poly1305. Requires a key,
+                      so pair it with --auth-key, or use --qr to have one
+                      generated. See --protocol for the wire details.
   --sdp               Print stream.sdp to stdout when server starts
   --sdp-out <path>    Write stream.sdp to file     (e.g. /tmp/stream.sdp)
   --legacy-engine     Use the legacy FFmpeg grabber instead of the native C
@@ -596,6 +701,47 @@ CONFIGURATION  (wfas config <command>)
   export [file]       Write the config to <file> (or stdout if omitted)
   import <file>       Load a config.json and make it active
   Add --json to any config command for machine-readable output.
+
+QR PAIRING  (wfas pair <command>)
+  Hands a receiver everything it needs in one shot: address, port and a freshly
+  generated 256-bit key. The key is never typed and never travels on the wire -
+  the invite carries it, the handshake proves it (see --protocol). Invites last
+  ${WfasPairingUri.PAIRING_TTL_SECONDS} seconds.
+  invite              Generate an invite and draw it as a QR code on the terminal.
+                      With a server already running, the invite is generated by
+                      that instance so it matches the live session; otherwise it
+                      is generated offline and saved to the config, ready for the
+                      next 'wfas --server'.
+  regenerate          Same, but always with a brand new key. In multicast this
+                      evicts every listener still using the old one, which is
+                      exactly what you want after handing the code to the wrong
+                      person. Aliases: rekey, new-key
+  connect <link>      Join using an invite link (wifiaudio://pair?… or the https
+                      form). Starts the client with the key already applied.
+  inspect <link>      Decode a link and show what it contains, without connecting.
+                      Exits non-zero if it has expired. Alias: check
+  encode <text>       Render any text as a QR code on the terminal.
+  status              Show pairing state, key origin and handler registration
+  off                 Turn QR pairing off and restore the manually typed key
+  register            Force-register the wifiaudio:// handler with this OS
+                      (per-user, no administrator rights). Every run already does
+                      this in the background, rewriting the entry when it points
+                      at a different executable, so moving or reinstalling the app
+                      repairs itself. Use this only to see the repair fail loudly.
+  unregister          Remove the handler
+  Add --watch to 'invite' for a live countdown that renews the code on expiry;
+  press n for a new invite, r for a new key, k to reveal the key, q to quit.
+
+QR RENDERING OPTIONS
+  --qr                Server mode: generate a key, start encrypted, and print the
+                      pairing QR. Implies --auth-mode key and --encrypt, so it
+                      needs no --auth-key: the code carries the key it made.
+                      Then p prints a new invite and r rotates the key
+  --no-qr             Print only the link, no ASCII art
+  --plain             Two characters per module instead of half-blocks. Use it if
+                      the terminal font has no U+2580/U+2584; needs twice the width
+  --invert            Invert the code for terminals with a light background
+  --show-key          Print the pairing key instead of masking it
 
 FIREWALL  (wfas firewall <command>)   [Windows only]
   Opens the inbound UDP ports so clients can reach this machine, exactly like
@@ -688,6 +834,12 @@ EXAMPLES
   wfas config path                        # print the config.json path
   wfas firewall allow                     # open the default ports in the firewall
   wfas firewall status                    # check if the firewall rule is active
+  wfas --server --qr                      # start a server and show its pairing QR
+  wfas pair invite --watch                # live QR that renews itself on expiry
+  wfas pair invite --json                 # the invite as JSON, for scripts
+  wfas pair connect 'wifiaudio://pair?…'  # join from an invite link
+  wfas pair inspect 'wifiaudio://pair?…'  # decode a link without connecting
+  wfas pair regenerate                    # new key, evicts the old listeners
   wfas --server --usb                     # serve over the USB cable
   wfas --server --usb --usb-latency 10    # USB with an aggressive buffer
   wfas --client --ip6                     # receive on an IPv6-only network

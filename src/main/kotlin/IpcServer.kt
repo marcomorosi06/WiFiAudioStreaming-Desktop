@@ -119,6 +119,26 @@ object IpcServer {
                         "wfas"     to WfasPolicy.mode.lowercase()
                     ))
                 }
+                is ControlCommand.DeepLink -> {
+                    val ok = QrPairingState.submitDeepLink(cmd.uri)
+                    buildResponse(if (ok) "ok" else "error", mapOf("handled" to ok))
+                }
+                is ControlCommand.PairInvite -> {
+                    val invite = PairRuntime.generate(args.port, args.multicast, cmd.forceNewKey)
+                    if (invite == null) {
+                        buildResponse("error", mapOf("message" to "no local address"))
+                    } else {
+                        buildResponse("ok", mapOf(
+                            "uri"       to invite.uri,
+                            "key"       to invite.key,
+                            "ip"        to invite.ip,
+                            "port"      to invite.port,
+                            "multicast" to invite.multicast,
+                            "expires_at" to invite.expEpochSeconds,
+                            "encryption_forced" to invite.encryptionForced
+                        ))
+                    }
+                }
                 null -> buildResponse("error", mapOf("message" to "unknown command"))
             }
 
@@ -139,6 +159,8 @@ object IpcServer {
             "unmute" -> ControlCommand.Unmute
             "stop"   -> ControlCommand.Stop
             "status" -> ControlCommand.Status
+            "pair"   -> ControlCommand.PairInvite(Regex("\"rekey\"\\s*:\\s*true").containsMatchIn(json))
+            "deeplink" -> extractString(json, "uri")?.let { ControlCommand.DeepLink(it) }
             else     -> null
         }
     }

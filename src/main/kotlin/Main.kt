@@ -448,11 +448,12 @@ object NetworkHandler_v1 {
     // ── Constants ──────────────────────────────────────────────────────────────
     private const val DISCOVERY_PORT       = 9091
     private const val CLIENT_HELLO_MESSAGE = "HELLO_FROM_CLIENT"
-    private const val MULTICAST_GROUP_IP   = "239.255.0.1"
+    const val MULTICAST_GROUP_IP           = "239.255.0.1"
     private const val DISCOVERY_MESSAGE    = "WIFI_AUDIO_STREAMER_DISCOVERY"
     private const val DISCOVERY_VERSION    = 2
 
     const val WFAS_PROTOCOL_VERSION = 2
+    private const val MULTICAST_SILENCE_TIMEOUT_MS = 6000L
     private const val INCOMPATIBLE_PREFIX = "WFAS_INCOMPATIBLE"
     private const val HELLO_ACK_PREFIX    = "HELLO_ACK"
     private const val PENDING_MESSAGE       = "WFAS_PENDING"
@@ -466,6 +467,37 @@ object NetworkHandler_v1 {
     fun configureSecurity(mode: String, key: String, encrypt: Boolean = false) {
         securityMode = mode; authKey = key; encryptionEnabled = encrypt
     }
+
+    class McastSession {
+        @Volatile var dir: WfasCrypto.Dir? = null
+        @Volatile var beacon: ByteArray? = null
+        @Volatile var epoch: Long = 0L
+        @Volatile var key: String = ""
+        @Volatile var beaconUrgent: Boolean = false
+    }
+
+    data class McastSnapshot(val epoch: Long, val key: String, val encrypted: Boolean)
+
+    val mcastSession = MutableStateFlow<McastSnapshot?>(null)
+    @Volatile private var mcastRekey: ((String) -> Unit)? = null
+
+    fun rekeyMulticast(newKey: String): Boolean {
+        val fn = mcastRekey ?: return false
+        fn(newKey)
+        return true
+    }
+
+    val unicastPeerConnected = MutableStateFlow(false)
+    val sessionEncryptedLive = MutableStateFlow(false)
+
+    val pendingEpochMismatch = MutableStateFlow(false)
+    fun clearEpochMismatch() { pendingEpochMismatch.value = false }
+
+    val pendingInviteRejected = MutableStateFlow(false)
+    fun clearInviteRejected() { pendingInviteRejected.value = false }
+
+    @Volatile var clientKeyFromInvite: Boolean = false
+    @Volatile var expectedMcastEpoch: Long? = null
     // Pre-shared key used only when acting as a CLIENT (e.g. CLI --auth-key). The
     // GUI client leaves this empty: it gets the key from the on-connect dialog.
     @Volatile var clientPresharedKey: String = ""
@@ -998,8 +1030,9 @@ object NetworkHandler_v1 {
                 val preferred = getActiveNetworkInterface()
                 preferred?.let { socket.networkInterface = it }
                 while (isActive) {
-                    val encOn   = encryptionEnabled && securityMode.equals("KEY", ignoreCase = true)
-                    val secStr  = ";auth=$securityMode;enc=${if (encOn) 1 else 0}"
+                    val encOn   = encryptionEnabled && SecurityMode.requiresKey(securityMode)
+                    val announcedAuth = SecurityMode.fromStringSafe(securityMode).name
+                    val secStr  = ";auth=$announcedAuth;enc=${if (encOn) 1 else 0}"
                     val message = "$staticPrefix$secStr$micStr"
                     runCatching {
                         val bytes = message.toByteArray()
@@ -2477,19 +2510,45 @@ object NetworkHandler_v1 {
                     onStatusUpdate("Streaming Multicast on %s:%d...", arrayOf(MULTICAST_GROUP_IP, port))
 
                     val nCh               = audioSettings.channels
-                    val mcEncrypting = encryptionEnabled && SecurityMode.fromStringSafe(securityMode) == SecurityMode.KEY
-                    val mcDir: WfasCrypto.Dir?
-                    val mcBeaconBytes: ByteArray?
-                    if (mcEncrypting) {
-                        val salt = ByteArray(WfasCrypto.SALT_BYTES).also { java.security.SecureRandom().nextBytes(it) }
-                        mcDir = WfasCrypto.deriveMulticast(authKey, salt)
-                        val beacon = WfasCrypto.buildMcastBeacon(authKey, SettingsRepository.nextMcastEpoch(), System.currentTimeMillis() / 1000, salt)
-                        mcBeaconBytes = beacon.toByteArray(Charsets.US_ASCII)
-                    } else { mcDir = null; mcBeaconBytes = null }
+                    val mcSession = McastSession()
+
+                    fun applyGroupKey(key: String) {
+                        if (encryptionEnabled && SecurityMode.requiresKey(securityMode) && key.isBlank()) {
+                            onStatusUpdate("status_key_required", emptyArray())
+                            AppDebug.log("[SERVER][MULTICAST] cifratura richiesta ma la chiave e' vuota: non parto")
+                            throw IllegalStateException("encryption requested without a key")
+                        }
+                        if (!(encryptionEnabled && SecurityMode.requiresKey(securityMode))) {
+                            mcSession.dir = null
+                            mcSession.beacon = null
+                            mcSession.epoch = 0L
+                            mcSession.key = key
+                            mcastSession.value = McastSnapshot(0L, key, false)
+                            sessionEncryptedLive.value = false
+                            return
+                        }
+                        val salt = ByteArray(WfasCrypto.SALT_BYTES)
+                            .also { java.security.SecureRandom().nextBytes(it) }
+                        val epoch = SettingsRepository.nextMcastEpoch()
+                        val beacon = WfasCrypto.buildMcastBeacon(
+                            key, epoch, System.currentTimeMillis() / 1000, salt
+                        ).toByteArray(Charsets.US_ASCII)
+                        mcSession.beacon = beacon
+                        mcSession.beaconUrgent = true
+                        mcSession.dir = WfasCrypto.deriveMulticast(key, salt)
+                        mcSession.epoch = epoch
+                        mcSession.key = key
+                        mcastSession.value = McastSnapshot(epoch, key, true)
+                        sessionEncryptedLive.value = true
+                    }
+
+                    applyGroupKey(authKey)
+                    mcastRekey = { newKey -> applyGroupKey(newKey) }
+
                     val safeMtuSize        = 1400
                     var maxShortsPerPacket = (audioSettings.maxPayloadBytes.coerceIn(256, safeMtuSize - AUDIO_HEADER_SIZE)) / 2
                     maxShortsPerPacket    -= (maxShortsPerPacket % nCh)
-                    if (mcDir != null) {
+                    run {
                         maxShortsPerPacket -= (WfasCrypto.AEAD_OVERHEAD + 1) / 2
                         maxShortsPerPacket -= (maxShortsPerPacket % nCh)
                         if (maxShortsPerPacket < nCh) maxShortsPerPacket = nCh
@@ -2504,7 +2563,7 @@ object NetworkHandler_v1 {
                     audioSamplePos = 0L
                     var legacySeq  = 0
                     fun frameForSend(buf: ByteArray, len: Int): ByteArray {
-                        val dir = mcDir ?: return if (len == buf.size) buf else buf.copyOf(len)
+                        val dir = mcSession.dir ?: return if (len == buf.size) buf else buf.copyOf(len)
                         val silence = (buf[3].toInt() and 0x01) != 0
                         val seq = ((buf[4].toInt() and 0xFF) shl 8) or (buf[5].toInt() and 0xFF)
                         val pos = ((buf[6].toLong() and 0xFF) shl 24) or ((buf[7].toLong() and 0xFF) shl 16) or
@@ -2521,13 +2580,36 @@ object NetworkHandler_v1 {
                             MulticastNet.chooseSendInterface(getActiveNetworkInterface()) { WfasPolicy.enabledOn(it) }
                                 ?.let { socket.networkInterface = it }
                             val group = MulticastNet.audioGroup(socket.networkInterface)
-                            var lastBeacon = 0L
+                            var sendFailureLogged = false
 
-                            while (isActive) {
-                                if (mcBeaconBytes != null && System.currentTimeMillis() - lastBeacon >= 400L) {
-                                    runCatching { socket.send(DatagramPacket(mcBeaconBytes, mcBeaconBytes.size, group, port)) }
-                                    lastBeacon = System.currentTimeMillis()
+                            fun emit(bytes: ByteArray, size: Int = bytes.size) {
+                                try {
+                                    socket.send(DatagramPacket(bytes, size, group, port))
+                                } catch (e: Exception) {
+                                    if (!sendFailureLogged) {
+                                        sendFailureLogged = true
+                                        AppDebug.log("[SERVER][MULTICAST] send fallita su $group:$port via ${socket.networkInterface?.name ?: "default"}: ${e.message}")
+                                        onStatusUpdate("status_multicast_send_failed", arrayOf(e.message ?: e.javaClass.simpleName))
+                                    }
                                 }
+                            }
+
+                            val keepAlive = launch(Dispatchers.IO) {
+                                var lastBeacon = 0L
+                                while (isActive) {
+                                    delay(100)
+                                    val beaconNow = mcSession.beacon ?: continue
+                                    val now = System.currentTimeMillis()
+                                    if (mcSession.beaconUrgent || now - lastBeacon >= 400L) {
+                                        emit(beaconNow)
+                                        lastBeacon = now
+                                        mcSession.beaconUrgent = false
+                                    }
+                                }
+                            }
+
+                            try {
+                            while (isActive) {
                                 if (useNativeEngine) {
                                     val engine  = serverEngine ?: break
                                     val samples = engine.readFrame() ?: break
@@ -2537,7 +2619,7 @@ object NetworkHandler_v1 {
                                     processEngineFrame(samples, chunkArray, byteBuffer, maxShortsPerPacket, nCh) { bytesToSend ->
                                         byteBuffer.array().copyInto(packetArray, 0, 0, bytesToSend)
                                         val ob = frameForSend(packetArray, bytesToSend)
-                                        runCatching { socket.send(DatagramPacket(ob, ob.size, group, port)) }
+                                        emit(ob)
                                         WfasStats.add(if ((packetArray[3].toInt() and 0x01) != 0) WfasStats.Cat.SILENCE else WfasStats.Cat.AUDIO, bytesToSend)
                                         if (aacPcmQueue != null || opusPcmQueue != null || rtpPcmQueue != null)
                                             distributeToSidecars(byteBuffer.array().copyOfRange(AUDIO_HEADER_SIZE, bytesToSend))
@@ -2562,7 +2644,7 @@ object NetworkHandler_v1 {
                                             legacySeq = (legacySeq + 1) and 0xFFFF
                                             val totalBytes = AUDIO_HEADER_SIZE + bytesToSend
                                             val ob = frameForSend(packetArray, totalBytes)
-                                            runCatching { socket.send(DatagramPacket(ob, ob.size, group, port)) }
+                                            emit(ob)
                                             WfasStats.add(WfasStats.Cat.AUDIO, totalBytes)
                                             if (aacPcmQueue != null || opusPcmQueue != null || rtpPcmQueue != null)
                                                 distributeToSidecars(byteBuffer.array().copyOf(bytesToSend))
@@ -2571,14 +2653,18 @@ object NetworkHandler_v1 {
                                 }
                             }
 
-                            withContext(NonCancellable) {
-                                runCatching {
-                                    val bye = "BYE".toByteArray()
-                                    repeat(3) {
-                                        socket.send(DatagramPacket(bye, bye.size, group, port))
-                                        WfasStats.add(WfasStats.Cat.BYE, bye.size)
+                            } finally {
+                                withContext(NonCancellable) {
+                                    runCatching { keepAlive.cancelAndJoin() }
+                                    runCatching {
+                                        val bye = "BYE".toByteArray()
+                                        repeat(3) {
+                                            socket.send(DatagramPacket(bye, bye.size, group, port))
+                                            WfasStats.add(WfasStats.Cat.BYE, bye.size)
+                                            Thread.sleep(15)
+                                        }
+                                        AppDebug.log("---Sent BYE to multicast group ---")
                                     }
-                                    AppDebug.log("---Sent BYE to multicast group ---")
                                 }
                             }
                         }
@@ -2670,10 +2756,12 @@ object NetworkHandler_v1 {
                             }
 
                             val encrypting = encryptionEnabled &&
-                                SecurityMode.fromStringSafe(securityMode) == SecurityMode.KEY
+                                SecurityMode.requiresKey(securityMode)
                             val sessionKeys = if (encrypting)
                                 WfasCrypto.deriveUnicast(authKey, pendCnonce, pendSnonce) else null
                             val sendDir: WfasCrypto.Dir? = sessionKeys?.second
+                            unicastPeerConnected.value = true
+                            sessionEncryptedLive.value = sendDir != null
                             micRecvDir = sessionKeys?.first
                             if (encrypting) micRecvWin = WfasCrypto.ReplayWindow()
                             fun frameForSend(buf: ByteArray, len: Int): ByteArray {
@@ -2853,6 +2941,8 @@ object NetworkHandler_v1 {
                                     }
                                 }
                             } finally {
+                                unicastPeerConnected.value = false
+                                sessionEncryptedLive.value = false
                                 clientByeReceiverJob.cancel()
                                 pingJob.cancel()
                                 if (clientAlive.get()) {
@@ -3039,6 +3129,11 @@ object NetworkHandler_v1 {
                                 }
                                 ackText == UNAUTHORIZED_MESSAGE -> {
                                     AppDebug.log("[CLIENT][UNICAST] unauthorized")
+                                    if (clientKeyFromInvite) {
+                                        pendingInviteRejected.value = true
+                                        onStatusUpdate("status_unauthorized", emptyArray())
+                                        return@use
+                                    }
                                     if (!promptKeyAndRestart(true)) {
                                         onStatusUpdate("status_unauthorized", emptyArray())
                                         return@use
@@ -3111,6 +3206,7 @@ object NetworkHandler_v1 {
                             WfasCrypto.deriveUnicast(clientKey, cnonce, clientSnonce) else null
                         val recvDir: WfasCrypto.Dir? = sessionKeys?.second
                         micSendDir = if (sessionEncrypted) sessionKeys?.first else null
+                        sessionEncryptedLive.value = sessionEncrypted && recvDir != null
                         val recvWin = WfasCrypto.ReplayWindow()
                         var serverEncrypts = sessionEncrypted
 
@@ -3266,13 +3362,34 @@ object NetworkHandler_v1 {
                         var mcKey = clientPresharedKey
                         var mcAsked = false
                         var mcWrong = false
-                        var mcLastEpoch = SettingsRepository.getMcastClientEpoch(serverInfo.ip)
+                        val mcExpectedEpoch = expectedMcastEpoch
+                        val mcFromInvite = clientKeyFromInvite
+                        var mcLastEpoch = when {
+                            mcExpectedEpoch != null -> mcExpectedEpoch - 1
+                            mcFromInvite -> 0L
+                            else -> SettingsRepository.getMcastClientEpoch(serverInfo.ip)
+                        }
+                        var mcEpochVerified = mcExpectedEpoch == null
+                        var mcEpochRejected = false
+                        var mcMacFailStreak = 0
                         val beaconPrefixLen = WfasCrypto.MSG_MCAST_ENC.length
+                        var mcLastRxAt = System.currentTimeMillis()
+                        var mcAnyRx = false
                         while (isActive) {
                             try {
                                 packet.length = buf.size
                                 socket.receive(packet)
+                                mcLastRxAt = System.currentTimeMillis()
+                                mcAnyRx = true
                             } catch (_: java.net.SocketTimeoutException) {
+                                val beaconExpected = mcDir != null || (mcKey.isNotEmpty() && !mcAnyRx)
+                                if (beaconExpected &&
+                                    System.currentTimeMillis() - mcLastRxAt >= MULTICAST_SILENCE_TIMEOUT_MS) {
+                                    AppDebug.log("[CLIENT][MULTICAST] nessun pacchetto per ${MULTICAST_SILENCE_TIMEOUT_MS}ms: server considerato spento")
+                                    onStatusUpdate("status_server_disconnected", emptyArray())
+                                    if (disconnectionSoundEnabled) playDisconnectionSound()
+                                    break
+                                }
                                 continue
                             }
                             if (packet.length >= beaconPrefixLen &&
@@ -3287,14 +3404,27 @@ object NetworkHandler_v1 {
                                     }
                                     val info = WfasCrypto.parseMcastBeacon(mcKey, beaconStr, -1L)
                                     if (info != null) {
+                                        if (!mcEpochVerified) {
+                                            mcEpochVerified = true
+                                            if (mcExpectedEpoch != null && info.epoch != mcExpectedEpoch) {
+                                                pendingEpochMismatch.value = true
+                                            }
+                                        }
                                         if (info.epoch >= mcLastEpoch) {
                                             mcDir = WfasCrypto.deriveMulticast(mcKey, info.salt)
                                             mcWin = WfasCrypto.ReplayWindow()
+                                            sessionEncryptedLive.value = true
                                             if (info.epoch > mcLastEpoch) {
                                                 mcLastEpoch = info.epoch
-                                                SettingsRepository.setMcastClientEpoch(serverInfo.ip, info.epoch)
+                                                if (!mcFromInvite) {
+                                                    SettingsRepository.setMcastClientEpoch(serverInfo.ip, info.epoch)
+                                                }
                                             }
                                             onStatusUpdate("status_key_accepted", emptyArray())
+                                        } else if (!mcEpochRejected) {
+                                            mcEpochRejected = true
+                                            pendingEpochMismatch.value = true
+                                            onStatusUpdate("status_group_rekeyed", emptyArray())
                                         }
                                     } else {
                                         mcWrong = true
@@ -3302,11 +3432,21 @@ object NetworkHandler_v1 {
                                     }
                                 } else {
                                     val info = WfasCrypto.parseMcastBeacon(mcKey, beaconStr, -1L)
-                                    if (info != null && info.epoch > mcLastEpoch) {
-                                        mcDir = WfasCrypto.deriveMulticast(mcKey, info.salt)
-                                        mcWin = WfasCrypto.ReplayWindow()
-                                        mcLastEpoch = info.epoch
-                                        SettingsRepository.setMcastClientEpoch(serverInfo.ip, info.epoch)
+                                    if (info == null) {
+                                        mcMacFailStreak++
+                                        if (mcMacFailStreak >= 6) {
+                                            pendingEpochMismatch.value = true
+                                            onStatusUpdate("status_group_rekeyed", emptyArray())
+                                            break
+                                        }
+                                    } else {
+                                        mcMacFailStreak = 0
+                                        if (info.epoch > mcLastEpoch) {
+                                            mcDir = WfasCrypto.deriveMulticast(mcKey, info.salt)
+                                            mcWin = WfasCrypto.ReplayWindow()
+                                            mcLastEpoch = info.epoch
+                                            SettingsRepository.setMcastClientEpoch(serverInfo.ip, info.epoch)
+                                        }
                                     }
                                 }
                                 continue
@@ -3322,6 +3462,7 @@ object NetworkHandler_v1 {
                                         break
                                     }
                                 }
+                                if (packet.length == AUDIO_HEADER_SIZE) continue
                                 WfasStats.add(if ((packet.data[3].toInt() and 0x01) != 0) WfasStats.Cat.SILENCE else WfasStats.Cat.AUDIO, packet.length)
                                 mcAudioPkts++
                                 if ((packet.data[3].toInt() and WfasCrypto.FLAG_ENCRYPTED) != 0) {
@@ -3693,6 +3834,12 @@ object NetworkHandler_v1 {
         stopAnnouncingPresence()
         cancelDonationTimer()
 
+        unicastPeerConnected.value = false
+        sessionEncryptedLive.value = false
+        mcastRekey = null
+        mcastSession.value = null
+        activePeerIp = null
+
         runCatching { dlnaManager?.stop() }
         dlnaManager = null
 
@@ -3906,7 +4053,14 @@ fun main(args: Array<String>) {
 
     CliPathInstaller.refreshIfOutdated()
 
-    val cliArgs = CliArgs.parse(args)
+    // Un deep link di pairing non e' un argomento CLI: va tolto prima del parsing,
+    // altrimenti CliArgs lo tratterebbe come opzione sconosciuta.
+    val pairingArg = args.firstOrNull { PendingDeepLink.looksLikePairing(it) }
+    if (pairingArg != null) {
+        PendingDeepLink.uri = pairingArg
+        if (PairIpc.handOffDeepLink(pairingArg)) return
+    }
+    var cliArgs = CliArgs.parse(args.filterNot { it === pairingArg }.toTypedArray())
 
     cliArgs.configPath?.let { ConfigPaths.overrideConfigFile = java.io.File(it) }
 
@@ -3926,6 +4080,16 @@ fun main(args: Array<String>) {
     if (cliArgs.printProtocol) { CliArgs.printProtocol(); return }
     if (cliArgs.printLicenses) { CliArgs.printLicenses(); return }
     if (cliArgs.printFred)     { CliArgs.printFred();     return }
+
+    val pairCmd = cliArgs.pairCmd
+    if (pairCmd != null) {
+        if (pairCmd is PairCommand.Connect) {
+            cliArgs = PairCli.connectArgs(pairCmd.uri, cliArgs)
+                ?: kotlin.system.exitProcess(ExitCode.USAGE_ERROR)
+        } else {
+            kotlin.system.exitProcess(PairCli.run(pairCmd, cliArgs, cliArgs.qrOptions()))
+        }
+    }
 
     if (cliArgs.autoCheckUpdate != null) {
         val on = cliArgs.autoCheckUpdate == "on"
@@ -3962,6 +4126,10 @@ fun main(args: Array<String>) {
     }
 
     if (cliArgs.noTray) LinuxTray.disableForThisRun()
+
+    Thread { runCatching { ProtocolRegistrar.ensureRegistered() } }
+        .apply { isDaemon = true; name = "wfas-scheme-registrar" }
+        .start()
 
     if (cliArgs.runMode != RunMode.GUI || isHeadless) {
         runCli(cliArgs)

@@ -34,7 +34,7 @@ object CliPathInstaller {
 
     // ── Windows helpers ───────────────────────────────────────────────────────
 
-    private fun resolveWindowsExePath(): String? {
+    internal fun resolveWindowsExePath(): String? {
         val fromProcess = ProcessHandle.current().info().command().orElse(null)
         if (fromProcess != null
             && fromProcess.endsWith(".exe", ignoreCase = true)

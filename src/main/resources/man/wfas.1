@@ -24,6 +24,10 @@ wfas \- stream audio over a local Wi\-Fi network
 .B wfas
 .B config
 .IR list | get | set | path | edit | reset | export | import
+.br
+.B wfas
+.B pair
+.IR invite | regenerate | "connect <link>" | "inspect <link>" | "encode <text>" | status | off | register | unregister
 .\"
 .\" ─────────────────────────────────────────────────────────────────────────────
 .SH DESCRIPTION
@@ -281,6 +285,196 @@ is omitted.
 \fBconfig import\fR \fIfile\fR
 Load a JSON settings file and make it the active configuration.
 .\"
+.SS QR pairing
+.B wfas pair
+hands a receiver everything it needs in one shot: address, port, and a freshly
+generated 256\-bit key.
+The key is never typed by the user and never travels on the wire: the invite
+carries it, and the mutual HMAC challenge\-response of
+.B --protocol
+proves it.
+Invites are valid for 120 seconds.
+.PP
+Generating an invite switches this device to key authentication and stores the
+generated key in the settings file, leaving any manually typed key untouched so
+that turning pairing off restores it.
+When a
+.B wfas
+instance is already running, the invite is produced by that instance over the IPC
+channel, so it matches the live session; otherwise it is produced offline and
+saved to the configuration, ready for the next
+.BR "wfas --server" .
+.TP
+.B pair invite
+Generate an invite and draw it as a QR code on the terminal.
+In multicast, an invite reuses the current generated key when there is one, so
+inviting somebody does not disconnect the listeners already playing.
+.TP
+.B pair regenerate
+Same, but always with a brand new key.
+In multicast this evicts every listener still using the old key, which is the
+point after handing the code to the wrong person.
+Aliases:
+.BR rekey ", " new-key .
+.TP
+\fBpair connect\fR \fIlink\fR
+Join using an invite link, in either the
+.B wifiaudio://pair?
+or the
+.B https://
+form.
+Starts the client with the key already applied.
+Fails with a distinct message when the invite has expired, instead of reporting a
+wrong key.
+.TP
+\fBpair inspect\fR \fIlink\fR
+Decode a link and print what it contains, without connecting.
+The key is masked unless
+.B --show-key
+is given.
+Exits with status 1 when the invite has expired.
+Alias:
+.BR check .
+.TP
+\fBpair encode\fR \fItext\fR
+Render arbitrary text as a QR code on the terminal.
+.TP
+.B pair status
+Print the pairing state: whether QR pairing is on, whether the stored key was
+generated or typed, and whether the
+.B wifiaudio://
+handler is registered with this system.
+It also prints the command that scheme is actually registered to open. If that
+line is missing, or does not end in
+.BR \(dq%1\(dq ,
+the handler is broken and the browser will appear to do nothing when the pairing
+page tries to open the app: run
+.B pair register
+to repair it.
+.TP
+.B pair off
+Turn QR pairing off and restore the manually typed key, if there was one.
+.TP
+.B pair register
+Register the
+.B wifiaudio://
+scheme with the operating system, per user and without administrator rights
+(Windows registry under
+.BR HKCU ", "
+a
+.B .desktop
+file on Linux; on macOS the scheme is declared in the bundle's
+.BR Info.plist ", "
+so nothing is needed).
+.IP
+You should never need this. Every run of
+.B wfas
+checks the registration in the background and rewrites it when it is missing
+.I or when it points at a different executable
+than the one running, so moving, reinstalling or updating the app repairs itself
+on the next launch. A stale registration is worse than none: it still looks valid
+and simply opens nothing. This subcommand exists to force that repair immediately
+and to see it fail with a reason.
+.IP
+On Windows the registration is applied by importing a generated
+.B .reg
+file rather than by passing values to
+.BR reg.exe .
+The command to register is
+.RB \(lq "\(dqC:\(rspath\(rsapp.exe\(dq \(dq%1\(dq" \(rq,
+which contains both spaces and quotes; passing that as a single argument does not
+survive Windows command-line quoting, and the value lands in the registry
+truncated, without the
+.B %1
+that carries the invite. Inside a file the quoting never crosses a command line.
+.TP
+.B pair unregister
+Remove that registration.
+.TP
+.B --watch
+Only with
+.BR "pair invite" :
+keep the code on screen with a live countdown and renew it automatically when it
+expires.
+While watching, press
+.B n
+for a new invite,
+.B r
+for a new key,
+.B k
+to reveal or hide the key, and
+.B q
+to quit, each followed by Enter.
+.TP
+.B --json
+Emit the invite as a single JSON object
+.RB ( uri ", " deeplink ", " key ", " ip ", " port ", " mode ", " expires_at ", "
+.BR expires_in ", " ttl ", " source )
+instead of drawing anything.
+.TP
+.B --quiet
+Print only the invite link, one line, nothing else.
+Useful for piping into another QR renderer.
+.\"
+.SS QR rendering options
+The terminal renderer prints one character per two vertical modules using the
+half\-block characters U+2580 and U+2584, which corrects for the roughly 2:1
+aspect ratio of a terminal cell.
+An invite needs 61 columns, 65 with an IPv6 address, so it fits an 80\-column
+window; when it does not, the code is replaced by a message saying how many
+columns are missing, and the link is still printed.
+It is 31 to 33 rows tall, so on a 24\-row terminal the code scrolls off: in that
+case
+.B --watch
+keeps only the countdown on the bottom line instead of repainting the whole
+panel in place.
+.TP
+.B --qr
+Server mode only: generate a 256\-bit key, start the server with it, and print
+the pairing QR once streaming is up.
+It implies
+.B --auth-mode key
+and
+.BR --encrypt ,
+and therefore does not need
+.BR --auth-key :
+the whole point is that the code carries a key nobody has to type.
+The key is generated before the server starts, so the very first packet on the
+wire is already encrypted; an existing generated key is reused instead of being
+rotated, so restarting the server does not evict listeners.
+The interactive keys
+.B p
+(new invite) and
+.B r
+(new key) are then accepted alongside
+.B q
+and
+.BR v .
+.PP
+.B --encrypt
+on its own is rejected: ChaCha20\-Poly1305 needs a key, and a server started with
+an empty one would authenticate nobody. Pass
+.B --auth-key
+or
+.BR --qr .
+.TP
+.B --no-qr
+Print only the link, without the ASCII art.
+.TP
+.B --plain
+Use two characters per module instead of half\-blocks.
+Needed when the terminal font lacks U+2580 and U+2584; it requires twice the
+width.
+Selected automatically when the locale and
+.B file.encoding
+suggest the terminal is not UTF\-8.
+.TP
+.B --invert
+Invert the code, for terminals with a light background.
+.TP
+.B --show-key
+Print the pairing key instead of masking it.
+.\"
 .SS Discover options
 Discovery prints one row per server in a table with the columns
 .BR HOST ", " IP ", " MODE " (RTP, HTTP, UDP, or UDP/M for multicast), and "
@@ -497,6 +691,12 @@ The
 .B control
 subcommand reads this file, connects to the socket, and sends a JSON command.
 .PP
+.B pair invite
+uses the same socket: when an instance is running it asks that process to mint
+the invite, so the key and the multicast epoch match the live session rather than
+a stale copy read from the settings file.
+With no instance running it falls back to generating the invite locally.
+.PP
 If multiple
 .B wfas
 instances are running simultaneously, the control command targets the most
@@ -677,6 +877,37 @@ while true; do
     wfas control status --json | jq -r .volume
     sleep 5
 done
+.fi
+.RE
+.PP
+Start a server and show its pairing code, refreshed as it expires:
+.PP
+.RS
+.nf
+wfas --server --multicast --qr
+.fi
+.RE
+.PP
+Show a live pairing code for an already running server:
+.PP
+.RS
+.B wfas pair invite --watch
+.RE
+.PP
+Hand the invite to another tool instead of drawing it:
+.PP
+.RS
+.nf
+wfas pair invite --quiet | qrencode -t ANSIUTF8
+wfas pair invite --json | jq -r .key
+.fi
+.RE
+.PP
+Join from a link, and check it first if in doubt:
+.PP
+.RS
+.nf
+wfas pair inspect "$LINK" && wfas pair connect "$LINK"
 .fi
 .RE
 .\"

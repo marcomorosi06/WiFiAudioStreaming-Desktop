@@ -112,6 +112,10 @@ object ConfigManager {
             { it.app.authKey }, { s, v -> appCopy(s) { copy(authKey = coerceString("security.authKey", v)) } }),
         CfgField("security.encryptionEnabled", CfgKind.BOOL, emptyList(), "Encrypt audio with ChaCha20-Poly1305",
             { it.app.encryptionEnabled }, { s, v -> appCopy(s) { copy(encryptionEnabled = coerceBool("security.encryptionEnabled", v)) } }),
+        CfgField("security.qrPairing", CfgKind.BOOL, emptyList(), "Key comes from a QR invite instead of a typed passphrase (mode stays KEY)",
+            { it.app.qrPairingEnabled }, { s, v -> appCopy(s) { copy(qrPairingEnabled = coerceBool("security.qrPairing", v)) } }),
+        CfgField("security.manualAuthKey", CfgKind.STRING, emptyList(), "Last passphrase typed by hand, restored when leaving QR pairing",
+            { it.app.manualAuthKey }, { s, v -> appCopy(s) { copy(manualAuthKey = coerceString("security.manualAuthKey", v)) } }),
 
         CfgField("app.theme", CfgKind.ENUM, listOf("Light", "Dark", "System"), "UI theme",
             { it.app.theme.name }, { s, v -> appCopy(s) { copy(theme = Theme.valueOf(coerceEnum("app.theme", v, listOf("Light", "Dark", "System")))) } }),

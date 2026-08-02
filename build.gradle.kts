@@ -249,6 +249,7 @@ dependencies {
     implementation("org.bytedeco:javacv:$javacvVersion")
     implementation("org.bytedeco:ffmpeg:$javacvVersion:$targetPlatform")
     implementation("org.bytedeco:javacpp:$javacvVersion:$targetPlatform")
+    implementation("com.google.zxing:core:3.5.3")
     implementation("com.dorkbox:SystemTray:4.4")
     implementation("org.slf4j:slf4j-nop:2.0.9")
 }
@@ -298,6 +299,21 @@ compose.desktop {
             macOS {
                 iconFile.set(project.file("src/main/resources/app_icon.icns"))
                 bundleID = "com.wifiaudiostreaming"
+                infoPlist {
+                    extraKeysRawXml = """
+                        <key>CFBundleURLTypes</key>
+                        <array>
+                          <dict>
+                            <key>CFBundleURLName</key>
+                            <string>com.wifiaudiostreaming.pairing</string>
+                            <key>CFBundleURLSchemes</key>
+                            <array>
+                              <string>wifiaudio</string>
+                            </array>
+                          </dict>
+                        </array>
+                    """.trimIndent()
+                }
             }
 
             linux {
