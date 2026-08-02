@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="https://github.com/marcomorosi06/WiFiAudioStreaming-Desktop/blob/master/src/main/resources/app_icon.png?raw=true" width="128" alt="App Icon" />
+</p>
+
 # WiFi Audio Streaming (Desktop)
 
 [![Available on GitHub](https://img.shields.io/badge/Available%20on-GitHub-181717?style=for-the-badge&logo=github)](https://github.com/marcomorosi06/WiFiAudioStreaming-Desktop/releases)
