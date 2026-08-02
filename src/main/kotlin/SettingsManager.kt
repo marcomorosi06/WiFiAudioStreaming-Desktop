@@ -64,7 +64,9 @@ data class AppSettings(
     val usbLatencyMs: Int = 20,
     val usbInterface: String = "Auto",
     val linuxTray: String = LinuxTray.MODE_AUTO,
-    val wfasMode: String = WfasPolicy.MODE_OFF_ON_USB
+    val wfasMode: String = WfasPolicy.MODE_OFF_ON_USB,
+    val vizEnabled: Boolean = true,
+    val vizGroove: Int = 160
 )
 
 fun AppSettings.toDlnaConfig(): DlnaServerConfig = DlnaServerConfig(

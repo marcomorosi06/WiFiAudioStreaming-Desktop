@@ -439,6 +439,15 @@ private fun InfoNote(text: String) {
 }
 
 @Composable
+fun QrScanButton(modifier: Modifier = Modifier) {
+    OutlinedButton(onClick = { QrPairingState.requestScan() }, modifier = modifier) {
+        Icon(Icons.Outlined.QrCodeScanner, contentDescription = null, modifier = Modifier.size(18.dp))
+        Spacer(Modifier.width(8.dp))
+        Text(Strings.get("qr_scan_button"))
+    }
+}
+
+@Composable
 fun QrSecurityInfoCard() {
     val scheme = MaterialTheme.colorScheme
     Row(
@@ -504,7 +513,8 @@ fun QrPairingBar(
     localIp: String,
     streamingPort: String,
     onAppSettingsChange: (AppSettings) -> Unit,
-    onPairingReady: (PairingPayload) -> Unit
+    onPairingReady: (PairingPayload) -> Unit,
+    showScanButton: Boolean = true
 ) {
     val invite by QrPairingState.invite.collectAsState()
     val pendingPairing by QrPairingState.pendingPairing.collectAsState()
@@ -565,13 +575,9 @@ fun QrPairingBar(
         }
     }
 
-    if (!isServer && !isStreaming) {
+    if (!isServer && !isStreaming && showScanButton) {
         Row(modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp)) {
-            OutlinedButton(onClick = { QrPairingState.requestScan() }) {
-                Icon(Icons.Outlined.QrCodeScanner, contentDescription = null, modifier = Modifier.size(18.dp))
-                Spacer(Modifier.width(8.dp))
-                Text(Strings.get("qr_scan_button"))
-            }
+            QrScanButton()
         }
     }
 

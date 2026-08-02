@@ -244,7 +244,15 @@ data class AudioSettings_V1(
     fun toAudioFormat(): AudioFormat = AudioFormat(sampleRate, bitDepth, channels, true, false)
 }
 
-data class ProtocolMismatch(val localVersion: Int, val remoteVersion: Int)
+enum class PeerRole { SENDER, RECEIVER }
+
+data class ProtocolMismatch(
+    val localVersion: Int,
+    val remoteVersion: Int,
+    val remoteRole: PeerRole
+) {
+    val localIsOutdated: Boolean get() = remoteVersion > localVersion
+}
 
 object WfasStats {
     enum class Cat { AUDIO, SILENCE, PING, BYE, HELLO, PROBE, OTHER }
@@ -519,13 +527,20 @@ object NetworkHandler_v1 {
 
     val protocolMismatch = MutableStateFlow<ProtocolMismatch?>(null)
 
-    private fun signalProtocolMismatch(remoteVersion: Int) {
+    private fun signalProtocolMismatch(remoteVersion: Int, remoteRole: PeerRole) {
         if (protocolMismatch.value == null) {
-            protocolMismatch.value = ProtocolMismatch(WFAS_PROTOCOL_VERSION, remoteVersion)
+            protocolMismatch.value =
+                ProtocolMismatch(WFAS_PROTOCOL_VERSION, remoteVersion, remoteRole)
         }
     }
 
+    private const val SILENT_PEER_TIMEOUT_MS = 6000L
+
     fun clearProtocolMismatch() { protocolMismatch.value = null }
+
+    val unresponsiveServer = MutableStateFlow<String?>(null)
+
+    fun clearUnresponsiveServer() { unresponsiveServer.value = null }
 
     // ── Network helpers ────────────────────────────────────────────────────────
     fun getLocalIpAddress(): String {
@@ -992,6 +1007,7 @@ object NetworkHandler_v1 {
 
     fun forgetDiscoveredAddresses() { discoveryBestAddress.clear() }
 
+
     private data class AnnounceParams(
         val isMulticast: Boolean,
         val port: Int,
@@ -1244,7 +1260,7 @@ object NetworkHandler_v1 {
                                 micVersionChecked = true
                                 val ver = packet.data[2].toInt() and 0xFF
                                 if (ver != WFAS_PROTOCOL_VERSION) {
-                                    signalProtocolMismatch(ver)
+                                    signalProtocolMismatch(ver, PeerRole.RECEIVER)
                                     onStatusUpdate?.invoke("status_protocol_incompatible", emptyArray())
                                     AppDebug.log("[MicReceiver] mic v=$ver incompatible (mine v=$WFAS_PROTOCOL_VERSION)")
                                     break
@@ -2721,7 +2737,7 @@ object NetworkHandler_v1 {
                                 AppDebug.log("[SERVER][UNICAST] incompatible client v=$clientVersion (mine v=$WFAS_PROTOCOL_VERSION), rejecting $clientAddress")
                                 socket.send(Datagram(buildPacket { writeText(incompatibleMessage()) }, clientAddress))
                                 WfasStats.add(WfasStats.Cat.HELLO, incompatibleMessage().length)
-                                signalProtocolMismatch(clientVersion)
+                                signalProtocolMismatch(clientVersion, PeerRole.RECEIVER)
                                 continue
                             }
 
@@ -3109,8 +3125,17 @@ object NetworkHandler_v1 {
 
                         var helloWaitMs = 150L
                         var helloAttempts = 0
+                        var anyReplyReceived = false
                         val handshakeStartedAt = System.currentTimeMillis()
                         while (System.currentTimeMillis() < handshakeDeadline) {
+                            if (!anyReplyReceived &&
+                                System.currentTimeMillis() - handshakeStartedAt >= SILENT_PEER_TIMEOUT_MS
+                            ) {
+                                AppDebug.log("[CLIENT][UNICAST] no reply at all after ${SILENT_PEER_TIMEOUT_MS}ms, giving up")
+                                unresponsiveServer.value = serverInfo.ip
+                                onStatusUpdate("status_server_silent_maybe_outdated", emptyArray())
+                                return@use
+                            }
                             val ackText = try {
                                 withTimeout(helloWaitMs) { socket.receive() }.packet.readText().trim()
                             } catch (_: TimeoutCancellationException) {
@@ -3120,10 +3145,11 @@ object NetworkHandler_v1 {
                                 AppDebug.log("[CLIENT][UNICAST] no reply, resend #$helloAttempts, next wait ${helloWaitMs}ms")
                                 continue
                             }
+                            anyReplyReceived = true
                             AppDebug.log("[CLIENT][UNICAST] reply '$ackText' at +${System.currentTimeMillis() - handshakeStartedAt}ms")
                             when {
                                 ackText.startsWith(INCOMPATIBLE_PREFIX) -> {
-                                    signalProtocolMismatch(parseProtocolVersion(ackText))
+                                    signalProtocolMismatch(parseProtocolVersion(ackText), PeerRole.SENDER)
                                     onStatusUpdate("status_protocol_incompatible", emptyArray())
                                     return@use
                                 }
@@ -3177,7 +3203,7 @@ object NetworkHandler_v1 {
                                 ackText.startsWith(HELLO_ACK_PREFIX) -> {
                                     val serverVersion = parseProtocolVersion(ackText)
                                     if (serverVersion != WFAS_PROTOCOL_VERSION) {
-                                        signalProtocolMismatch(serverVersion)
+                                        signalProtocolMismatch(serverVersion, PeerRole.SENDER)
                                         onStatusUpdate("status_protocol_incompatible", emptyArray())
                                         return@use
                                     }
@@ -3247,7 +3273,7 @@ object NetworkHandler_v1 {
                                         val packetVersion = bytes[2].toInt() and 0xFF
                                         if (packetVersion != WFAS_PROTOCOL_VERSION) {
                                             AppDebug.log("[CLIENT][UNICAST] packet v=$packetVersion incompatible (mine v=$WFAS_PROTOCOL_VERSION)")
-                                            signalProtocolMismatch(packetVersion)
+                                            signalProtocolMismatch(packetVersion, PeerRole.SENDER)
                                             onStatusUpdate("status_protocol_incompatible", emptyArray())
                                             serverAlive.set(false)
                                             break
@@ -3457,7 +3483,7 @@ object NetworkHandler_v1 {
                                     val packetVersion = packet.data[2].toInt() and 0xFF
                                     if (packetVersion != WFAS_PROTOCOL_VERSION) {
                                         AppDebug.log("[CLIENT][MULTICAST] packet v=$packetVersion incompatible (mine v=$WFAS_PROTOCOL_VERSION)")
-                                        signalProtocolMismatch(packetVersion)
+                                        signalProtocolMismatch(packetVersion, PeerRole.SENDER)
                                         onStatusUpdate("status_protocol_incompatible", emptyArray())
                                         break
                                     }
@@ -4197,11 +4223,21 @@ fun startGuiApplication(cliArgs: CliArgs) = application {
         }
     }
 
+    val vizChannels = audioSettings.channels
+    val vizSink: (ShortArray) -> Unit = remember(vizChannels) {
+        { samples -> SpectrumAnalyzer.feedFrame(samples, vizChannels) }
+    }
+    LaunchedEffect(audioSettings.sampleRate) {
+        SpectrumAnalyzer.configure(audioSettings.sampleRate.toInt())
+    }
     var showSettings       by remember { mutableStateOf(false) }
     var isServer           by remember { mutableStateOf(true) }
     val discoveredDevices  = remember { mutableStateMapOf<String, ServerInfo>() }
     var connectionStatus   by remember { mutableStateOf(Strings.get("status_inactive")) }
     var isStreaming         by remember { mutableStateOf(false) }
+    LaunchedEffect(isStreaming) {
+        if (!isStreaming) SpectrumAnalyzer.reset()
+    }
     var virtualDriverStatus by remember { mutableStateOf<VirtualDriverStatus>(VirtualDriverStatus.Ok) }
     val scope = rememberCoroutineScope()
 
@@ -4237,9 +4273,9 @@ fun startGuiApplication(cliArgs: CliArgs) = application {
             }
         }
     }
-    val httpUrl by remember(appSettings, isStreaming) {
+    val httpUrl by remember(appSettings, isStreaming, isServer) {
         derivedStateOf {
-            if (isStreaming && appSettings.httpEnabled)
+            if (isStreaming && isServer && appSettings.httpEnabled)
                 "http://$localIp:${appSettings.httpPort.toIntOrNull() ?: 8080}"
             else null
         }
@@ -4477,6 +4513,7 @@ fun startGuiApplication(cliArgs: CliArgs) = application {
                         "status_server_no_response",
                         "status_handshake_failed",
                         "status_protocol_incompatible",
+                        "status_server_silent_maybe_outdated",
                         "status_server_busy",
                         "status_unauthorized",
                         "status_unsupported_format"
@@ -4489,8 +4526,22 @@ fun startGuiApplication(cliArgs: CliArgs) = application {
                     AlertDialog(
                         onDismissRequest = { NetworkHandler_v1.clearProtocolMismatch() },
                         icon  = { Icon(Icons.Default.Warning, contentDescription = null) },
-                        title = { Text(Strings.get("protocol_incompatible_title")) },
-                        text  = { Text(Strings.get("protocol_incompatible_body", mm.localVersion, mm.remoteVersion)) },
+                        title = {
+                            Text(
+                                Strings.get(
+                                    if (mm.localIsOutdated) "protocol_incompatible_title_local"
+                                    else "protocol_incompatible_title"
+                                )
+                            )
+                        },
+                        text  = {
+                            val bodyKey = when {
+                                mm.localIsOutdated -> "protocol_incompatible_body_local"
+                                mm.remoteRole == PeerRole.SENDER -> "protocol_incompatible_body_sender"
+                                else -> "protocol_incompatible_body_receiver"
+                            }
+                            Text(Strings.get(bodyKey, mm.localVersion, mm.remoteVersion))
+                        },
                         confirmButton = {
                             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                                 Button(onClick = {
@@ -4509,6 +4560,26 @@ fun startGuiApplication(cliArgs: CliArgs) = application {
                         },
                         dismissButton = {
                             TextButton(onClick = { NetworkHandler_v1.clearProtocolMismatch() }) { Text(Strings.get("close")) }
+                        }
+                    )
+                }
+
+                val unresponsiveServer by NetworkHandler_v1.unresponsiveServer.collectAsState()
+                if (unresponsiveServer != null) {
+                    val peerName = unresponsiveServer!!
+                    AlertDialog(
+                        onDismissRequest = { NetworkHandler_v1.clearUnresponsiveServer() },
+                        icon  = { Icon(Icons.Default.Warning, contentDescription = null) },
+                        title = { Text(Strings.get("server_silent_title")) },
+                        text  = { Text(Strings.get("server_silent_body", peerName)) },
+                        confirmButton = {
+                            Button(onClick = {
+                                runCatching { openUrl("https://www.marcomorosi.eu/wifi-audio-streaming/download/") }
+                                NetworkHandler_v1.clearUnresponsiveServer()
+                            }) { Text(Strings.get("protocol_incompatible_website")) }
+                        },
+                        dismissButton = {
+                            TextButton(onClick = { NetworkHandler_v1.clearUnresponsiveServer() }) { Text(Strings.get("close")) }
                         }
                     )
                 }
@@ -4547,7 +4618,8 @@ fun startGuiApplication(cliArgs: CliArgs) = application {
                             audioSettings, port, isMulticastMode, serverCapabilities,
                             micRoutingMode, selectedServerMicOutput, mic, rtp,
                             appSettings.useNativeEngine, selectedMicMixInput,
-                            dlnaConfig = appSettings.toDlnaConfig()
+                            dlnaConfig = appSettings.toDlnaConfig(),
+                            onAudioFrame = vizSink
                         ) { key, args ->
                             if (key == "error_virtual_driver_missing") {
                                 isStreaming = false
@@ -4615,7 +4687,8 @@ fun startGuiApplication(cliArgs: CliArgs) = application {
                                     dlnaEnabled = cliArgs.dlna || appSettings.dlnaEnabled,
                                     dlnaPort = if (cliArgs.dlna) cliArgs.dlnaPort.toString() else appSettings.dlnaPort,
                                     dlnaFormat = if (cliArgs.dlna) cliArgs.dlnaFormat else appSettings.dlnaFormat
-                                ).toDlnaConfig()
+                                ).toDlnaConfig(),
+                                onAudioFrame = vizSink
                             ) { key, args ->
                                 if (key == "error_virtual_driver_missing") {
                                     isStreaming = false
@@ -4654,6 +4727,7 @@ fun startGuiApplication(cliArgs: CliArgs) = application {
                                 cliArgs.mic, selectedClientMic, cliArgs.micPort,
                                 appSettings.connectionSoundEnabled,
                                 appSettings.disconnectionSoundEnabled,
+                                onAudioFrame = vizSink,
                                 onStatusUpdate = clientStatusHandler
                             )
 
@@ -4697,7 +4771,8 @@ fun startGuiApplication(cliArgs: CliArgs) = application {
                                         sendMicrophone, selectedClientMic, mic,
                                         appSettings.connectionSoundEnabled,
                                         appSettings.disconnectionSoundEnabled,
-                                        onStatusUpdate = clientStatusHandler
+                                        onAudioFrame = vizSink,
+                                onStatusUpdate = clientStatusHandler
                                     )
                                     break
                                 }
@@ -4768,7 +4843,8 @@ fun startGuiApplication(cliArgs: CliArgs) = application {
                                         sendMicrophone, selectedClientMic, mic,
                                         appSettings.connectionSoundEnabled,
                                         appSettings.disconnectionSoundEnabled,
-                                        onStatusUpdate = clientStatusHandler
+                                        onAudioFrame = vizSink,
+                                onStatusUpdate = clientStatusHandler
                                     )
                                 }
                             },
@@ -4804,7 +4880,8 @@ fun startGuiApplication(cliArgs: CliArgs) = application {
                                     audioSettings, port, isMulticastMode, serverCapabilities,
                                     micRoutingMode, selectedServerMicOutput, mic, rtp,
                                     appSettings.useNativeEngine, selectedMicMixInput,
-                                    dlnaConfig = appSettings.toDlnaConfig()
+                                    dlnaConfig = appSettings.toDlnaConfig(),
+                                    onAudioFrame = vizSink
                                 ) { key, args ->
                                     if (key == "error_virtual_driver_missing") {
                                         isStreaming          = false
@@ -4835,7 +4912,8 @@ fun startGuiApplication(cliArgs: CliArgs) = application {
                                     sendMicrophone, selectedClientMic, mic,
                                     appSettings.connectionSoundEnabled,
                                     appSettings.disconnectionSoundEnabled,
-                                    onStatusUpdate = clientStatusHandler
+                                    onAudioFrame = vizSink,
+                                onStatusUpdate = clientStatusHandler
                                 )
                             },
                             onRefreshDevices = {
