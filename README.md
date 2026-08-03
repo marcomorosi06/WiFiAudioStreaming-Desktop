@@ -2,11 +2,13 @@
   <img src="https://github.com/marcomorosi06/WiFiAudioStreaming-Desktop/blob/master/src/main/resources/app_icon.png?raw=true" width="128" alt="App Icon" />
 </p>
 
-# WiFi Audio Streaming (Desktop)
+<h1 align="center">WiFi Audio Streaming (Desktop)</h1>
 
-[![Available on GitHub](https://img.shields.io/badge/Available%20on-GitHub-181717?style=for-the-badge&logo=github)](https://github.com/marcomorosi06/WiFiAudioStreaming-Desktop/releases)
-[![Available on GitLab](https://img.shields.io/badge/Available%20on-GitLab-FC6D26?style=for-the-badge&logo=gitlab)](https://gitlab.com/marcomorosi.dev/WiFiAudioStreaming-Desktop/-/releases)
-[![AUR version](https://img.shields.io/aur/version/wifi-audio-streaming-desktop?color=blue&logo=arch-linux)](https://aur.archlinux.org/packages/wifi-audio-streaming-desktop)
+<p align="center">
+  <a href="https://github.com/marcomorosi06/WiFiAudioStreaming-Desktop/releases"><img src="https://img.shields.io/badge/Available%20on-GitHub-181717?style=for-the-badge&logo=github" alt="Available on GitHub" /></a>
+  <a href="https://gitlab.com/marcomorosi.dev/WiFiAudioStreaming-Desktop/-/releases"><img src="https://img.shields.io/badge/Available%20on-GitLab-FC6D26?style=for-the-badge&logo=gitlab" alt="Available on GitLab" /></a>
+  <a href="https://aur.archlinux.org/packages/wifi-audio-streaming-desktop"><img src="https://img.shields.io/aur/version/wifi-audio-streaming-desktop?color=blue&logo=arch-linux" alt="AUR version" /></a>
+</p>
 
 Turn your computer into a **wireless audio transmitter or receiver**.
 
