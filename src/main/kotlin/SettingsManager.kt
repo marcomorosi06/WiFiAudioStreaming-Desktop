@@ -38,6 +38,13 @@ data class AppSettings(
     val dlnaPort: String = "8081",
     val dlnaFormat: String = "auto",
     val dlnaDevices: List<String> = emptyList(),
+    val snapcastEnabled: Boolean = false,
+    val snapcastPort: String = SnapcastDefaults.STREAM_PORT.toString(),
+    val snapcastControlPort: String = SnapcastDefaults.CONTROL_PORT.toString(),
+    val snapcastCodec: String = SnapcastCodecs.PCM,
+    val snapcastChunkMs: Int = SnapcastDefaults.CHUNK_MS,
+    val snapcastBufferMs: Int = SnapcastDefaults.BUFFER_MS,
+    val snapcastStreamName: String = SnapcastDefaults.STREAM_NAME,
     val networkInterface: String = "Auto",
     val rtpPort: String = "9094",
     val launchAtStartup: Boolean = false,
@@ -67,6 +74,16 @@ data class AppSettings(
     val wfasMode: String = WfasPolicy.MODE_OFF_ON_USB,
     val vizEnabled: Boolean = true,
     val vizGroove: Int = 160
+)
+
+fun AppSettings.toSnapcastConfig(): SnapcastServerConfig = SnapcastServerConfig(
+    enabled = snapcastEnabled,
+    streamPort = snapcastPort.toIntOrNull() ?: SnapcastDefaults.STREAM_PORT,
+    controlPort = snapcastControlPort.toIntOrNull() ?: SnapcastDefaults.CONTROL_PORT,
+    codec = SnapcastCodecs.normalize(snapcastCodec),
+    chunkMs = if (snapcastChunkMs in SnapcastDefaults.CHUNK_CHOICES) snapcastChunkMs else SnapcastDefaults.CHUNK_MS,
+    bufferMs = snapcastBufferMs.coerceIn(SnapcastDefaults.MIN_BUFFER_MS, SnapcastDefaults.MAX_BUFFER_MS),
+    streamName = snapcastStreamName.ifBlank { SnapcastDefaults.STREAM_NAME }
 )
 
 fun AppSettings.toDlnaConfig(): DlnaServerConfig = DlnaServerConfig(

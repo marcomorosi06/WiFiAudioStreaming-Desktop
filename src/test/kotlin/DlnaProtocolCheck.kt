@@ -215,6 +215,7 @@ fun main() {
 
     protocolStatusChecks()
     wfasPairingUriChecks()
+    snapcastProtocolChecks()
 
     println()
     if (failures == 0) println("ALL CHECKS PASSED") else println("$failures CHECK(S) FAILED")

@@ -43,6 +43,13 @@ data class CliArgs(
     val dlna:            Boolean         = false,
     val dlnaPort:        Int             = 8081,
     val dlnaFormat:      String          = "auto",
+    val snapcast:        Boolean         = false,
+    val snapcastPort:    Int             = SnapcastDefaults.STREAM_PORT,
+    val snapcastControlPort: Int         = SnapcastDefaults.CONTROL_PORT,
+    val snapcastCodec:   String          = SnapcastCodecs.PCM,
+    val snapcastChunkMs: Int             = SnapcastDefaults.CHUNK_MS,
+    val snapcastBufferMs: Int            = SnapcastDefaults.BUFFER_MS,
+    val snapcastStreamName: String       = SnapcastDefaults.STREAM_NAME,
     val serverIp:        String?         = null,
     val outputDevice:    String?         = null,
     val mic:             Boolean         = false,
@@ -140,6 +147,13 @@ data class CliArgs(
             var dlna            = false
             var dlnaPort        = 8081
             var dlnaFormat      = "auto"
+            var snapcast        = false
+            var snapcastPort    = SnapcastDefaults.STREAM_PORT
+            var snapcastControlPort = SnapcastDefaults.CONTROL_PORT
+            var snapcastCodec   = SnapcastCodecs.PCM
+            var snapcastChunkMs = SnapcastDefaults.CHUNK_MS
+            var snapcastBufferMs = SnapcastDefaults.BUFFER_MS
+            var snapcastStreamName = SnapcastDefaults.STREAM_NAME
             var serverIp: String?           = null
             var outputDevice: String?       = null
             var mic             = false
@@ -356,6 +370,37 @@ data class CliArgs(
                             parseError("--dlna-format must be one of: auto, lpcm, wav, mp3, adts")
                         dlnaFormat = value; i++; dlna = true
                     }
+                    "--snapcast"      -> snapcast = true
+                    "--snapcast-port" -> { snapcastPort = nextInt(args, i, "--snapcast-port", 1024, 65535); i++; snapcast = true }
+                    "--snapcast-control-port" -> {
+                        snapcastControlPort = nextInt(args, i, "--snapcast-control-port", 1024, 65535); i++; snapcast = true
+                    }
+                    "--snapcast-codec" -> {
+                        val value = nextArg(args, i, "--snapcast-codec")?.lowercase()
+                            ?: parseError("--snapcast-codec requires one of: ${SnapcastCodecs.ALL.joinToString(", ")}")
+                        if (value !in SnapcastCodecs.ALL) {
+                            parseError("--snapcast-codec must be one of: ${SnapcastCodecs.ALL.joinToString(", ")}")
+                        }
+                        snapcastCodec = value; i++; snapcast = true
+                    }
+                    "--snapcast-chunk" -> {
+                        val value = nextInt(args, i, "--snapcast-chunk", 10, 60)
+                        if (value !in SnapcastDefaults.CHUNK_CHOICES) {
+                            parseError("--snapcast-chunk must be one of: ${SnapcastDefaults.CHUNK_CHOICES.joinToString(", ")}")
+                        }
+                        snapcastChunkMs = value; i++; snapcast = true
+                    }
+                    "--snapcast-buffer" -> {
+                        snapcastBufferMs = nextInt(
+                            args, i, "--snapcast-buffer",
+                            SnapcastDefaults.MIN_BUFFER_MS, SnapcastDefaults.MAX_BUFFER_MS
+                        ); i++; snapcast = true
+                    }
+                    "--snapcast-name" -> {
+                        snapcastStreamName = nextArg(args, i, "--snapcast-name")
+                            ?: parseError("--snapcast-name requires a stream identifier")
+                        i++; snapcast = true
+                    }
 
                     "--connect" -> {
                         serverIp = nextArg(args, i, "--connect") ?: parseError("--connect requires an IP address")
@@ -519,7 +564,7 @@ data class CliArgs(
                 i++
             }
 
-            if (rtp || http) multicast = true
+            if (rtp || http || dlna || snapcast) multicast = true
 
             if (monitor) {
                 if (!viz) parseError("--monitor requires --viz")
@@ -560,6 +605,13 @@ data class CliArgs(
                 dlna            = dlna,
                 dlnaPort        = dlnaPort,
                 dlnaFormat      = dlnaFormat,
+                snapcast        = snapcast,
+                snapcastPort    = snapcastPort,
+                snapcastControlPort = snapcastControlPort,
+                snapcastCodec   = snapcastCodec,
+                snapcastChunkMs = snapcastChunkMs,
+                snapcastBufferMs = snapcastBufferMs,
+                snapcastStreamName = snapcastStreamName,
                 serverIp        = serverIp,
                 outputDevice    = outputDevice,
                 mic             = mic,
@@ -645,8 +697,24 @@ SERVER OPTIONS
   --http-port <n>     HTTP port                    (default: 8080)
   --http-safari       Enable Safari-compatible AAC  (implies --http)
   --dlna              Push audio to the DLNA renderers saved in settings
+                      (implies --multicast)
   --dlna-port <n>     DLNA media endpoint port     (default: 8081)
   --dlna-format <f>   auto | lpcm | wav | mp3 | adts               (default: auto)
+  --snapcast          Act as a Snapcast server for synchronised multiroom audio.
+                      Any snapclient on the network (Raspberry Pi, ESP32, Home
+                      Assistant, the Snapcast mobile apps) can join and stay in
+                      sync. Implies --multicast.
+  --snapcast-port <n> Snapcast audio stream port   (default: 1704)
+  --snapcast-control-port <n>
+                      Snapcast JSON-RPC control port (default: 1705)
+  --snapcast-codec <c>
+                      pcm | flac | opus                            (default: pcm)
+                      flac roughly halves the bandwidth; opus needs 48000:16:2.
+  --snapcast-chunk <n>
+                      Chunk size in ms: 10 | 20 | 40 | 60           (default: 20)
+  --snapcast-buffer <n>
+                      Client playback buffer in ms                (default: 1000)
+  --snapcast-name <s> Stream identifier advertised to clients (default: default)
   --auth-mode <m>     Connection authorization: off | ask | key  (default: off;
                       unicast only). 'ask' prompts on the terminal per client.
   --auth-key <key>    Pre-shared key (implies --auth-mode key). The key is never

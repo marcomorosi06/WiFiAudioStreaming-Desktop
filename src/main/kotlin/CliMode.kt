@@ -427,12 +427,47 @@ private suspend fun runCliMonitor(args: CliArgs, settings: AllSettings) {
 // Server mode
 // ─────────────────────────────────────────────────────────────────────────────
 
+private fun printSnapcastClients(args: CliArgs) {
+    val session = SnapcastStatus.session.value
+    if (!session.running) {
+        out(dim("  Snapcast server is not running"), args)
+        return
+    }
+    if (args.json) {
+        jsonLine(
+            "event" to "snapcast_status",
+            "codec" to session.codec,
+            "clients" to session.clients.count { it.connected },
+            "control_connections" to session.controlConnections
+        )
+        return
+    }
+    out("", args)
+    out("  ${bold("Snapcast")} ${dim("codec")} ${session.codec} ${dim("format")} ${session.sampleFormat} " +
+        "${dim("drift")} ${session.driftMicros / 1000}ms", args)
+    if (session.clients.isEmpty()) {
+        out(dim("  no clients known yet"), args)
+    } else {
+        session.clients.forEach { client ->
+            val marker = if (client.connected) green("+") else dim("-")
+            val mute = if (client.muted) yellow(" muted") else ""
+            out("  $marker  ${client.name} ${dim(client.ip)}  vol ${client.volumePercent}%$mute " +
+                "${dim("latency")} ${client.latency}ms", args)
+        }
+    }
+    out("", args)
+}
+
 private suspend fun runCliServer(rawArgs: CliArgs, settings: AllSettings) {
     val args = if (rawArgs.qr) prepareQrKey(rawArgs) else rawArgs
     assertPortFree(args.port,    "streaming", args)
     assertPortFree(args.micPort, "mic",       args)
     if (args.rtp)  assertPortFree(args.rtpPort,  "RTP",  args)
     if (args.http) assertPortFree(args.httpPort,  "HTTP", args)
+    if (args.snapcast) {
+        assertPortFree(args.snapcastPort, "Snapcast stream", args)
+        assertPortFree(args.snapcastControlPort, "Snapcast control", args)
+    }
 
     val audio = settings.audio
     val protocols = mutableSetOf(StreamingProtocol.WFAS)
@@ -461,6 +496,10 @@ private suspend fun runCliServer(rawArgs: CliArgs, settings: AllSettings) {
             "multicast" to args.multicast,
             "rtp"       to args.rtp,
             "http"      to args.http,
+            "snapcast"  to args.snapcast,
+            "snapcast_port" to args.snapcastPort,
+            "snapcast_control_port" to args.snapcastControlPort,
+            "snapcast_codec" to args.snapcastCodec,
         )
     } else if (!args.viz) {
         out("", args)
@@ -469,10 +508,20 @@ private suspend fun runCliServer(rawArgs: CliArgs, settings: AllSettings) {
         out("  ${dim("Multicast")} ${if (args.multicast) green("enabled") else dim("disabled")}", args)
         if (args.rtp)  out("  ${dim("RTP")}     port ${args.rtpPort}", args)
         if (args.http) out("  ${dim("HTTP")}    http://$serverIp:${args.httpPort}", args)
+        if (args.snapcast) {
+            out("  ${dim("Snapcast")} stream ${args.snapcastPort}, control ${args.snapcastControlPort}, codec ${args.snapcastCodec}", args)
+        }
         if (args.mic)  out("  ${dim("Mic")}     ${args.micRouting.name.lowercase().replace('_', '-')}", args)
         reportLink(args)
         out("", args)
-        out(dim("  Commands: q=stop, v <0-100>=volume" + if (args.qr) ", p=new invite, r=new key" else ""), args)
+        out(
+            dim(
+                "  Commands: q=stop, v <0-100>=volume" +
+                    (if (args.snapcast) ", s=snapcast clients" else "") +
+                    (if (args.qr) ", p=new invite, r=new key" else "")
+            ),
+            args
+        )
         out("", args)
     } else {
         reportLink(args)
@@ -517,6 +566,17 @@ private suspend fun runCliServer(rawArgs: CliArgs, settings: AllSettings) {
         dlnaConfig      = SettingsRepository.loadSettings().app
             .copy(dlnaEnabled = args.dlna, dlnaPort = args.dlnaPort.toString(), dlnaFormat = args.dlnaFormat)
             .toDlnaConfig(),
+        snapcastConfig  = SettingsRepository.loadSettings().app
+            .copy(
+                snapcastEnabled = args.snapcast,
+                snapcastPort = args.snapcastPort.toString(),
+                snapcastControlPort = args.snapcastControlPort.toString(),
+                snapcastCodec = args.snapcastCodec,
+                snapcastChunkMs = args.snapcastChunkMs,
+                snapcastBufferMs = args.snapcastBufferMs,
+                snapcastStreamName = args.snapcastStreamName
+            )
+            .toSnapcastConfig(),
         onAudioFrame    = viz?.let { v -> { samples -> v.feedFrame(samples) } },
     ) { key, fmtArgs ->
         val msg = if (fmtArgs.isEmpty()) Strings.get(key) else try { String.format(Strings.get(key), *fmtArgs) } catch (_: Exception) { key }
@@ -608,6 +668,8 @@ private suspend fun runCliServer(rawArgs: CliArgs, settings: AllSettings) {
                     line.equals("qr", ignoreCase = true) -> PairCli.serverInvite(args)
                     line.equals("r", ignoreCase = true) ||
                     line.equals("rekey", ignoreCase = true) -> PairCli.serverInvite(args, forceNewKey = true)
+                    line.equals("s", ignoreCase = true) ||
+                    line.equals("snapcast", ignoreCase = true) -> printSnapcastClients(args)
                 }
             }
         } catch (_: Exception) {}

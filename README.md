@@ -76,6 +76,7 @@ https://private-user-images.githubusercontent.com/229497341/628825916-c36bb746-a
   - **HTTP/AAC** (Safari, iOS)
   - **HTTP/Opus WebM** (Chrome, Firefox, any browser)
   - **DLNA/UPnP** (AV receivers, soundbars, smart TVs — no app needed on the other side) *(Work in progress for the next release, but visible in the Settings screenshot)*
+  - **Snapcast** (synchronised multiroom — any snapclient joins: Raspberry Pi, ESP32, Home Assistant, the Snapcast mobile apps)
 
   Peers running an incompatible protocol version are rejected immediately during the handshake with a clear error, instead of hanging silently.
 
@@ -161,6 +162,8 @@ WiFi Audio Streaming ships with `wfas`, a fully-featured CLI and headless daemon
 
 ```bash
 wfas --server --rtp                     # start a headless RTP server
+wfas --server --snapcast                # serve synchronised multiroom audio
+wfas --server --snapcast --snapcast-codec flac   # halve the bandwidth per room
 wfas --client 192.168.1.42              # connect as a client
 wfas --mode discover --json             # scan the network, output JSON
 wfas control volume 75                  # adjust volume on a running instance

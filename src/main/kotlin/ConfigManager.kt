@@ -103,6 +103,30 @@ object ConfigManager {
             { it.app.dlnaFormat }, { s, v -> appCopy(s) { copy(dlnaFormat = coerceEnum("server.dlnaFormat", v, listOf("auto", "lpcm", "wav", "mp3", "adts"))) } }),
         CfgField("server.dlnaDevices", CfgKind.STRING_LIST, emptyList(), "Selected DLNA renderers as udn|name entries",
             { it.app.dlnaDevices }, { s, v -> appCopy(s) { copy(dlnaDevices = coerceStringList("server.dlnaDevices", v)) } }),
+        CfgField("server.snapcastEnabled", CfgKind.BOOL, emptyList(), "Act as a Snapcast server for synchronised multiroom playback",
+            { it.app.snapcastEnabled }, { s, v -> appCopy(s) { copy(snapcastEnabled = coerceBool("server.snapcastEnabled", v)) } }),
+        CfgField("net.snapcastPort", CfgKind.PORT, emptyList(), "Snapcast audio stream TCP port",
+            { it.app.snapcastPort.toIntOrNull() ?: SnapcastDefaults.STREAM_PORT },
+            { s, v -> appCopy(s) { copy(snapcastPort = coercePort("net.snapcastPort", v).toString()) } }),
+        CfgField("net.snapcastControlPort", CfgKind.PORT, emptyList(), "Snapcast JSON-RPC control TCP port",
+            { it.app.snapcastControlPort.toIntOrNull() ?: SnapcastDefaults.CONTROL_PORT },
+            { s, v -> appCopy(s) { copy(snapcastControlPort = coercePort("net.snapcastControlPort", v).toString()) } }),
+        CfgField("server.snapcastCodec", CfgKind.ENUM, SnapcastCodecs.ALL, "Codec used for the Snapcast stream",
+            { it.app.snapcastCodec }, { s, v -> appCopy(s) { copy(snapcastCodec = coerceEnum("server.snapcastCodec", v, SnapcastCodecs.ALL)) } }),
+        CfgField("server.snapcastChunkMs", CfgKind.INT, emptyList(), "Snapcast chunk size in milliseconds (10, 20, 40 or 60)",
+            { it.app.snapcastChunkMs },
+            { s, v ->
+                val parsed = coerceInt("server.snapcastChunkMs", v)
+                if (parsed !in SnapcastDefaults.CHUNK_CHOICES) {
+                    throw ConfigException("server.snapcastChunkMs must be one of ${SnapcastDefaults.CHUNK_CHOICES.joinToString(", ")} (got $parsed)")
+                }
+                appCopy(s) { copy(snapcastChunkMs = parsed) }
+            }),
+        CfgField("server.snapcastBufferMs", CfgKind.INT, emptyList(), "Snapcast playback buffer in milliseconds",
+            { it.app.snapcastBufferMs },
+            { s, v -> appCopy(s) { copy(snapcastBufferMs = coerceInt("server.snapcastBufferMs", v, min = SnapcastDefaults.MIN_BUFFER_MS, max = SnapcastDefaults.MAX_BUFFER_MS)) } }),
+        CfgField("server.snapcastStreamName", CfgKind.STRING, emptyList(), "Snapcast stream identifier advertised to clients",
+            { it.app.snapcastStreamName }, { s, v -> appCopy(s) { copy(snapcastStreamName = coerceString("server.snapcastStreamName", v)) } }),
         CfgField("server.autoStartServer", CfgKind.BOOL, emptyList(), "Start server automatically on launch",
             { it.app.autoStartServer }, { s, v -> appCopy(s) { copy(autoStartServer = coerceBool("server.autoStartServer", v)) } }),
         CfgField("server.autoStartMulticast", CfgKind.BOOL, emptyList(), "Use multicast on auto-start",

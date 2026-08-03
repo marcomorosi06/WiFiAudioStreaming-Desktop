@@ -35,7 +35,8 @@ wfas \- stream audio over a local Wi\-Fi network
 .B wfas
 transmits audio from one device (server) to one or more receivers (clients)
 on the same local network using the WFAS protocol.
-It also supports RTP and HTTP streaming as optional additional protocols.
+It also supports RTP, HTTP, DLNA and Snapcast streaming as optional additional
+protocols.
 .PP
 Run without arguments,
 .B wfas
@@ -153,6 +154,51 @@ Enable the Safari-compatible AAC stream on the HTTP server.
 Implies
 .BR --http ,
 which in turn forces multicast.
+.TP
+.B --snapcast
+Act as a Snapcast server for synchronised multiroom playback.
+Any snapclient on the network (Raspberry Pi, ESP32, Home Assistant, the
+Snapcast mobile apps) can join and stay in sync.
+Implies
+.BR --multicast ,
+so the native WFAS session can keep serving other clients at the same time.
+.TP
+\fB--snapcast-port\fR \fIn\fR
+Snapcast audio stream port (default:
+.IR 1704 ).
+.TP
+\fB--snapcast-control-port\fR \fIn\fR
+Snapcast JSON-RPC control port (default:
+.IR 1705 ).
+Clients such as Home Assistant and the official Snapcast apps use this port to
+manage groups, per-client volume and latency.
+.TP
+\fB--snapcast-codec\fR \fIcodec\fR
+One of
+.IR pcm ", " flac " or " opus
+(default:
+.IR pcm ).
+.I flac
+roughly halves the bandwidth at the cost of about 25 ms of encoding delay.
+.I opus
+requires 48000 Hz stereo 16 bit input; when the audio settings do not match,
+the server falls back to
+.IR pcm .
+.TP
+\fB--snapcast-chunk\fR \fIn\fR
+Chunk size in milliseconds:
+.IR 10 ", " 20 ", " 40 " or " 60
+(default:
+.IR 20 ).
+.TP
+\fB--snapcast-buffer\fR \fIn\fR
+Playback buffer advertised to clients, in milliseconds (default:
+.IR 1000 ).
+Higher values survive worse networks, lower values react faster.
+.TP
+\fB--snapcast-name\fR \fIname\fR
+Stream identifier advertised to clients (default:
+.IR default ).
 .TP
 .B --sdp
 Print the SDP session descriptor to standard output when the server starts.

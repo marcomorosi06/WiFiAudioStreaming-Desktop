@@ -22,6 +22,8 @@ sealed class FirewallCommand {
 
 object FirewallCli {
 
+    private const val MDNS_PORT = 5353
+
     fun run(cmd: FirewallCommand, json: Boolean): Int {
         if (!FirewallHelper.isWindows) {
             val ports = when (cmd) {
@@ -86,16 +88,20 @@ object FirewallCli {
         val s = SettingsRepository.loadSettings()
         return listOfNotNull(
             s.app.httpPort.toIntOrNull().takeIf { s.app.httpEnabled },
-            s.app.dlnaPort.toIntOrNull().takeIf { s.app.dlnaEnabled }
+            s.app.dlnaPort.toIntOrNull().takeIf { s.app.dlnaEnabled },
+            s.app.snapcastPort.toIntOrNull().takeIf { s.app.snapcastEnabled },
+            s.app.snapcastControlPort.toIntOrNull().takeIf { s.app.snapcastEnabled }
         ).filter { it in 1..65535 }
     }
 
     private fun defaultPorts(): List<Int> {
         val s = SettingsRepository.loadSettings()
-        return listOf(
-            s.streamingPort.toIntOrNull() ?: 9090,
-            9091,
-            s.micPort.toIntOrNull() ?: 9092
+        return (
+            listOf(
+                s.streamingPort.toIntOrNull() ?: 9090,
+                9091,
+                s.micPort.toIntOrNull() ?: 9092
+            ) + if (s.app.snapcastEnabled) listOf(MDNS_PORT) else emptyList()
         ).filter { it in 1..65535 }.distinct()
     }
 }

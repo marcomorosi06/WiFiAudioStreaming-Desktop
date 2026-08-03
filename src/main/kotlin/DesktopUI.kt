@@ -376,6 +376,9 @@ fun AppContent(
                         if (isServer && httpUrl != null) {
                             HttpUrlBanner(url = httpUrl)
                         }
+                        if (isServer && appSettings.snapcastEnabled) {
+                            SnapcastServerBanner()
+                        }
                         if (isServer && appSettings.rtpEnabled) {
                             RtpSdpBanner(
                                 localIp = localIp,
@@ -906,10 +909,17 @@ fun SettingsScreen(
     var cliInstallResult by remember { mutableStateOf<CliPathInstaller.InstallResult?>(null) }
     var cliIsInstalled by remember { mutableStateOf(CliPathInstaller.isInstalled()) }
     var cliInstalling by remember { mutableStateOf(false) }
-    var fwPorts by remember(streamingPort, micPort) { mutableStateOf(listOf(streamingPort, "9091", micPort).filter { it.isNotBlank() }.joinToString(", ")) }
+    var fwPorts by remember(streamingPort, micPort, appSettings.snapcastEnabled) {
+        mutableStateOf(
+            (listOf(streamingPort, "9091", micPort) + if (appSettings.snapcastEnabled) listOf("5353") else emptyList())
+                .filter { it.isNotBlank() }.joinToString(", ")
+        )
+    }
     val fwTcpPorts = listOfNotNull(
         appSettings.httpPort.toIntOrNull().takeIf { appSettings.httpEnabled },
-        appSettings.dlnaPort.toIntOrNull().takeIf { appSettings.dlnaEnabled }
+        appSettings.dlnaPort.toIntOrNull().takeIf { appSettings.dlnaEnabled },
+        appSettings.snapcastPort.toIntOrNull().takeIf { appSettings.snapcastEnabled },
+        appSettings.snapcastControlPort.toIntOrNull().takeIf { appSettings.snapcastEnabled }
     )
     var fwBusy by remember { mutableStateOf(false) }
     var fwActive by remember { mutableStateOf(FirewallHelper.rulesActive()) }
@@ -3799,6 +3809,7 @@ fun ServerStatusBar(
         if (httpUrl != null) {
             HttpUrlBanner(url = httpUrl)
         }
+        SnapcastServerBanner()
     }
 }
 
@@ -4184,6 +4195,12 @@ fun NetworkSettingsContent(
     }
 
     DlnaSettingsSection(
+        appSettings = appSettings,
+        audioSettings = audioSettings,
+        onAppSettingsChange = onAppSettingsChange
+    )
+
+    SnapcastSettingsSection(
         appSettings = appSettings,
         audioSettings = audioSettings,
         onAppSettingsChange = onAppSettingsChange

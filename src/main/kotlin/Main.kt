@@ -554,6 +554,14 @@ object NetworkHandler_v1 {
         return (listOfNotNull(usb) + rest).distinct()
     }
 
+    fun snapcastHostName(): String {
+        val fromEnv = System.getenv("COMPUTERNAME") ?: System.getenv("HOSTNAME")
+        val resolved = fromEnv?.trim()?.takeIf { it.isNotEmpty() }
+            ?: runCatching { java.net.InetAddress.getLocalHost().hostName }.getOrNull()
+            ?: "wfas"
+        return resolved.substringBefore('.').ifBlank { "wfas" }
+    }
+
     fun getActiveNetworkInterface(preferredName: String = "Auto"): NetworkInterface? = try {
         val usb = if (preferredName == "Auto") UsbLink.activeInterface() else null
         val allInterfaces = NetworkInterface.getNetworkInterfaces().toList()
@@ -708,11 +716,17 @@ object NetworkHandler_v1 {
     @Volatile private var opusPcmQueue: java.util.concurrent.ArrayBlockingQueue<ByteArray>? = null
     @Volatile private var rtpPcmQueue:  java.util.concurrent.ArrayBlockingQueue<ByteArray>? = null
     @Volatile private var dlnaManager: DlnaSessionManager? = null
+    @Volatile private var snapcastManager: SnapcastSessionManager? = null
 
     val dlnaTargets: kotlinx.coroutines.flow.StateFlow<List<DlnaTargetState>>
         get() = DlnaStatus.targets
 
     fun dlnaClientCount(): Int = dlnaManager?.activeClientCount() ?: 0
+
+    val snapcastSession: kotlinx.coroutines.flow.StateFlow<SnapcastSessionState>
+        get() = SnapcastStatus.session
+
+    fun snapcastClientCount(): Int = snapcastManager?.activeClientCount() ?: 0
 
     // ── Linux audio routing ────────────────────────────────────────────────────
     private var originalLinuxSink:   String? = null
@@ -2324,6 +2338,7 @@ object NetworkHandler_v1 {
         aacPcmQueue?.let  { if (it.remainingCapacity() > 0) it.offer(pcmBytes.copyOf()) }
         opusPcmQueue?.let { if (it.remainingCapacity() > 0) it.offer(pcmBytes.copyOf()) }
         dlnaManager?.submitPcm(pcmBytes.copyOf())
+        snapcastManager?.submitPcm(pcmBytes.copyOf())
     }
 
     private suspend fun processEngineFrame(
@@ -2403,6 +2418,7 @@ object NetworkHandler_v1 {
         useNativeEngine: Boolean = true,
         micMixInputInfo: Mixer.Info? = null,
         dlnaConfig: DlnaServerConfig? = null,
+        snapcastConfig: SnapcastServerConfig? = null,
         onAudioFrame: ((ShortArray) -> Unit)? = null,
         onStatusUpdate: (key: String, args: Array<out Any>) -> Unit
     ) {
@@ -2415,7 +2431,7 @@ object NetworkHandler_v1 {
                 startServerInstanceLocked(
                     audioSettings, port, isMulticast, capabilities,
                     micRoutingMode, micOutputMixerInfo, micPort, rtpPort,
-                    useNativeEngine, micMixInputInfo, dlnaConfig, onAudioFrame, onStatusUpdate
+                    useNativeEngine, micMixInputInfo, dlnaConfig, snapcastConfig, onAudioFrame, onStatusUpdate
                 )
             }
         }
@@ -2433,6 +2449,7 @@ object NetworkHandler_v1 {
         useNativeEngine: Boolean = true,
         micMixInputInfo: Mixer.Info? = null,
         dlnaConfig: DlnaServerConfig? = null,
+        snapcastConfig: SnapcastServerConfig? = null,
         onAudioFrame: ((ShortArray) -> Unit)? = null,
         onStatusUpdate: (key: String, args: Array<out Any>) -> Unit
     ) {
@@ -2440,7 +2457,8 @@ object NetworkHandler_v1 {
         if (!WfasPolicy.canStartServer(
                 StreamingProtocol.RTP in capabilities.protocols,
                 StreamingProtocol.HTTP in capabilities.protocols,
-                dlnaConfig?.enabled == true
+                dlnaConfig?.enabled == true,
+                snapcastConfig?.enabled == true
             )
         ) {
             AppDebug.log("[Server] refused: WFAS off and no other protocol or USB link available")
@@ -2493,6 +2511,24 @@ object NetworkHandler_v1 {
             manager.start()
         }
 
+        if (snapcastConfig != null && snapcastConfig.enabled) {
+            val manager = SnapcastSessionManager(
+                scope = scope,
+                config = snapcastConfig,
+                sampleRate = audioSettings.sampleRate.toInt(),
+                channels = audioSettings.channels,
+                bitDepth = audioSettings.bitDepth,
+                hostName = snapcastHostName(),
+                serverVersion = Strings.appVersion,
+                persistenceFile = java.io.File(ConfigPaths.configDir(), "snapcast-state.json"),
+                localAddressProvider = { getLocalIpAddress() },
+                preferredInterfaceProvider = { getActiveNetworkInterface() },
+                log = { AppDebug.log(it) }
+            )
+            snapcastManager = manager
+            manager.start()
+        }
+
         startAnnouncingPresence(isMulticast, port, annCaps, audioSettings)
 
         if (!WfasPolicy.enabledOnNetwork()) {
@@ -2501,7 +2537,8 @@ object NetworkHandler_v1 {
                 rtp = StreamingProtocol.RTP in capabilities.protocols,
                 http = StreamingProtocol.HTTP in capabilities.protocols,
                 dlna = dlnaConfig?.enabled == true,
-                conjunction = Strings.get("list_and")
+                conjunction = Strings.get("list_and"),
+                snapcast = snapcastConfig?.enabled == true
             )
             if (summary.isNotEmpty()) onStatusUpdate("status_serving_protocols", arrayOf(summary))
         }
@@ -2637,7 +2674,7 @@ object NetworkHandler_v1 {
                                         val ob = frameForSend(packetArray, bytesToSend)
                                         emit(ob)
                                         WfasStats.add(if ((packetArray[3].toInt() and 0x01) != 0) WfasStats.Cat.SILENCE else WfasStats.Cat.AUDIO, bytesToSend)
-                                        if (aacPcmQueue != null || opusPcmQueue != null || rtpPcmQueue != null)
+                                        if (aacPcmQueue != null || opusPcmQueue != null || rtpPcmQueue != null || dlnaManager != null || snapcastManager != null)
                                             distributeToSidecars(byteBuffer.array().copyOfRange(AUDIO_HEADER_SIZE, bytesToSend))
                                     }
                                 } else {
@@ -2662,7 +2699,7 @@ object NetworkHandler_v1 {
                                             val ob = frameForSend(packetArray, totalBytes)
                                             emit(ob)
                                             WfasStats.add(WfasStats.Cat.AUDIO, totalBytes)
-                                            if (aacPcmQueue != null || opusPcmQueue != null || rtpPcmQueue != null)
+                                            if (aacPcmQueue != null || opusPcmQueue != null || rtpPcmQueue != null || dlnaManager != null || snapcastManager != null)
                                                 distributeToSidecars(byteBuffer.array().copyOf(bytesToSend))
                                         }
                                     }
@@ -2901,7 +2938,7 @@ object NetworkHandler_v1 {
                                                 clientAlive.set(false)
                                             }
                                             if (clientAlive.get() &&
-                                                (aacPcmQueue != null || opusPcmQueue != null || rtpPcmQueue != null))
+                                                (aacPcmQueue != null || opusPcmQueue != null || rtpPcmQueue != null || dlnaManager != null || snapcastManager != null))
                                                 distributeToSidecars(byteBuffer.array().copyOfRange(AUDIO_HEADER_SIZE, bytesToSend))
                                         }
                                     }
@@ -2950,7 +2987,7 @@ object NetworkHandler_v1 {
                                                     clientAlive.set(false)
                                                 }
                                                 if (clientAlive.get() &&
-                                                    (aacPcmQueue != null || opusPcmQueue != null || rtpPcmQueue != null))
+                                                    (aacPcmQueue != null || opusPcmQueue != null || rtpPcmQueue != null || dlnaManager != null || snapcastManager != null))
                                                     distributeToSidecars(byteBuffer.array().copyOf(bytesToSend))
                                             }
                                         }
@@ -3869,6 +3906,9 @@ object NetworkHandler_v1 {
         runCatching { dlnaManager?.stop() }
         dlnaManager = null
 
+        runCatching { snapcastManager?.stop() }
+        snapcastManager = null
+
         httpServerJob?.cancelAndJoin();  httpServerJob   = null
         rtpJob?.cancelAndJoin();         rtpJob          = null
         localMicMixJob?.cancelAndJoin(); localMicMixJob  = null
@@ -4612,13 +4652,15 @@ fun startGuiApplication(cliArgs: CliArgs) = application {
                         val mic = micPort.toIntOrNull() ?: 9092
                         val rtp = appSettings.rtpPort.toIntOrNull() ?: 9094
 
-                        isMulticastMode = appSettings.autoStartMulticast || appSettings.rtpEnabled || appSettings.httpEnabled
+                        isMulticastMode = appSettings.autoStartMulticast || appSettings.rtpEnabled ||
+                            appSettings.httpEnabled || appSettings.dlnaEnabled || appSettings.snapcastEnabled
 
                         NetworkHandler_v1.launchServerInstance(
                             audioSettings, port, isMulticastMode, serverCapabilities,
                             micRoutingMode, selectedServerMicOutput, mic, rtp,
                             appSettings.useNativeEngine, selectedMicMixInput,
                             dlnaConfig = appSettings.toDlnaConfig(),
+                            snapcastConfig = appSettings.toSnapcastConfig(),
                             onAudioFrame = vizSink
                         ) { key, args ->
                             if (key == "error_virtual_driver_missing") {
@@ -4665,8 +4707,9 @@ fun startGuiApplication(cliArgs: CliArgs) = application {
                             val mic  = cliArgs.micPort
                             val rtp  = cliArgs.rtpPort
 
-                            if (cliArgs.multicast || cliArgs.rtp || cliArgs.http)
-                                isMulticastMode = true
+                            if (cliArgs.multicast || cliArgs.rtp || cliArgs.http ||
+                                cliArgs.dlna || cliArgs.snapcast
+                            ) isMulticastMode = true
 
                             val protocols = mutableSetOf(StreamingProtocol.WFAS)
                             if (cliArgs.rtp)  protocols += StreamingProtocol.RTP
@@ -4688,6 +4731,15 @@ fun startGuiApplication(cliArgs: CliArgs) = application {
                                     dlnaPort = if (cliArgs.dlna) cliArgs.dlnaPort.toString() else appSettings.dlnaPort,
                                     dlnaFormat = if (cliArgs.dlna) cliArgs.dlnaFormat else appSettings.dlnaFormat
                                 ).toDlnaConfig(),
+                                snapcastConfig = appSettings.copy(
+                                    snapcastEnabled = cliArgs.snapcast || appSettings.snapcastEnabled,
+                                    snapcastPort = if (cliArgs.snapcast) cliArgs.snapcastPort.toString() else appSettings.snapcastPort,
+                                    snapcastControlPort = if (cliArgs.snapcast) cliArgs.snapcastControlPort.toString() else appSettings.snapcastControlPort,
+                                    snapcastCodec = if (cliArgs.snapcast) cliArgs.snapcastCodec else appSettings.snapcastCodec,
+                                    snapcastChunkMs = if (cliArgs.snapcast) cliArgs.snapcastChunkMs else appSettings.snapcastChunkMs,
+                                    snapcastBufferMs = if (cliArgs.snapcast) cliArgs.snapcastBufferMs else appSettings.snapcastBufferMs,
+                                    snapcastStreamName = if (cliArgs.snapcast) cliArgs.snapcastStreamName else appSettings.snapcastStreamName
+                                ).toSnapcastConfig(),
                                 onAudioFrame = vizSink
                             ) { key, args ->
                                 if (key == "error_virtual_driver_missing") {
@@ -4874,13 +4926,15 @@ fun startGuiApplication(cliArgs: CliArgs) = application {
                                 val mic  = micPort.toIntOrNull() ?: 9092
                                 val rtp  = appSettings.rtpPort.toIntOrNull() ?: 9094
 
-                                isMulticastMode = isMulticastMode || appSettings.rtpEnabled || appSettings.httpEnabled
+                                isMulticastMode = isMulticastMode || appSettings.rtpEnabled ||
+                                    appSettings.httpEnabled || appSettings.dlnaEnabled || appSettings.snapcastEnabled
 
                                 NetworkHandler_v1.launchServerInstance(
                                     audioSettings, port, isMulticastMode, serverCapabilities,
                                     micRoutingMode, selectedServerMicOutput, mic, rtp,
                                     appSettings.useNativeEngine, selectedMicMixInput,
                                     dlnaConfig = appSettings.toDlnaConfig(),
+                                    snapcastConfig = appSettings.toSnapcastConfig(),
                                     onAudioFrame = vizSink
                                 ) { key, args ->
                                     if (key == "error_virtual_driver_missing") {
