@@ -124,6 +124,7 @@ class SnapcastStreamServer(
 
     fun broadcastChunk(timestamp: SnapcastTv, payload: ByteArray) {
         if (sessions.isEmpty()) return
+        println("[DEBUG] broadcastChunk: generating chunk for timestamp ${timestamp.sec}.${timestamp.usec}")
         val frame = SnapcastWire.frame(
             SnapcastMessageType.WIRE_CHUNK,
             nextId(),
@@ -183,6 +184,7 @@ class SnapcastStreamServer(
         private fun writeLoop() {
             val output = runCatching { BufferedOutputStream(socket.getOutputStream(), 64 * 1024) }.getOrNull() ?: return
             try {
+                var chunksSent = 0
                 while (scope.isActive && !closed) {
                     var wrote = false
                     while (true) {
@@ -191,7 +193,18 @@ class SnapcastStreamServer(
                         wrote = true
                     }
                     if (wrote) output.flush()
-                    val frame = outgoing.poll(20, TimeUnit.MILLISECONDS) ?: continue
+                    var frame = outgoing.poll(20, TimeUnit.MILLISECONDS)
+                    if (frame != null && frame.size >= 2) {
+                        val type = (frame[0].toInt() and 0xFF) or ((frame[1].toInt() and 0xFF) shl 8)
+                        if (type == SnapcastMessageType.WIRE_CHUNK) {
+                            chunksSent++
+                            if (chunksSent % 50 == 0) {
+                                println("[DEBUG] Session $sessionId sent $chunksSent chunks so far.")
+                            }
+                        }
+                    }
+                    if (frame == null) continue
+
                     while (true) {
                         val urgent = priority.poll() ?: break
                         output.write(urgent)
@@ -206,7 +219,10 @@ class SnapcastStreamServer(
                     output.flush()
                 }
             } catch (e: Exception) {
-                if (e !is CancellationException) log("[Snapcast] session $sessionId write ended: ${e.message}")
+                if (e !is CancellationException) {
+                    println("[DEBUG] Snapcast session $sessionId write ended: ${e.message}")
+                    e.printStackTrace()
+                }
             } finally {
                 close()
             }
@@ -226,7 +242,10 @@ class SnapcastStreamServer(
                     }
                 }
             } catch (e: Exception) {
-                if (e !is CancellationException) log("[Snapcast] session $sessionId read ended: ${e.message}")
+                if (e !is CancellationException) {
+                    println("[DEBUG] Snapcast session $sessionId read ended: ${e.message}")
+                    e.printStackTrace()
+                }
             } finally {
                 close()
             }
@@ -256,12 +275,13 @@ class SnapcastStreamServer(
                 instance = json.intAt("Instance") ?: 1
             )
             log("[Snapcast] client connected: $id (${host.name})")
-            sendServerSettings()
+            sendServerSettings(frame.header.id)
             sendCodecHeader()
         }
 
         private fun handleTime(frame: SnapcastFrame, received: SnapcastTv) {
             val latencyMicros = received.toMicros() - frame.header.sent.toMicros()
+            println("[DEBUG] handleTime: received.micros=${received.toMicros()}, sent.micros=${frame.header.sent.toMicros()}, latencyMicros=$latencyMicros")
             val payload = SnapcastWire.timePayload(SnapcastTv.fromMicros(latencyMicros))
             enqueuePriority(
                 SnapcastWire.frame(
@@ -283,7 +303,7 @@ class SnapcastStreamServer(
             state.setClientVolume(id, percent, muted)
         }
 
-        fun sendServerSettings() {
+        fun sendServerSettings(refersTo: Int = 0) {
             val id = clientId ?: return
             val client = state.clientSnapshot(id) ?: return
             val (volume, muted) = state.effectiveVolume(id)
@@ -297,7 +317,7 @@ class SnapcastStreamServer(
                 SnapcastWire.frame(
                     SnapcastMessageType.SERVER_SETTINGS,
                     nextId(),
-                    0,
+                    refersTo,
                     clock.now(),
                     SnapcastTv(0, 0),
                     payload

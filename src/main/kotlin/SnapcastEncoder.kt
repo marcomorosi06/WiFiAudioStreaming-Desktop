@@ -59,9 +59,9 @@ class SnapcastPcmEncoder(override val outputFormat: SnapcastAudioFormat) : Snapc
         SnapcastWire.wavHeader(outputFormat.sampleRate, outputFormat.bitDepth, outputFormat.channels)
 
     override fun encode(pcm: ByteArray, offset: Int, length: Int, sink: (ByteArray, Int) -> Unit) {
-        if (length <= 0) return
-        val copy = pcm.copyOfRange(offset, offset + length)
-        sink(copy, outputFormat.framesOf(length))
+        val payload = ByteArray(length)
+        System.arraycopy(pcm, offset, payload, 0, length)
+        sink(payload, outputFormat.framesOf(length))
     }
 
     override fun close() = Unit
