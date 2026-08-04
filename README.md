@@ -10,6 +10,10 @@
   <a href="https://aur.archlinux.org/packages/wifi-audio-streaming-desktop"><img src="https://img.shields.io/aur/version/wifi-audio-streaming-desktop?color=blue&logo=arch-linux" alt="AUR version" /></a>
 </p>
 
+<p align="center">
+<a href="https://trendshift.io/repositories/16237?utm_source=trendshift-badge&amp;utm_medium=badge&amp;utm_campaign=badge-trendshift-16237" target="_blank" rel="noopener noreferrer"><img src="https://trendshift.io/api/badge/trendshift/repositories/16237/daily?language=Kotlin" alt="marcomorosi06%2FWiFiAudioStreaming-Desktop | Trendshift" width="250" height="55"/></a>
+</p>
+
 Turn your computer into a **wireless audio transmitter or receiver**.
 
 This application allows you to send your PC's audio to any device on the same local network, or listen to audio from another device. It is designed to work seamlessly with the [Android version](https://github.com/marcomorosi06/WiFiAudioStreaming-Android).

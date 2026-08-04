@@ -26,7 +26,10 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.VerticalScrollbar
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollbarAdapter
 import androidx.compose.material3.VerticalDivider
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -3516,20 +3519,29 @@ fun DeviceDiscoveryList(
                     )
                 }
             } else {
-                Column(
-                    modifier = Modifier.fillMaxWidth().heightIn(max = 250.dp),
-                    verticalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    devices.forEach { (hostname, serverInfo) ->
-                        DeviceItem(
-                            hostname = hostname,
-                            serverInfo = serverInfo,
-                            onClick = { onConnect(serverInfo) },
-                            enabled = enabled,
-                            isStarred = autoConnectIps.contains(serverInfo.ip),
-                            onStarClick = { onToggleAutoConnectIp(serverInfo.ip) }
-                        )
+                val deviceList = remember(devices) { devices.entries.toList() }
+                val listState = rememberLazyListState()
+                Box(modifier = Modifier.fillMaxWidth().heightIn(max = 460.dp)) {
+                    LazyColumn(
+                        state = listState,
+                        modifier = Modifier.fillMaxWidth().padding(end = 12.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        items(deviceList, key = { it.key }) { (hostname, serverInfo) ->
+                            DeviceItem(
+                                hostname = hostname,
+                                serverInfo = serverInfo,
+                                onClick = { onConnect(serverInfo) },
+                                enabled = enabled,
+                                isStarred = autoConnectIps.contains(serverInfo.ip),
+                                onStarClick = { onToggleAutoConnectIp(serverInfo.ip) }
+                            )
+                        }
                     }
+                    VerticalScrollbar(
+                        modifier = Modifier.align(Alignment.CenterEnd).fillMaxHeight(),
+                        adapter = rememberScrollbarAdapter(listState)
+                    )
                 }
             }
         }
