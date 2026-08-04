@@ -450,7 +450,9 @@ fun AppContent(
                                 isMulticast = isMulticastMode,
                                 onMulticastChanged = onMulticastModeChange,
                                 rtpEnabled = appSettings.rtpEnabled,
-                                httpEnabled = appSettings.httpEnabled
+                                httpEnabled = appSettings.httpEnabled,
+                                dlnaEnabled = appSettings.dlnaEnabled,
+                                snapcastEnabled = appSettings.snapcastEnabled
                             )
                             ServerMicCard(
                                 outputDevices = outputDevices,
@@ -497,7 +499,10 @@ fun AppContent(
                                     )
                                 },
                                 encryptionEnabled = appSettings.encryptionEnabled,
-                                onEncryptionChange = { onAppSettingsChange(appSettings.copy(encryptionEnabled = it)) }
+                                onEncryptionChange = { onAppSettingsChange(appSettings.copy(encryptionEnabled = it)) },
+                                isMulticast = isMulticastMode || appSettings.rtpEnabled ||
+                                    appSettings.httpEnabled || appSettings.dlnaEnabled ||
+                                    appSettings.snapcastEnabled
                             )
                             ConnectPanel(
                                 localIp = localIp,
@@ -2113,6 +2118,19 @@ fun ConnectPanel(
                 )
             }
 
+            if (appSettings.snapcastEnabled) {
+                HorizontalDivider()
+                val snapSession by NetworkHandler_v1.snapcastSession.collectAsState()
+                val snapIp = snapSession.serverIp.ifBlank { localIp }
+                val snapPort = snapSession.streamPort
+                ConnectEndpointRow(
+                    label = stringResource("connect_snapcast_label"),
+                    value = "$snapIp:$snapPort",
+                    icon = Icons.Outlined.Speaker,
+                    copyValue = "snapclient -h $snapIp -p $snapPort"
+                )
+            }
+
             HorizontalDivider()
             ConnectEndpointRow(
                 label = stringResource("connect_format_label"),
@@ -2529,6 +2547,8 @@ fun ServerConfigCard(
     virtualDriverStatus: VirtualDriverStatus,
     rtpEnabled: Boolean,
     httpEnabled: Boolean = false,
+    dlnaEnabled: Boolean = false,
+    snapcastEnabled: Boolean = false,
     useNativeEngine: Boolean,
     micRoutingMode: MicRoutingMode = MicRoutingMode.OFF,
     onMicRoutingModeChange: (MicRoutingMode) -> Unit = {},
@@ -2611,16 +2631,14 @@ fun ServerConfigCard(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.SpaceBetween
             ) {
-                val multicastLocked = rtpEnabled || httpEnabled
+                val multicastLocked = rtpEnabled || httpEnabled || dlnaEnabled || snapcastEnabled
                 val actualMulticast = isMulticast || multicastLocked
 
                 Column(Modifier.weight(1f)) {
                     Text(stringResource("multicast_mode"), style = MaterialTheme.typography.bodyLarge)
                     Text(
                         when {
-                            rtpEnabled && httpEnabled -> stringResource("both_force_multicast")
-                            rtpEnabled -> stringResource("rtp_forces_multicast")
-                            httpEnabled -> stringResource("http_forces_multicast")
+                            multicastLocked -> stringResource("generic_forces_multicast")
                             else -> stringResource("multicast_description")
                         },
                         style = MaterialTheme.typography.bodySmall,
@@ -2637,6 +2655,11 @@ fun ServerConfigCard(
             HorizontalDivider()
 
             val mode = securityMode.uppercase()
+            val keyBased = mode == "KEY" || mode == "QR"
+            val encryptionLocked = SecurityMode.encryptionForced(
+                mode,
+                isMulticast || rtpEnabled || httpEnabled || dlnaEnabled || snapcastEnabled
+            )
 
             Row(
                 verticalAlignment = Alignment.CenterVertically,
@@ -2723,15 +2746,18 @@ fun ServerConfigCard(
                     Column(Modifier.weight(1f)) {
                         Text(stringResource("encryption_label"))
                         Text(
-                            stringResource("encryption_hint"),
+                            stringResource(
+                                if (encryptionLocked) "encryption_locked_qr_multicast"
+                                else "encryption_hint"
+                            ),
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
                     }
                     Switch(
-                        checked = encryptionEnabled && (mode == "KEY" || mode == "QR"),
+                        checked = (encryptionEnabled || encryptionLocked) && keyBased,
                         onCheckedChange = onEncryptionChange,
-                        enabled = mode == "KEY" || mode == "QR"
+                        enabled = keyBased && !encryptionLocked
                     )
                 }
             }
@@ -2748,7 +2774,9 @@ fun ServerLinkCard(
     isMulticast: Boolean,
     onMulticastChanged: (Boolean) -> Unit,
     rtpEnabled: Boolean,
-    httpEnabled: Boolean
+    httpEnabled: Boolean,
+    dlnaEnabled: Boolean = false,
+    snapcastEnabled: Boolean = false
 ) {
     ElevatedCard(modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(24.dp)) {
         Column(Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
@@ -2803,16 +2831,14 @@ fun ServerLinkCard(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.SpaceBetween
             ) {
-                val multicastLocked = rtpEnabled || httpEnabled
+                val multicastLocked = rtpEnabled || httpEnabled || dlnaEnabled || snapcastEnabled
                 val actualMulticast = isMulticast || multicastLocked
 
                 Column(Modifier.weight(1f)) {
                     Text(stringResource("multicast_mode"), style = MaterialTheme.typography.bodyLarge)
                     Text(
                         when {
-                            rtpEnabled && httpEnabled -> stringResource("both_force_multicast")
-                            rtpEnabled -> stringResource("rtp_forces_multicast")
-                            httpEnabled -> stringResource("http_forces_multicast")
+                            multicastLocked -> stringResource("generic_forces_multicast")
                             else -> stringResource("multicast_description")
                         },
                         style = MaterialTheme.typography.bodySmall,
@@ -2867,11 +2893,14 @@ fun ServerSecurityCard(
     onSecurityModeChange: (String) -> Unit,
     onAuthKeyChange: (String) -> Unit,
     encryptionEnabled: Boolean,
-    onEncryptionChange: (Boolean) -> Unit
+    onEncryptionChange: (Boolean) -> Unit,
+    isMulticast: Boolean = false
 ) {
     ElevatedCard(modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(24.dp)) {
         Column(Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
             val mode = securityMode.uppercase()
+            val keyBased = mode == "KEY" || mode == "QR"
+            val encryptionLocked = SecurityMode.encryptionForced(mode, isMulticast)
 
             Row(
                 verticalAlignment = Alignment.CenterVertically,
@@ -2958,15 +2987,18 @@ fun ServerSecurityCard(
                     Column(Modifier.weight(1f)) {
                         Text(stringResource("encryption_label"))
                         Text(
-                            stringResource("encryption_hint"),
+                            stringResource(
+                                if (encryptionLocked) "encryption_locked_qr_multicast"
+                                else "encryption_hint"
+                            ),
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
                     }
                     Switch(
-                        checked = encryptionEnabled && (mode == "KEY" || mode == "QR"),
+                        checked = (encryptionEnabled || encryptionLocked) && keyBased,
                         onCheckedChange = onEncryptionChange,
-                        enabled = mode == "KEY" || mode == "QR"
+                        enabled = keyBased && !encryptionLocked
                     )
                 }
             }

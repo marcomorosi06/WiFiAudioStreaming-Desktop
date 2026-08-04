@@ -3640,9 +3640,31 @@ object NetworkHandler_v1 {
             ByteArray(((bytesPerSec / 100).let { it - (it % frameBytes) }).coerceAtLeast(frameBytes))
         private val queue = java.util.concurrent.LinkedBlockingQueue<ByteArray>()
         private val queuedBytes = java.util.concurrent.atomic.AtomicInteger(0)
+
+        // Livello di riempimento a cui la coda deve tornare: senza questo la coda si
+        // stabilizza sul massimo e la latenza cresce fino a mezzo secondo.
+        private val targetBytes = prebufferBytes
+        private val highBytes =
+            (targetBytes + ((bytesPerSec * 60) / 1000).let { it - (it % frameBytes) })
+                .coerceAtMost(maxBytes)
+                .coerceAtLeast(targetBytes + frameBytes)
+
+        // Uno scarto isolato non si sente, una raffica si': la rientranza va diluita.
+        private val minDropIntervalNs = 250_000_000L
+        private var lastDropAt = 0L
+
+        // Il silenzio iniettato quando la coda si svuota va restituito, altrimenti ogni
+        // buco di rete sposta in avanti la riproduzione in modo permanente.
+        private val paddingDebt = java.util.concurrent.atomic.AtomicInteger(0)
+
         @Volatile private var running = false
         @Volatile private var primed = false
         private var thread: Thread? = null
+
+        fun bufferedBytes(): Int = queuedBytes.get()
+
+        fun bufferedMs(): Int =
+            if (bytesPerSec <= 0) 0 else (queuedBytes.get().toLong() * 1000L / bytesPerSec).toInt()
 
         fun start() {
             if (running) return
@@ -3657,14 +3679,34 @@ object NetworkHandler_v1 {
                             continue
                         }
                     }
+                    val now = System.nanoTime()
+                    if (queuedBytes.get() > highBytes && now - lastDropAt > minDropIntervalNs) {
+                        val stale = queue.poll()
+                        if (stale != null) {
+                            queuedBytes.addAndGet(-stale.size)
+                            lastDropAt = now
+                        }
+                    }
                     val chunk = try {
                         queue.poll(15, java.util.concurrent.TimeUnit.MILLISECONDS)
                     } catch (_: InterruptedException) { break }
                     if (chunk != null) {
                         queuedBytes.addAndGet(-chunk.size)
-                        runCatching { line.write(chunk, 0, chunk.size) }
+                        val debt = paddingDebt.get()
+                        if (debt <= 0) {
+                            runCatching { line.write(chunk, 0, chunk.size) }
+                        } else {
+                            val skip = minOf(debt, chunk.size).let { it - (it % frameBytes) }
+                            paddingDebt.addAndGet(-skip)
+                            if (skip < chunk.size) {
+                                runCatching { line.write(chunk, skip, chunk.size - skip) }
+                            }
+                        }
                     } else {
                         runCatching { line.write(silenceChunk, 0, silenceChunk.size) }
+                        if (paddingDebt.get() < targetBytes) {
+                            paddingDebt.addAndGet(silenceChunk.size)
+                        }
                     }
                 }
             }.apply { isDaemon = true; name = "wfas-jitter-player"; start() }
@@ -4467,6 +4509,26 @@ fun startGuiApplication(cliArgs: CliArgs) = application {
         // Enforce a minimum window size so content is always reachable on low-res displays.
         LaunchedEffect(Unit) {
             window.minimumSize = java.awt.Dimension(400, 500)
+        }
+        LaunchedEffect(
+            appSettings.securityMode,
+            appSettings.qrPairingEnabled,
+            appSettings.encryptionEnabled,
+            isMulticastMode,
+            appSettings.rtpEnabled,
+            appSettings.httpEnabled,
+            appSettings.dlnaEnabled,
+            appSettings.snapcastEnabled
+        ) {
+            val forced = SecurityMode.encryptionForcedStored(
+                appSettings.securityMode,
+                appSettings.qrPairingEnabled,
+                isMulticastMode || appSettings.rtpEnabled || appSettings.httpEnabled ||
+                    appSettings.dlnaEnabled || appSettings.snapcastEnabled
+            )
+            if (forced && !appSettings.encryptionEnabled) {
+                appSettings = appSettings.copy(encryptionEnabled = true)
+            }
         }
         LaunchedEffect(appSettings.securityMode, appSettings.authKey, appSettings.encryptionEnabled) {
             NetworkHandler_v1.configureSecurity(appSettings.securityMode, appSettings.authKey, appSettings.encryptionEnabled)

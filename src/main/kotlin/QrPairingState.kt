@@ -180,10 +180,21 @@ object QrPairingState {
     }
 
     /** Ripristina la cifratura se l'avevamo accesa noi per rendere sensato un invito. */
-    fun restoreForcedEncryption(settings: AppSettings, applySettings: (AppSettings) -> Unit) {
+    fun restoreForcedEncryption(
+        settings: AppSettings,
+        applySettings: (AppSettings) -> Unit,
+        isMulticast: Boolean = false
+    ) {
         if (!encryptionForcedByInvite) return
         encryptionForcedByInvite = false
         invite.value = null
-        if (settings.encryptionEnabled) applySettings(settings.copy(encryptionEnabled = false))
+        val locked = SecurityMode.encryptionForcedStored(
+            settings.securityMode,
+            settings.qrPairingEnabled,
+            isMulticast
+        )
+        if (settings.encryptionEnabled && !locked) {
+            applySettings(settings.copy(encryptionEnabled = false))
+        }
     }
 }

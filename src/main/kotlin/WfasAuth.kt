@@ -35,6 +35,15 @@ enum class SecurityMode {
             else fromStringSafe(uiMode).name
 
         fun isQrUiMode(uiMode: String): Boolean = uiMode.equals(UI_MODE_QR, ignoreCase = true)
+
+        fun encryptionForced(uiMode: String, multicast: Boolean): Boolean =
+            multicast && isQrUiMode(uiMode)
+
+        fun encryptionForcedStored(
+            storedMode: String?,
+            qrPairing: Boolean,
+            multicast: Boolean
+        ): Boolean = encryptionForced(uiMode(storedMode, qrPairing), multicast)
     }
 }
 

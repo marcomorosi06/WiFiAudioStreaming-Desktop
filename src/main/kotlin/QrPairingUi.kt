@@ -537,7 +537,11 @@ fun QrPairingBar(
 
     LaunchedEffect(isStreaming) {
         if (!isStreaming) {
-            QrPairingState.restoreForcedEncryption(appSettings, onAppSettingsChange)
+            QrPairingState.restoreForcedEncryption(
+                appSettings,
+                onAppSettingsChange,
+                isMulticastMode
+            )
         }
     }
 
