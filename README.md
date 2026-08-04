@@ -28,24 +28,25 @@ This application allows you to send your PC's audio to any device on the same lo
 
 *Screenshots of the Material You interface.*
 
-<table>
-<tr>
-<td align="center">
-<img src="https://github.com/marcomorosi06/WiFiAudioStreaming-Desktop/blob/master/images/Server.jpg?raw=true" alt="Server Mode">
-</td>
-<td align="center">
-<img src="https://github.com/marcomorosi06/WiFiAudioStreaming-Desktop/blob/master/images/client.jpg?raw=true" alt="Client Mode">
-</td>
-<td align="center">
-<img src="https://github.com/marcomorosi06/WiFiAudioStreaming-Desktop/blob/master/images/settings.jpg?raw=true" alt="Settings">
-</td>
-</tr>
-<tr>
-<td align="center"><i>Server Mode</i></td>
-<td align="center"><i>Client Mode</i></td>
-<td align="center"><i>Settings</i></td>
-</tr>
-</table>
+<p align="center">
+  <img src="https://github.com/marcomorosi06/WiFiAudioStreaming-Desktop/blob/master/images/server.jpg?raw=true" alt="Server Mode"><br>
+  <i>Server Mode</i>
+</p>
+
+<p align="center">
+  <img src="https://github.com/marcomorosi06/WiFiAudioStreaming-Desktop/blob/master/images/client.jpg?raw=true" alt="Client Mode"><br>
+  <i>Client Mode</i>
+</p>
+
+<p align="center">
+  <img src="https://github.com/marcomorosi06/WiFiAudioStreaming-Desktop/blob/master/images/streaming.jpg?raw=true" alt="Streaming"><br>
+  <i>Streaming</i>
+</p>
+
+<p align="center">
+  <img src="https://github.com/marcomorosi06/WiFiAudioStreaming-Desktop/blob/master/images/settings.jpg?raw=true" alt="Settings" width="600"><br>
+  <i>Settings</i>
+</p>
 
 https://private-user-images.githubusercontent.com/229497341/628825916-c36bb746-abab-4702-97cd-4b54fa3ab894.mp4?jwt=eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.eyJpc3MiOiJnaXRodWIuY29tIiwiYXVkIjoicmF3LmdpdGh1YnVzZXJjb250ZW50LmNvbSIsImtleSI6ImtleTUiLCJleHAiOjE3ODUzNzAyODYsIm5iZiI6MTc4NTM2OTk4NiwicGF0aCI6Ii8yMjk0OTczNDEvNjI4ODI1OTE2LWMzNmJiNzQ2LWFiYWItNDcwMi05N2NkLTRiNTRmYTNhYjg5NC5tcDQ_WC1BbXotQWxnb3JpdGhtPUFXUzQtSE1BQy1TSEEyNTYmWC1BbXotQ3JlZGVudGlhbD1BS0lBVkNPRFlMU0E1M1BRSzRaQSUyRjIwMjYwNzMwJTJGdXMtZWFzdC0xJTJGczMlMkZhd3M0X3JlcXVlc3QmWC1BbXotRGF0ZT0yMDI2MDczMFQwMDA2MjZaJlgtQW16LUV4cGlyZXM9MzAwJlgtQW16LVNpZ25hdHVyZT04Y2JhNmY4MjgwZDMwYWM2OTRmODcwYjhjZjZjZmZmN2Y2NWFmZTJmYmYyZWFlYWFkZjZiZmE5NzBmZTU2ZDE1JlgtQW16LVNpZ25lZEhlYWRlcnM9aG9zdCZyZXNwb25zZS1jb250ZW50LXR5cGU9dmlkZW8lMkZtcDQifQ.mrY2UnLgjy7P3DiORrezQfMd2pOKxD81N4s6IaOqh2g
 
