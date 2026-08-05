@@ -26,7 +26,7 @@ This application allows you to send your PC's audio to any device on the same lo
 
 # 📸 Overview
 
-*Screenshots of the Material You interface.*
+*Screenshots of the Material You interface. THIS IS THE UI OF THE v1.2 I'M WORKING ON, v1.1 HAS THE OLD ONE.*
 
 <p align="center">
   <img src="https://github.com/marcomorosi06/WiFiAudioStreaming-Desktop/blob/master/images/server.jpg?raw=true" alt="Server Mode"><br>
