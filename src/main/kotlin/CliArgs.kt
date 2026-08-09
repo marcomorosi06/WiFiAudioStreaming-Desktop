@@ -76,6 +76,7 @@ data class CliArgs(
     val ipFamily:        NetAddr.Family  = NetAddr.Family.AUTO,
     val usb:             Boolean?        = null,
     val usbLatency:      Int?            = null,
+    val latency:         Int?            = null,
     val usbIface:        String?         = null,
     val noTray:          Boolean         = false,
     val wfasMode:        String?         = null,
@@ -85,9 +86,11 @@ data class CliArgs(
     val groove:          Float           = 0f,
     val monitor:         Boolean         = false,
     val printHelp:       Boolean         = false,
+    val helpTopic:       String?         = null,
     val printBareHint:   Boolean         = false,
     val printVersion:    Boolean         = false,
     val printProtocol:   Boolean         = false,
+    val printDevices:    Boolean         = false,
     val printFred:       Boolean         = false,
     val printLicenses:   Boolean         = false,
     val debug:           Boolean         = false,
@@ -120,6 +123,8 @@ data class CliArgs(
             }.getOrNull() ?: "unknown"
             displayVersion(raw)
         }
+
+        val OFFLINE_PAIR_VERBS = setOf("inspect", "check", "parse", "encode", "render")
 
         fun parse(args: Array<String>): CliArgs {
             val isHeadless = GraphicsEnvironment.isHeadless()
@@ -171,6 +176,7 @@ data class CliArgs(
             var ipFamily        = NetAddr.Family.AUTO
             var usb: Boolean?               = null
             var usbLatency: Int?            = null
+            var latency: Int?               = null
             var usbIface: String?           = null
             var noTray = false
             var wfasMode: String?           = null
@@ -190,9 +196,11 @@ data class CliArgs(
             var groove          = 0f
             var monitor         = false
             var printHelp       = false
+            var helpTopic: String?          = null
             var printBareHint   = false
             var printVersion    = false
             var printProtocol   = false
+            var printDevices    = false
             var printFred       = false
             var printLicenses   = false
             var debug           = false
@@ -324,6 +332,27 @@ data class CliArgs(
                             }
                         }
                         if (pairCmd is PairCommand.Connect) runMode = RunMode.CLI_CLIENT
+                    }
+
+                    "devices", "list-devices" -> {
+                        modeExplicit = true
+                        printDevices = true
+                    }
+
+                    "inspect", "check", "parse" -> {
+                        modeExplicit = true
+                        val u = args.getOrNull(i + 1)
+                            ?: parseError("'inspect' requires an invite link")
+                        i++
+                        pairCmd = PairCommand.Inspect(u)
+                    }
+
+                    "encode", "render" -> {
+                        modeExplicit = true
+                        val t = args.getOrNull(i + 1)
+                            ?: parseError("'encode' requires the text to encode")
+                        i++
+                        pairCmd = PairCommand.Encode(t)
                     }
 
                     "--qr"        -> qr = true
@@ -465,6 +494,16 @@ data class CliArgs(
                         usbLatency = ms
                         usb = usb ?: true
                     }
+                    "--latency" -> {
+                        val raw = nextArg(args, i, "--latency")
+                            ?: parseError("--latency requires a value in milliseconds")
+                        i++
+                        val ms = raw.toIntOrNull()
+                            ?: parseError("--latency must be numeric, got '$raw'")
+                        if (ms < 0 || ms > 5000)
+                            parseError("--latency must be between 0 and 5000, got $ms")
+                        latency = ms
+                    }
                     "--no-tray" -> noTray = true
                     "--usb-iface" -> {
                         usbIface = nextArg(args, i, "--usb-iface")
@@ -518,7 +557,11 @@ data class CliArgs(
                         }
                     }
                     "--monitor", "--listen" -> monitor = true
-                    "--help", "-h"     -> printHelp     = true
+                    "--help", "-h"     -> {
+                        printHelp = true
+                        val next = args.getOrNull(i + 1)
+                        if (next != null && !next.startsWith("-")) { helpTopic = next; i++ }
+                    }
                     "--cli-no-args"    -> printBareHint = true   // interno: passato dallo shim wfas
                     "--version", "-v"  -> printVersion  = true
                     "--protocol"       -> printProtocol = true
@@ -638,6 +681,7 @@ data class CliArgs(
                 ipFamily        = ipFamily,
                 usb             = usb,
                 usbLatency      = usbLatency,
+                latency         = latency,
                 usbIface        = usbIface,
                 noTray          = noTray,
                 wfasMode        = wfasMode,
@@ -647,9 +691,11 @@ data class CliArgs(
                 groove          = groove,
                 monitor         = monitor,
                 printHelp       = printHelp,
+                helpTopic       = helpTopic,
                 printBareHint   = printBareHint,
                 printVersion    = printVersion,
                 printProtocol   = printProtocol,
+                printDevices    = printDevices,
                 printFred       = printFred,
                 printLicenses   = printLicenses,
                 debug           = debug,
@@ -662,276 +708,8 @@ data class CliArgs(
             )
         }
 
-        fun printHelp() {
-            val files = ConfigPaths.describeForHelp()
-            val fileWidth = files.maxOf { it.second.length }
-            val filesBlock = files.joinToString("\n") { (label, path) ->
-                "  ${path.padEnd(fileWidth)}  $label"
-            }
-            println("""
-WiFi Audio Streaming ${VERSION} (c) 2026 Marco Morosi - Stream audio over your local network.
-
-USAGE
-  wfas [--gui | --cli] [--mode server|client|discover] [OPTIONS]
-  wfas control <command>          (see RUNTIME CONTROL)
-
-ENTRY POINT
-  (no flags)          From a terminal: print a short hint. Otherwise open the GUI
-  --cli               CLI mode (audio server by default)
-  --gui               GUI mode
-
-MODES
-  --server            Start as audio source  (shorthand for --mode server)
-  --client            Start as audio receiver (shorthand for --mode client)
-  --mode server       Start as audio source
-  --mode client       Start as audio receiver
-  --mode discover     Scan the network for active servers
-
-SERVER OPTIONS
-  --port <n>          WFAS streaming port         (default: 9090)
-  --mic-port <n>      Microphone return port       (default: 9092)
-  --multicast         Enable multicast mode
-  --rtp               Enable RTP protocol          (implies --multicast)
-  --rtp-port <n>      RTP port                     (default: 9094)
-  --http              Enable HTTP stream            (implies --multicast)
-  --http-port <n>     HTTP port                    (default: 8080)
-  --http-safari       Enable Safari-compatible AAC  (implies --http)
-  --dlna              Push audio to the DLNA renderers saved in settings
-                      (implies --multicast)
-  --dlna-port <n>     DLNA media endpoint port     (default: 8081)
-  --dlna-format <f>   auto | lpcm | wav | mp3 | adts               (default: auto)
-  --snapcast          Act as a Snapcast server for synchronised multiroom audio.
-                      Any snapclient on the network (Raspberry Pi, ESP32, Home
-                      Assistant, the Snapcast mobile apps) can join and stay in
-                      sync. Implies --multicast.
-  --snapcast-port <n> Snapcast audio stream port   (default: 1704)
-  --snapcast-control-port <n>
-                      Snapcast JSON-RPC control port (default: 1705)
-  --snapcast-codec <c>
-                      pcm | flac | opus                            (default: pcm)
-                      flac roughly halves the bandwidth; opus needs 48000:16:2.
-  --snapcast-chunk <n>
-                      Chunk size in ms: 10 | 20 | 40 | 60           (default: 20)
-  --snapcast-buffer <n>
-                      Client playback buffer in ms                (default: 1000)
-  --snapcast-name <s> Stream identifier advertised to clients (default: default)
-  --auth-mode <m>     Connection authorization: off | ask | key  (default: off;
-                      unicast only). 'ask' prompts on the terminal per client.
-  --auth-key <key>    Pre-shared key (implies --auth-mode key). The key is never
-                      sent on the wire (mutual HMAC challenge-response).
-  --encrypt           Encrypt the audio with ChaCha20-Poly1305. Requires a key,
-                      so pair it with --auth-key, or use --qr to have one
-                      generated. See --protocol for the wire details.
-  --sdp               Print stream.sdp to stdout when server starts
-  --sdp-out <path>    Write stream.sdp to file     (e.g. /tmp/stream.sdp)
-  --legacy-engine     Use the legacy FFmpeg grabber instead of the native C
-                      audio engine. Native engine is the default on all platforms:
-                        Windows  WASAPI loopback (no virtual driver needed)
-                        macOS    ScreenCaptureKit
-                        Linux    PulseAudio/PipeWire via dlopen
-                      Use --legacy-engine on Linux if PulseAudio is unavailable
-                      or for compatibility with older setups.
-
-CLIENT OPTIONS
-  --connect <ip>      Server IP to connect to      (auto-discover if omitted;
-                      implies client mode)
-  --output <name>     Audio output device name     (system default if omitted)
-
-MIC OPTIONS  (client-to-server return channel)
-  Sends the client's microphone back to the server (talkback), independent
-  of the main server-to-client audio stream.
-  --mic               Enable microphone return
-  --mic-input <name>  Microphone device name
-  --mic-routing <m>   mix | virtual | off          (default: mix when --mic)
-                        mix      blend mic into the server's captured audio
-                        virtual  expose mic on the server as a virtual device
-                        off      disable
-
-AUDIO
-  --volume <0-100>    Initial volume percentage    (default: 100)
-  --mute              Start muted
-
-RUNTIME CONTROL  (wfas control <command>)
-  volume <0-100>      Set output volume
-  mute | unmute       Toggle audio output
-  stop                Stop the running instance
-  status              Show current streaming status
-
-CONFIGURATION  (wfas config <command>)
-  Persistent settings live in a single config.json shared by the CLI and the
-  GUI. Changes apply the next time a server/client starts or the GUI opens.
-  list                Show every setting and its current value
-  get <key>           Print one setting (e.g. audio.sampleRate)
-  set <key> <value>   Change one setting and save it
-  path                Print the config.json path for this system
-  edit                Open config.json in your default editor (${'$'}EDITOR)
-  reset               Restore all settings to their defaults
-  export [file]       Write the config to <file> (or stdout if omitted)
-  import <file>       Load a config.json and make it active
-  Add --json to any config command for machine-readable output.
-
-QR PAIRING  (wfas pair <command>)
-  Hands a receiver everything it needs in one shot: address, port and a freshly
-  generated 256-bit key. The key is never typed and never travels on the wire -
-  the invite carries it, the handshake proves it (see --protocol). Invites last
-  ${WfasPairingUri.PAIRING_TTL_SECONDS} seconds.
-  invite              Generate an invite and draw it as a QR code on the terminal.
-                      With a server already running, the invite is generated by
-                      that instance so it matches the live session; otherwise it
-                      is generated offline and saved to the config, ready for the
-                      next 'wfas --server'.
-  regenerate          Same, but always with a brand new key. In multicast this
-                      evicts every listener still using the old one, which is
-                      exactly what you want after handing the code to the wrong
-                      person. Aliases: rekey, new-key
-  connect <link>      Join using an invite link (wifiaudio://pair?… or the https
-                      form). Starts the client with the key already applied.
-  inspect <link>      Decode a link and show what it contains, without connecting.
-                      Exits non-zero if it has expired. Alias: check
-  encode <text>       Render any text as a QR code on the terminal.
-  status              Show pairing state, key origin and handler registration
-  off                 Turn QR pairing off and restore the manually typed key
-  register            Force-register the wifiaudio:// handler with this OS
-                      (per-user, no administrator rights). Every run already does
-                      this in the background, rewriting the entry when it points
-                      at a different executable, so moving or reinstalling the app
-                      repairs itself. Use this only to see the repair fail loudly.
-  unregister          Remove the handler
-  Add --watch to 'invite' for a live countdown that renews the code on expiry;
-  press n for a new invite, r for a new key, k to reveal the key, q to quit.
-
-QR RENDERING OPTIONS
-  --qr                Server mode: generate a key, start encrypted, and print the
-                      pairing QR. Implies --auth-mode key and --encrypt, so it
-                      needs no --auth-key: the code carries the key it made.
-                      Then p prints a new invite and r rotates the key
-  --no-qr             Print only the link, no ASCII art
-  --plain             Two characters per module instead of half-blocks. Use it if
-                      the terminal font has no U+2580/U+2584; needs twice the width
-  --invert            Invert the code for terminals with a light background
-  --show-key          Print the pairing key instead of masking it
-
-FIREWALL  (wfas firewall <command>)   [Windows only]
-  Opens the inbound UDP ports so clients can reach this machine, exactly like
-  the button in the GUI settings. Prompts once for administrator approval.
-  allow [ports]       Allow inbound UDP. With no ports, opens the configured
-                      streaming, discovery (9091) and mic ports. Or pass a list,
-                      e.g. 'wfas firewall allow 9090,9091'
-  status              Show whether the WFAS firewall rule is active
-  Add --json for machine-readable output.
-
-DISCOVER OPTIONS
-  --watch             Keep scanning (live update)
-
-LINK OPTIONS  (transport and address family)
-  --usb               Stream over the USB cable instead of Wi-Fi. Enable USB
-                      tethering on the Android phone: the phone becomes the
-                      gateway and the app finds the link on its own. Lower and
-                      far steadier jitter than Wi-Fi, which is what lets the
-                      buffer shrink. Not available on macOS: there is no
-                      built-in RNDIS driver, so Android USB tethering does not
-                      come up. Overrides the saved net.usbMode for this run.
-  --no-usb            Force the USB link off even if enabled in the config.
-  --usb-latency <ms>  Jitter buffer used only while the USB link is up
-                      (default: 20, range 5-120). The Wi-Fi buffer set by
-                      --latency is left untouched. Implies --usb.
-  --no-tray           Start the GUI without the Linux tray icon. Use this if the
-                      app segfaults inside libgtk-3 on launch; the tray is the
-                      only part that touches GTK. Same as WFAS_NO_TRAY=1, or
-                      'wfas config set ui.linuxTray OFF' to make it permanent.
-  --usb-iface <name>  Force a specific tethering interface instead of picking
-                      one automatically. Accepts the interface name or its
-                      display name as listed by --debug, or 'Auto' to restore
-                      detection. Implies --usb.
-  --wfas-mode <m>     When this device serves the native WFAS protocol:
-                        always      always, over Wi-Fi and over the cable
-                        not-on-usb  over Wi-Fi, but suppressed as soon as the
-                                    USB link comes up (default)
-                        off         never over Wi-Fi; only the cable and the
-                                    other protocols remain
-                      With 'off' and no --rtp/--http and no USB link there is
-                      nothing left to serve, and the server refuses to start.
-  --ip4, --ipv4       Use IPv4 only: bind 0.0.0.0, announce and listen on the
-                      239.255.0.1 group alone.
-  --ip6, --ipv6       Use IPv6 only: the [ff02::5746] group alone.
-                      Without either flag the app is dual-stack: it binds the
-                      wildcard, joins both groups, and picks per-peer the most
-                      usable address (a routable v4 or v6 wins over a
-                      link-local). Force a family only to work around a broken
-                      network; on a v6-only LAN auto already does the right
-                      thing.
-
-GLOBAL OPTIONS
-  --interface <name>  Network interface            (default: Auto)
-  --config <path>     Alternate settings file
-  --json              All output as JSON
-  --quiet             Suppress logs, only errors to stderr
-  --viz [theme]       Animated ASCII spectrum histogram of the audio stream.
-                      Optional theme: a hex color (e.g. #1e88e5) recolors the
-                      whole view via the Material You palette, or 'rainbow'
-                      for an animated dynamic rainbow.
-  --groove [amount]   Only with --viz: adaptive spectrum. Instead of drawing
-                      raw levels (where bass pins the low bars at full scale
-                      and everything else flattens into one blob) each band is
-                      compared with its frequency neighbours, so a note that
-                      pokes out of its region is lifted, and a slow per-band
-                      envelope is subtracted, so the constant part of the mix
-                      stops dominating. Optional amount: soft | normal | hard,
-                      or 0-160. Press 'g' in the visualizer to toggle it live.
-  --monitor           Only with --viz: no server, just visualize the system
-                      audio (loopback) without lowering the system volume.
-                      Alias: --listen
-  --debug             Live debug HUD: audio packet table + microphone
-                      send/receive table (with --mic), then internal logs
-  --protocol          Explain the WFAS v2 wire protocol and exit
-  --licenses          Show third-party open-source licenses and exit
-  --check-update      Check GitHub for a newer release and exit
-  --auto-check-update on|off
-                      Enable or disable the automatic update check at startup
-  --help              Show this help
-  --version           Show version
-
-EXAMPLES
-  wfas --server                           # start CLI audio server, default settings
-  wfas --mode server --rtp --sdp          # server + RTP, print SDP
-  wfas --connect 192.168.1.5              # connect to a specific server
-  wfas --mode discover --json             # scan and output JSON
-  wfas control volume 75                  # set volume on running instance
-  wfas config set audio.sampleRate 44100  # change a setting (GUI + CLI)
-  wfas config list                        # show every setting and its value
-  wfas config path                        # print the config.json path
-  wfas firewall allow                     # open the default ports in the firewall
-  wfas firewall status                    # check if the firewall rule is active
-  wfas --server --qr                      # start a server and show its pairing QR
-  wfas pair invite --watch                # live QR that renews itself on expiry
-  wfas pair invite --json                 # the invite as JSON, for scripts
-  wfas pair connect 'wifiaudio://pair?…'  # join from an invite link
-  wfas pair inspect 'wifiaudio://pair?…'  # decode a link without connecting
-  wfas pair regenerate                    # new key, evicts the old listeners
-  wfas --server --usb                     # serve over the USB cable
-  wfas --server --usb --usb-latency 10    # USB with an aggressive buffer
-  wfas --client --ip6                     # receive on an IPv6-only network
-  wfas discover --json                    # each entry carries transport+family
-  wfas --gui --mode server --multicast    # open GUI, start server immediately
-  wfas --viz rainbow                      # spectrum with animated rainbow colors
-  wfas --viz "#1e88e5"                    # spectrum themed from a hex color
-  wfas --viz --monitor                    # spectrogram of system audio, no server
-  wfas --viz --monitor --groove           # same, adaptive: follows the melody
-  wfas --viz --groove hard                # maximum contrast between notes
-  wfas --protocol                         # print the WFAS v2 protocol reference
-
-FILES
-$filesBlock
-  Override the settings file with --config <path>, or print it with
-  'wfas config path'.
-
-See 'man wfas' for the full reference manual.
-
-Licensed under the EUPL, Version 1.2
-  Desktop source:   https://github.com/marcomorosi06/WiFiAudioStreaming-Desktop
-  Android app:      https://github.com/marcomorosi06/WiFiAudioStreaming-Android
-  WFAS v2 protocol: https://github.com/marcomorosi06/wfas-protocol
-            """.trimIndent())
+        fun printHelp(topic: String? = null, json: Boolean = false) {
+            CliHelp.show(topic, json, VERSION)
         }
 
         fun printBareHint() {

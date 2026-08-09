@@ -221,24 +221,45 @@ private fun printSdp(args: CliArgs, serverIp: String, audio: AudioSettings_V1) {
 // Device resolution
 // ─────────────────────────────────────────────────────────────────────────────
 
+private fun Mixer.Info.matchesName(name: String): Boolean =
+    this.name.contains(name, ignoreCase = true) || description.contains(name, ignoreCase = true)
+
 private fun resolveOutputDevice(name: String?): Mixer.Info? {
     val all = NetworkHandler_v1.findAvailableOutputMixers()
     if (name == null) return all.firstOrNull()
-    return all.firstOrNull { it.name.contains(name, ignoreCase = true) || it.description.contains(name, ignoreCase = true) }
-        ?: run {
-            err(yellow("!") + " Output device \"$name\" not found -using system default.")
-            all.firstOrNull()
-        }
+
+    all.firstOrNull { it.matchesName(name) }?.let { return it }
+
+    val raw = NetworkHandler_v1.allMixers().firstOrNull {
+        !NetworkHandler_v1.isPortMixer(it) && it.matchesName(name)
+    }
+    if (raw != null) {
+        err(yellow("!") + " Output device \"$name\" did not answer the format probe - trying it anyway.")
+        return raw
+    }
+
+    err(yellow("!") + " Output device \"$name\" not found - using system default.")
+    err(dim("    Run 'wfas devices' to see the exact names this system reports."))
+    return all.firstOrNull()
 }
 
 private fun resolveInputDevice(name: String?): Mixer.Info? {
     val all = NetworkHandler_v1.findAvailableInputMixers()
     if (name == null) return all.firstOrNull()
-    return all.firstOrNull { it.name.contains(name, ignoreCase = true) || it.description.contains(name, ignoreCase = true) }
-        ?: run {
-            err(yellow("!") + " Input device \"$name\" not found -using system default.")
-            all.firstOrNull()
-        }
+
+    all.firstOrNull { it.matchesName(name) }?.let { return it }
+
+    val raw = NetworkHandler_v1.allMixers().firstOrNull {
+        !NetworkHandler_v1.isPortMixer(it) && it.matchesName(name)
+    }
+    if (raw != null) {
+        err(yellow("!") + " Input device \"$name\" did not answer the format probe - trying it anyway.")
+        return raw
+    }
+
+    err(yellow("!") + " Input device \"$name\" not found - using system default.")
+    err(dim("    Run 'wfas devices' to see the exact names this system reports."))
+    return all.firstOrNull()
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -319,8 +340,11 @@ private fun maybeNotifyUpdate(args: CliArgs) {
 
 fun runCli(rawArgs: CliArgs) {
     AppDebug.enabled = rawArgs.debug
-    val settings = SettingsRepository.loadSettings()
-    val args = inheritSecurity(rawArgs, settings)
+    val stored = SettingsRepository.loadSettings()
+    val args = inheritSecurity(rawArgs, stored)
+    val settings = args.latency
+        ?.let { stored.copy(audio = stored.audio.copy(latencyMs = it)) }
+        ?: stored
     PairCli.applyInviteToNetwork(args)
 
     NetAddr.configureFamily(args.ipFamily)
@@ -692,6 +716,7 @@ private suspend fun runCliClient(args: CliArgs, settings: AllSettings) {
     val outputDevice = resolveOutputDevice(args.outputDevice)
     if (outputDevice == null) {
         err(red("!") + " No audio output device found.")
+        err(dim("    Run 'wfas devices' to see what Java Sound reports on this system."))
         kotlin.system.exitProcess(ExitCode.RESOURCE_ERROR)
     }
 
@@ -840,16 +865,55 @@ private suspend fun runCliClient(args: CliArgs, settings: AllSettings) {
 
 private val CliArgs.sendMic get() = mic
 
-private suspend fun connectDirect(args: CliArgs, settings: AllSettings): ServerInfo? {
+private suspend fun awaitServerAnnouncement(ip: String, timeoutMs: Long): ServerInfo? {
+    val target = NetAddr.normalize(ip)
+    val found = CompletableDeferred<ServerInfo>()
+    return try {
+        NetworkHandler_v1.beginDeviceDiscovery { _, info ->
+            if (info.lastSeen != 0L &&
+                NetAddr.normalize(info.ip) == target &&
+                !found.isCompleted
+            ) found.complete(info)
+        }
+        withTimeoutOrNull(timeoutMs) { found.await() }
+    } catch (_: Exception) {
+        null
+    } finally {
+        NetworkHandler_v1.endDeviceDiscovery()
+    }
+}
+
+private suspend fun connectDirect(args: CliArgs, settings: AllSettings): ServerInfo? = coroutineScope {
     val ip = args.serverIp!!
     if (!args.json && !args.quiet)
         out("  ${dim("Probing")} $ip:${args.port}...", args)
+
+    val announcement = async { awaitServerAnnouncement(ip, 2000) }
 
     val isMulticast = withTimeoutOrNull(2000) {
         NetworkHandler_v1.probeIsMulticast(ip, args.port)
     } ?: true
 
-    return ServerInfo(ip = ip, isMulticast = isMulticast, port = args.port)
+    val announced = announcement.await()
+    val advertised = announced?.serverAudioSettings
+
+    if (!args.json && !args.quiet) {
+        if (advertised != null) {
+            out("  ${dim("Stream format")} ${advertised.sampleRate.toInt()} Hz, " +
+                "${advertised.channels} ch, ${advertised.bitDepth}-bit", args)
+        } else {
+            err(yellow("!") + " The server did not announce its audio format; assuming this machine's settings.")
+            err(dim("    If they differ from the server's, playback speed and pitch will be wrong."))
+        }
+    }
+
+    ServerInfo(
+        ip = ip,
+        isMulticast = isMulticast,
+        port = args.port,
+        capabilities = announced?.capabilities,
+        serverAudioSettings = advertised
+    )
 }
 
 private suspend fun discoverAndChoose(args: CliArgs): ServerInfo? {

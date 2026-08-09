@@ -41,7 +41,13 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.outlined.Cast
 import androidx.compose.material.icons.outlined.Computer
+import androidx.compose.material.icons.outlined.Palette
+import androidx.compose.material.icons.outlined.QrCode2
+import androidx.compose.material.icons.outlined.Router
+import androidx.compose.material.icons.outlined.SpeakerGroup
+import androidx.compose.material.icons.outlined.Usb
 import androidx.compose.material.icons.outlined.GraphicEq
 import androidx.compose.material.icons.outlined.History
 import androidx.compose.material.icons.outlined.Https
@@ -101,6 +107,82 @@ data class ChangelogEntry(
 object Changelog {
 
     val entries: List<ChangelogEntry> = listOf(
+        ChangelogEntry(
+            version = "1.2",
+            date = Bilingual("August 2026", "Agosto 2026"),
+            headline = Bilingual(
+                "Two new protocols — DLNA and Snapcast — pairing by QR code, streaming over USB, and a rebuilt interface.",
+                "Due nuovi protocolli — DLNA e Snapcast — accoppiamento con QR code, streaming via USB e un'interfaccia ricostruita."
+            ),
+            items = listOf(
+                ChangelogItem(
+                    icon = Icons.Outlined.Cast,
+                    title = Bilingual("Play on your DLNA devices", "Riproduci sui tuoi dispositivi DLNA"),
+                    body = Bilingual(
+                        "Send the audio straight to the Smart TVs, AV receivers and network speakers you already own. They need nothing installed: pick a renderer and it starts playing.",
+                        "Manda l'audio direttamente alle Smart TV, ai sintoamplificatori e ai diffusori di rete che possiedi già. Su di loro non serve installare nulla: scegli un renderer e parte."
+                    )
+                ),
+                ChangelogItem(
+                    icon = Icons.Outlined.SpeakerGroup,
+                    title = Bilingual("Snapcast multiroom", "Multiroom con Snapcast"),
+                    body = Bilingual(
+                        "Turn this computer into a Snapcast server: every snapclient on the network — Raspberry Pi, ESP32, Home Assistant, the mobile apps — joins in and plays in sync, room after room.",
+                        "Trasforma questo computer in un server Snapcast: ogni snapclient sulla rete — Raspberry Pi, ESP32, Home Assistant, le app mobili — si unisce e riproduce in sincrono, stanza dopo stanza."
+                    )
+                ),
+                ChangelogItem(
+                    icon = Icons.Outlined.QrCode2,
+                    title = Bilingual("Pair with a QR code", "Accoppiamento con QR code"),
+                    body = Bilingual(
+                        "Address, port and a freshly generated key handed over in one shot. The key is never typed and never travels on the wire — scan the code and you are connected, encrypted.",
+                        "Indirizzo, porta e una chiave appena generata consegnati in un colpo solo. La chiave non si digita mai e non viaggia mai sulla rete — inquadri il codice e sei connesso, cifrato."
+                    )
+                ),
+                ChangelogItem(
+                    icon = Icons.Outlined.Usb,
+                    title = Bilingual("Stream over USB", "Streaming via USB"),
+                    body = Bilingual(
+                        "Plug the phone in and the audio takes the cable instead of the air: lower latency, no Wi-Fi congestion, and it keeps working where the network does not.",
+                        "Collega il telefono e l'audio prende il cavo invece dell'aria: meno latenza, nessuna congestione Wi-Fi e continua a funzionare dove la rete non arriva."
+                    )
+                ),
+                ChangelogItem(
+                    icon = Icons.Outlined.Palette,
+                    title = Bilingual("A rebuilt interface", "Interfaccia ricostruita"),
+                    body = Bilingual(
+                        "The whole window has been redrawn around what you actually do: start a stream, see who is listening, change protocol. The discovery list is clearer and no longer shows stale servers.",
+                        "L'intera finestra è stata ridisegnata attorno a ciò che fai davvero: avviare uno stream, vedere chi ascolta, cambiare protocollo. La lista di discovery è più chiara e non mostra più server ormai spariti."
+                    )
+                ),
+                ChangelogItem(
+                    icon = Icons.Outlined.Router,
+                    title = Bilingual("IPv6 and mixed networks", "IPv6 e reti miste"),
+                    body = Bilingual(
+                        "Discovery and streaming now behave on IPv6 and on networks with several interfaces, picking the one that actually reaches the other device.",
+                        "Discovery e streaming ora si comportano bene su IPv6 e su reti con più interfacce, scegliendo quella che raggiunge davvero l'altro dispositivo."
+                    )
+                ),
+                ChangelogItem(
+                    icon = Icons.Outlined.Sync,
+                    title = Bilingual("Older clients spotted sooner", "Client vecchi riconosciuti prima"),
+                    body = Bilingual(
+                        "When a device is running an older version, you are told before the connection fails rather than after, and exactly which side to update.",
+                        "Quando un dispositivo usa una versione più vecchia, te lo dice prima che la connessione fallisca invece che dopo, e ti indica esattamente quale lato aggiornare."
+                    )
+                ),
+                ChangelogItem(
+                    icon = Icons.Outlined.PhoneAndroid,
+                    title = Bilingual("Update the Android app too", "Aggiorna anche l'app Android"),
+                    body = Bilingual(
+                        "WiFi Audio Streaming for Android has been updated as well. Update it too so both ends stay compatible.",
+                        "Anche WiFi Audio Streaming per Android è stata aggiornata. Aggiornala anche tu, così i due lati restano compatibili."
+                    ),
+                    linkLabel = Bilingual("Open on GitHub", "Apri su GitHub"),
+                    linkUrl = ANDROID_RELEASES_URL
+                )
+            )
+        ),
         ChangelogEntry(
             version = "1.1",
             date = Bilingual("June 2026", "Giugno 2026"),

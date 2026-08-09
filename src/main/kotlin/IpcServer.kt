@@ -104,6 +104,10 @@ object IpcServer {
                 }
                 is ControlCommand.Status -> {
                     val uptimeSec = (System.currentTimeMillis() - startTimeMs) / 1000
+                    val snap = SnapcastStatus.session.value
+                    val dlnaOn = args.dlna || NetworkHandler_v1.dlnaActive()
+                    val snapcastOn = args.snapcast || NetworkHandler_v1.snapcastActive()
+                    val dlnaTargets = DlnaStatus.targets.value
                     buildResponse("ok", mapOf(
                         "mode"     to args.runMode.name.lowercase().removePrefix("cli_"),
                         "volume"   to NetworkHandler_v1.currentServerVolume,
@@ -111,9 +115,18 @@ object IpcServer {
                         "port"     to args.port,
                         "rtp"      to args.rtp,
                         "http"     to args.http,
-                        "snapcast" to args.snapcast,
+                        "dlna"     to dlnaOn,
+                        "dlna_port" to args.dlnaPort,
+                        "dlna_format" to args.dlnaFormat,
+                        "dlna_clients" to NetworkHandler_v1.dlnaClientCount(),
+                        "dlna_targets" to dlnaTargets.size,
+                        "dlna_renderers" to dlnaTargets.joinToString(", ") { it.name },
+                        "snapcast" to snapcastOn,
                         "snapcast_clients" to NetworkHandler_v1.snapcastClientCount(),
-                        "snapcast_codec" to SnapcastStatus.session.value.codec,
+                        "snapcast_codec" to snap.codec,
+                        "snapcast_port" to snap.streamPort,
+                        "snapcast_control_port" to snap.controlPort,
+                        "snapcast_stream" to args.snapcastStreamName,
                         "uptime"   to uptimeSec,
                         "pid"      to pid,
                         "usb"      to UsbLink.isReady(),

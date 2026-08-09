@@ -326,11 +326,17 @@ fun AppContent(
                     streamingPort = streamingPort,
                     onAppSettingsChange = onAppSettingsChange,
                     onPairingReady = { payload ->
+                        val target = NetAddr.normalize(payload.ip)
+                        val known = discoveredDevices.values.firstOrNull {
+                            NetAddr.normalize(it.ip) == target
+                        }
                         onConnectToServer(
                             ServerInfo(
-                                ip = NetAddr.normalize(payload.ip),
+                                ip = target,
                                 isMulticast = payload.isMulticast,
-                                port = payload.port
+                                port = payload.port,
+                                capabilities = known?.capabilities,
+                                serverAudioSettings = known?.serverAudioSettings
                             )
                         )
                     },

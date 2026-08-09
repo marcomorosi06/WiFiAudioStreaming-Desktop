@@ -32,7 +32,7 @@ class AudioEngine(
 
     private var started = false
 
-    private val numSamplesPerRead = bufferFrames * channels
+    private val numSamplesPerRead = bufferFrames * 2
     private val readBufShort      = ShortArray(numSamplesPerRead)
 
     private external fun nativeStart(sampleRate: Int, channels: Int, bufferFrames: Int, muteRender: Boolean): Boolean

@@ -26,6 +26,8 @@ object CliPathInstaller {
 
     private val macSymlinkTarget = "/usr/local/bin/wfas"
 
+    private val WINDOWS_VM_OPTIONS = listOf("-XX:UseAVX=2")
+
     sealed class InstallResult {
         object Success          : InstallResult()
         object TerminalLaunched : InstallResult()
@@ -216,7 +218,10 @@ object CliPathInstaller {
                 else      -> return
             }
             if (!shim.exists()) return
-            if (!shim.readText().contains("MainKt --help")) return
+            val body = shim.readText()
+            val legacy = body.contains("MainKt --help")
+            val missingVmOptions = isWindows && !body.contains("WFAS_VMOPTS")
+            if (!legacy && !missingVmOptions) return
             install()
         }
     }
@@ -253,10 +258,11 @@ object CliPathInstaller {
                 "set \"WFAS_CP=$cpWildcard\"\r\n" +
                 "set \"WFAS_RESDIR=$resourcesDir\"\r\n" +
                 "set \"WFAS_APPDIR=$appDir\"\r\n" +
+                "set \"WFAS_VMOPTS=${WINDOWS_VM_OPTIONS.joinToString(" ")}\"\r\n" +
                 "if \"%~1\"==\"\" (\r\n" +
-                "    \"%WFAS_JAVA%\" \"-Dskiko.library.path=%WFAS_APPDIR%\" -Dcompose.application.configure.swing.globals=true \"-Dcompose.application.resources.dir=%WFAS_RESDIR%\" -cp \"%WFAS_CP%\" MainKt --cli-no-args\r\n" +
+                "    \"%WFAS_JAVA%\" %WFAS_VMOPTS% \"-Dskiko.library.path=%WFAS_APPDIR%\" -Dcompose.application.configure.swing.globals=true \"-Dcompose.application.resources.dir=%WFAS_RESDIR%\" -cp \"%WFAS_CP%\" MainKt --cli-no-args\r\n" +
                 ") else (\r\n" +
-                "    \"%WFAS_JAVA%\" \"-Dskiko.library.path=%WFAS_APPDIR%\" -Dcompose.application.configure.swing.globals=true \"-Dcompose.application.resources.dir=%WFAS_RESDIR%\" -cp \"%WFAS_CP%\" MainKt %*\r\n" +
+                "    \"%WFAS_JAVA%\" %WFAS_VMOPTS% \"-Dskiko.library.path=%WFAS_APPDIR%\" -Dcompose.application.configure.swing.globals=true \"-Dcompose.application.resources.dir=%WFAS_RESDIR%\" -cp \"%WFAS_CP%\" MainKt %*\r\n" +
                 ")\r\n"
             )
         }.onFailure { return InstallResult.Failure("Cannot write wfas.bat: ${it.message}") }

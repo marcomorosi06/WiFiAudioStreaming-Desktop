@@ -723,10 +723,14 @@ object NetworkHandler_v1 {
 
     fun dlnaClientCount(): Int = dlnaManager?.activeClientCount() ?: 0
 
+    fun dlnaActive(): Boolean = dlnaManager != null
+
     val snapcastSession: kotlinx.coroutines.flow.StateFlow<SnapcastSessionState>
         get() = SnapcastStatus.session
 
     fun snapcastClientCount(): Int = snapcastManager?.activeClientCount() ?: 0
+
+    fun snapcastActive(): Boolean = snapcastManager != null
 
     // ── Linux audio routing ────────────────────────────────────────────────────
     private var originalLinuxSink:   String? = null
@@ -807,19 +811,39 @@ object NetworkHandler_v1 {
     }
 
     // ── Device enumeration ────────────────────────────────────────────────────
-    fun findAvailableOutputMixers(): List<Mixer.Info> = AudioSystem.getMixerInfo().filter { info ->
-        !info.name.startsWith("Port", ignoreCase = true) &&
-                runCatching {
-                    AudioSystem.getMixer(info).isLineSupported(Line.Info(SourceDataLine::class.java))
-                }.getOrDefault(false)
+    fun allMixers(): List<Mixer.Info> =
+        runCatching { AudioSystem.getMixerInfo().toList() }.getOrDefault(emptyList())
+
+    fun isPortMixer(info: Mixer.Info): Boolean = info.name.startsWith("Port", ignoreCase = true)
+
+    fun supportsLine(info: Mixer.Info, lineClass: Class<*>): Boolean = runCatching {
+        AudioSystem.getMixer(info).isLineSupported(Line.Info(lineClass))
+    }.getOrDefault(false)
+
+    private fun mixersFor(lineClass: Class<*>): List<Mixer.Info> {
+        val candidates = allMixers().filterNot { isPortMixer(it) }
+        if (candidates.isEmpty()) return emptyList()
+
+        val outputs = candidates.filter { supportsLine(it, SourceDataLine::class.java) }
+        val inputs  = candidates.filter { supportsLine(it, TargetDataLine::class.java) }
+        val probed  = if (lineClass == SourceDataLine::class.java) outputs else inputs
+        if (probed.isNotEmpty()) return probed
+
+        val probeIsBlind = outputs.isEmpty() && inputs.isEmpty()
+        return if (probeIsBlind) candidates else emptyList()
     }
 
-    fun findAvailableInputMixers(): List<Mixer.Info> = AudioSystem.getMixerInfo().filter { info ->
-        !info.name.startsWith("Port", ignoreCase = true) &&
-                runCatching {
-                    AudioSystem.getMixer(info).isLineSupported(Line.Info(TargetDataLine::class.java))
-                }.getOrDefault(false)
+    fun probeIsBlind(): Boolean {
+        val candidates = allMixers().filterNot { isPortMixer(it) }
+        return candidates.isNotEmpty() &&
+            candidates.none {
+                supportsLine(it, SourceDataLine::class.java) || supportsLine(it, TargetDataLine::class.java)
+            }
     }
+
+    fun findAvailableOutputMixers(): List<Mixer.Info> = mixersFor(SourceDataLine::class.java)
+
+    fun findAvailableInputMixers(): List<Mixer.Info> = mixersFor(TargetDataLine::class.java)
 
     fun checkVirtualDriverStatus(useNativeEngine: Boolean = true): VirtualDriverStatus {
         val os = System.getProperty("os.name").lowercase()
@@ -1703,12 +1727,24 @@ object NetworkHandler_v1 {
         onPcm: ((ShortArray) -> Unit)? = null,
         onChunk: suspend (bytesToSend: Int) -> Unit
     ) {
-        if (frame.samples == null) return
-        val shortBuffer = frame.samples[0] as java.nio.ShortBuffer
-        shortBuffer.position(0)
-        while (shortBuffer.hasRemaining()) {
-            val shortsToRead = minOf(shortBuffer.remaining(), maxShortsPerPacket)
-            shortBuffer.get(chunkArray, 0, shortsToRead)
+        val samples = frame.samples ?: return
+        val source = samples.getOrNull(0) as? java.nio.ShortBuffer ?: return
+
+        val pcm = runCatching {
+            source.position(0)
+            val available = source.remaining()
+            if (available <= 0) return
+            ShortArray(available).also { source.get(it, 0, available) }
+        }.getOrElse {
+            AppDebug.log("[SERVER] frame del grabber non leggibile: ${it.message}")
+            return
+        }
+
+        var offset = 0
+        while (offset < pcm.size) {
+            val shortsToRead = minOf(pcm.size - offset, maxShortsPerPacket)
+            pcm.copyInto(chunkArray, 0, offset, offset + shortsToRead)
+            offset += shortsToRead
             softwareMicMixer.mixInto(chunkArray, shortsToRead)
             val vol = currentServerVolume
             if (vol != 1.0f) {
@@ -3109,6 +3145,12 @@ object NetworkHandler_v1 {
             val playbackSettings = advertised ?: audioSettings
             if (advertised != null) {
                 AppDebug.log("[CLIENT] Using server-advertised format: ${describeFormat(advertised)}")
+            } else {
+                AppDebug.log(
+                    "[CLIENT] Server did not advertise a format (no discovery announcement seen): " +
+                        "assuming local ${describeFormat(audioSettings)}. If the server streams anything " +
+                        "else, playback speed and pitch will be wrong."
+                )
             }
 
             try {
@@ -3334,13 +3376,13 @@ object NetworkHandler_v1 {
                                                     val plain = ByteArray(AUDIO_HEADER_SIZE + r.pcm.size)
                                                     System.arraycopy(bytes, 0, plain, 0, AUDIO_HEADER_SIZE)
                                                     System.arraycopy(r.pcm, 0, plain, AUDIO_HEADER_SIZE, r.pcm.size)
-                                                    handleAudioPacket(p, plain, plain.size, audioSettings.channels, playbackState, onAudioFrame)
+                                                    handleAudioPacket(p, plain, plain.size, playbackSettings.channels, playbackState, onAudioFrame)
                                                 }
                                                 // replay/auth-fail/malformed -> drop
                                             }
                                             // encrypted but no key -> drop
                                         } else if (!serverEncrypts) {
-                                            handleAudioPacket(p, bytes, bytes.size, audioSettings.channels, playbackState, onAudioFrame)
+                                            handleAudioPacket(p, bytes, bytes.size, playbackSettings.channels, playbackState, onAudioFrame)
                                         }
                                         // cleartext after encryption seen -> drop (downgrade)
                                     }
@@ -3591,6 +3633,8 @@ object NetworkHandler_v1 {
         var expectedSeq = -1
         var expectedSamplePos = -1L
         var lastGoodPcm: ByteArray? = null
+        var inSilence = false
+        var concealTail: ByteArray? = null
     }
 
     private class JitterAudioPlayer(
@@ -3653,6 +3697,78 @@ object NetworkHandler_v1 {
         private val minDropIntervalNs = 250_000_000L
         private var lastDropAt = 0L
 
+        private val driftChannels = channels.coerceAtLeast(1)
+        private var avgBufferedBytes = targetBytes.toDouble()
+        @Volatile private var driftRatio = 1.0
+        private var lastRetuneAt = 0L
+        private var lastDriftLogAt = 0L
+        private var resamplePos = 0.0
+        private var resampleCarry = ShortArray(0)
+
+        private fun retune(now: Long) {
+            if (now - lastRetuneAt < 200_000_000L) return
+            lastRetuneAt = now
+            val buffered = queuedBytes.get().toDouble()
+            avgBufferedBytes = avgBufferedBytes * 0.9 + buffered * 0.1
+            val err = avgBufferedBytes - targetBytes
+            val errRatio = if (targetBytes > 0) err / targetBytes.toDouble() else 0.0
+            driftRatio = (1.0 + errRatio * 0.05).coerceIn(0.995, 1.005)
+            if (now - lastDriftLogAt > 10_000_000_000L) {
+                lastDriftLogAt = now
+                AppDebug.log(
+                    "[PLAYOUT] buffered=${(buffered * 1000 / bytesPerSec).toInt()}ms " +
+                        "target=${(targetBytes.toLong() * 1000 / bytesPerSec).toInt()}ms " +
+                        "ratio=${"%.5f".format(driftRatio)}"
+                )
+            }
+        }
+
+        private fun resampleForDrift(chunk: ByteArray, offset: Int, len: Int): Pair<ByteArray, Int> {
+            val ratio = driftRatio
+            val frames = len / frameBytes
+            if (ratio == 1.0 || frames < 2) return chunk to len
+
+            val ch = driftChannels
+            val hasCarry = resampleCarry.size == ch
+            val total = frames + (if (hasCarry) 1 else 0)
+            val src = ShortArray(total * ch)
+            var si = 0
+            if (hasCarry) { resampleCarry.copyInto(src, 0); si = ch }
+            val bb = java.nio.ByteBuffer.wrap(chunk, offset, len).order(java.nio.ByteOrder.LITTLE_ENDIAN)
+            for (i in 0 until frames * ch) src[si + i] = bb.short
+
+            val maxOut = ((total - 1) / ratio).toInt() + 2
+            val out = ShortArray(maxOut * ch)
+            var o = 0
+            var p = resamplePos
+            while (p.toInt() + 1 < total && o < maxOut) {
+                val idx = p.toInt()
+                val frac = (p - idx).toFloat()
+                for (c in 0 until ch) {
+                    val a = src[idx * ch + c].toFloat()
+                    val b = src[(idx + 1) * ch + c].toFloat()
+                    out[o * ch + c] = (a + (b - a) * frac).toInt()
+                        .coerceIn(Short.MIN_VALUE.toInt(), Short.MAX_VALUE.toInt()).toShort()
+                }
+                o++
+                p += ratio
+            }
+            resamplePos = (p - (total - 1)).coerceAtLeast(0.0)
+            resampleCarry = ShortArray(ch) { src[(total - 1) * ch + it] }
+
+            val outBytes = ByteArray(o * frameBytes)
+            val ob = java.nio.ByteBuffer.wrap(outBytes).order(java.nio.ByteOrder.LITTLE_ENDIAN)
+            for (i in 0 until o * ch) ob.putShort(out[i])
+            return outBytes to outBytes.size
+        }
+
+        private fun writeCompensated(chunk: ByteArray, offset: Int, len: Int) {
+            if (len <= 0) return
+            val (buf, n) = resampleForDrift(chunk, offset, len)
+            if (buf === chunk) runCatching { line.write(chunk, offset, len) }
+            else runCatching { line.write(buf, 0, n) }
+        }
+
         // Il silenzio iniettato quando la coda si svuota va restituito, altrimenti ogni
         // buco di rete sposta in avanti la riproduzione in modo permanente.
         private val paddingDebt = java.util.concurrent.atomic.AtomicInteger(0)
@@ -3680,6 +3796,7 @@ object NetworkHandler_v1 {
                         }
                     }
                     val now = System.nanoTime()
+                    retune(now)
                     if (queuedBytes.get() > highBytes && now - lastDropAt > minDropIntervalNs) {
                         val stale = queue.poll()
                         if (stale != null) {
@@ -3694,12 +3811,12 @@ object NetworkHandler_v1 {
                         queuedBytes.addAndGet(-chunk.size)
                         val debt = paddingDebt.get()
                         if (debt <= 0) {
-                            runCatching { line.write(chunk, 0, chunk.size) }
+                            writeCompensated(chunk, 0, chunk.size)
                         } else {
                             val skip = minOf(debt, chunk.size).let { it - (it % frameBytes) }
                             paddingDebt.addAndGet(-skip)
                             if (skip < chunk.size) {
-                                runCatching { line.write(chunk, skip, chunk.size - skip) }
+                                writeCompensated(chunk, skip, chunk.size - skip)
                             }
                         }
                     } else {
@@ -3755,29 +3872,98 @@ object NetworkHandler_v1 {
         }
     }
 
-    private fun concealGap(player: JitterAudioPlayer, lastGood: ByteArray?, totalBytes: Int, frameBytes: Int) {
-        var remaining = totalBytes - (totalBytes % frameBytes)
-        if (remaining <= 0) return
-        val ref = lastGood
-        if (ref != null && ref.isNotEmpty()) {
-            var factor = 0.6f
-            var iter = 0
-            while (remaining > 0 && iter < 2) {
-                val n = minOf(ref.size, remaining)
-                val faded = ByteArray(n)
-                val inB  = java.nio.ByteBuffer.wrap(ref, 0, n).order(java.nio.ByteOrder.LITTLE_ENDIAN)
-                val outB = java.nio.ByteBuffer.wrap(faded).order(java.nio.ByteOrder.LITTLE_ENDIAN)
-                while (inB.remaining() >= 2) {
-                    val s = (inB.short * factor).toInt().coerceIn(Short.MIN_VALUE.toInt(), Short.MAX_VALUE.toInt())
-                    outB.putShort(s.toShort())
-                }
-                player.submit(faded, 0, n)
-                remaining -= n
-                factor *= 0.5f
-                iter++
+    private const val PLC_XFADE_FRAMES = 96
+
+    private fun bestContinuationFrame(ref: ShortArray, channels: Int, refFrames: Int): Int {
+        if (refFrames < 4) return 0
+        val lastBase = (refFrames - 1) * channels
+        val prevBase = (refFrames - 2) * channels
+        var best = Long.MAX_VALUE
+        var bestFrame = 0
+        for (f in 1 until refFrames - 2) {
+            var cost = 0L
+            for (c in 0 until channels) {
+                val v = ref[f * channels + c].toLong() - ref[lastBase + c].toLong()
+                val s = (ref[(f + 1) * channels + c] - ref[f * channels + c]).toLong() -
+                        (ref[lastBase + c] - ref[prevBase + c]).toLong()
+                cost += v * v + 4L * s * s
+            }
+            if (cost < best) { best = cost; bestFrame = f }
+        }
+        return bestFrame
+    }
+
+    private fun buildConcealment(ref: ByteArray, refUsable: Int, totalFrames: Int, frameBytes: Int): ByteArray {
+        val channels = (frameBytes / 2).coerceAtLeast(1)
+        val refFrames = refUsable / frameBytes
+        val src = ShortArray(refUsable / 2)
+        java.nio.ByteBuffer.wrap(ref, 0, refUsable)
+            .order(java.nio.ByteOrder.LITTLE_ENDIAN).asShortBuffer().get(src)
+
+        val offset = bestContinuationFrame(src, channels, refFrames)
+        val period = (2 * (refFrames - 1)).coerceAtLeast(1)
+        val outFrames = totalFrames + PLC_XFADE_FRAMES
+        val hold = totalFrames
+        val out = ByteArray(outFrames * frameBytes)
+        val dst = java.nio.ByteBuffer.wrap(out)
+            .order(java.nio.ByteOrder.LITTLE_ENDIAN).asShortBuffer()
+
+        for (i in 0 until outFrames) {
+            val p = (offset + i) % period
+            val idx = if (p < refFrames) p else period - p
+            val gain = if (i < hold) 1f
+                       else (1f - (i - hold + 1).toFloat() / (outFrames - hold)).coerceAtLeast(0f)
+            val srcBase = idx * channels
+            val dstBase = i * channels
+            for (c in 0 until channels) {
+                val s = (src[srcBase + c] * gain).toInt()
+                    .coerceIn(Short.MIN_VALUE.toInt(), Short.MAX_VALUE.toInt())
+                dst.put(dstBase + c, s.toShort())
             }
         }
-        if (remaining > 0) player.submitSilence(remaining)
+        return out
+    }
+
+    private fun concealGap(
+        player: JitterAudioPlayer,
+        state: ClientPlaybackState,
+        totalBytes: Int,
+        frameBytes: Int
+    ) {
+        val total = totalBytes - (totalBytes % frameBytes)
+        if (total <= 0) return
+
+        val ref = state.lastGoodPcm
+        val refUsable = if (ref == null) 0 else ref.size - (ref.size % frameBytes)
+        if (ref == null || refUsable < frameBytes * 4) {
+            player.submitSilence(total)
+            state.concealTail = null
+            return
+        }
+
+        val block = buildConcealment(ref, refUsable, total / frameBytes, frameBytes)
+        player.submit(block, 0, total)
+        state.concealTail = block.copyOfRange(total, block.size)
+    }
+
+    private fun crossfadeIntoReal(real: ByteArray, off: Int, len: Int, tail: ByteArray, frameBytes: Int): ByteArray {
+        val out = real.copyOfRange(off, off + len)
+        val channels = (frameBytes / 2).coerceAtLeast(1)
+        val n = minOf(tail.size / frameBytes, len / frameBytes)
+        if (n <= 0) return out
+        val tb = java.nio.ByteBuffer.wrap(tail).order(java.nio.ByteOrder.LITTLE_ENDIAN).asShortBuffer()
+        val ob = java.nio.ByteBuffer.wrap(out).order(java.nio.ByteOrder.LITTLE_ENDIAN).asShortBuffer()
+        for (i in 0 until n) {
+            val t = (i + 1).toFloat() / (n + 1)
+            for (c in 0 until channels) {
+                val a = tb.get(i * channels + c).toFloat()
+                val b = ob.get(i * channels + c).toFloat()
+                val m = (a * (1f - t) + b * t).toInt()
+                    .coerceIn(Short.MIN_VALUE.toInt(), Short.MAX_VALUE.toInt())
+                ob.put(i * channels + c, m.toShort())
+            }
+        }
+        return out
     }
 
     private fun handleAudioPacket(
@@ -3813,7 +3999,7 @@ object NetworkHandler_v1 {
                     } else -1
                     val concealBytes = if (exactBytes >= 0) exactBytes
                         else state.lastGoodPcm?.let { delta.coerceAtMost(8) * it.size } ?: 0
-                    concealGap(player, state.lastGoodPcm, concealBytes.coerceAtMost(MAX_CONCEAL_FRAMES.toInt() * frameBytes), frameBytes)
+                    concealGap(player, state, concealBytes.coerceAtMost(MAX_CONCEAL_FRAMES.toInt() * frameBytes), frameBytes)
                 }
                 else -> return
             }
@@ -3823,9 +4009,24 @@ object NetworkHandler_v1 {
         state.expectedSamplePos = samplePos + (if (pcmLen > 0) (pcmLen / frameBytes).toLong() else 0L)
 
         if (silence || pcmLen <= 0) {
-            player.submitSilence(state.lastGoodPcm?.size ?: (frameBytes * 480))
+            val n = state.lastGoodPcm?.size ?: (frameBytes * 480)
+            if (state.inSilence) {
+                state.concealTail = null
+                player.submitSilence(n)
+            } else {
+                state.inSilence = true
+                concealGap(player, state, n, frameBytes)
+            }
         } else {
-            player.submit(data, AUDIO_HEADER_SIZE, pcmLen)
+            state.inSilence = false
+            val tail = state.concealTail
+            if (tail != null) {
+                state.concealTail = null
+                val merged = crossfadeIntoReal(data, AUDIO_HEADER_SIZE, pcmLen, tail, frameBytes)
+                player.submit(merged, 0, merged.size)
+            } else {
+                player.submit(data, AUDIO_HEADER_SIZE, pcmLen)
+            }
             val lg = state.lastGoodPcm
             if (lg == null || lg.size != pcmLen) state.lastGoodPcm = ByteArray(pcmLen)
             System.arraycopy(data, AUDIO_HEADER_SIZE, state.lastGoodPcm!!, 0, pcmLen)
@@ -3875,16 +4076,21 @@ object NetworkHandler_v1 {
             .coerceAtLeast(frameSize * 256)
 
         val mixer = resolveMixer(mixerInfo)
+        if (mixer != null && !runCatching { mixer.isLineSupported(dataLineInfo) }.getOrDefault(false)) {
+            AppDebug.log("[CLIENT] mixer '${mixerInfo.name}' non dichiara $format: provo comunque ad aprirlo")
+        }
         val line = when {
             mixer == null -> {
                 AppDebug.log("[CLIENT] ripiego sull'uscita predefinita di sistema")
                 runCatching { AudioSystem.getSourceDataLine(format) }.getOrNull()
             }
-            !mixer.isLineSupported(dataLineInfo) -> {
-                AppDebug.log("[CLIENT] ERROR: mixer '${mixerInfo.name}' does NOT support format $format")
-                return null
-            }
-            else -> runCatching { mixer.getLine(dataLineInfo) as SourceDataLine }.getOrNull()
+            else -> runCatching { mixer.getLine(dataLineInfo) as SourceDataLine }
+                .onFailure { AppDebug.log("[CLIENT] getLine su '${mixerInfo.name}' fallito: ${it.message}") }
+                .getOrNull()
+                ?: runCatching { AudioSystem.getSourceDataLine(format, mixerInfo) }.getOrNull()
+                ?: runCatching { AudioSystem.getSourceDataLine(format) }
+                    .onSuccess { AppDebug.log("[CLIENT] ripiego sull'uscita predefinita di sistema") }
+                    .getOrNull()
         }
         if (line == null) {
             AppDebug.log("[CLIENT] ERROR: nessuna linea di uscita utilizzabile per $format")
@@ -3955,9 +4161,23 @@ object NetworkHandler_v1 {
         rtpJob?.cancelAndJoin();         rtpJob          = null
         localMicMixJob?.cancelAndJoin(); localMicMixJob  = null
         runCatching { serverEngine?.setMicMixEnabled(false) }
+
+        val streaming = streamingJob
+        streamingJob = null
+        if (streaming != null) {
+            streaming.cancel()
+            val stoppedCleanly = withTimeoutOrNull(1500) { streaming.join() } != null
+            if (!stoppedCleanly) {
+                AppDebug.log("[SERVER] loop di streaming bloccato sulla cattura: fermo la sorgente per sbloccarlo")
+                runCatching { serverEngine?.stop() }
+                runCatching { serverGrabber?.stop() }
+                if (withTimeoutOrNull(3000) { streaming.join() } == null) {
+                    AppDebug.log("[SERVER] il loop di streaming non ha risposto entro il timeout")
+                }
+            }
+        }
         runCatching { serverEngine?.stop() }
         runCatching { serverGrabber?.stop() }
-        streamingJob?.cancelAndJoin();   streamingJob    = null
         micReceiverJob?.cancelAndJoin(); micReceiverJob  = null
         broadcastingJob?.cancelAndJoin(); broadcastingJob = null
         softwareMicMixer.enable(false)
@@ -4163,12 +4383,21 @@ fun main(args: Array<String>) {
 
     // Un deep link di pairing non e' un argomento CLI: va tolto prima del parsing,
     // altrimenti CliArgs lo tratterebbe come opzione sconosciuta.
+    val pairVerbIndex = args.indexOfFirst { it.equals("pair", true) || it.equals("qr", true) }
+    val pairSubVerb = (if (pairVerbIndex >= 0) args.getOrNull(pairVerbIndex + 1) else args.firstOrNull())
+        .orEmpty().lowercase()
+    val offlinePairCommand = pairSubVerb in CliArgs.OFFLINE_PAIR_VERBS
+    val explicitPairCommand = pairVerbIndex >= 0 || offlinePairCommand
+
     val pairingArg = args.firstOrNull { PendingDeepLink.looksLikePairing(it) }
-    if (pairingArg != null) {
+    if (pairingArg != null && !offlinePairCommand) {
         PendingDeepLink.uri = pairingArg
         if (PairIpc.handOffDeepLink(pairingArg)) return
     }
-    var cliArgs = CliArgs.parse(args.filterNot { it === pairingArg }.toTypedArray())
+    var cliArgs = CliArgs.parse(
+        if (pairingArg != null && !explicitPairCommand) args.filterNot { it === pairingArg }.toTypedArray()
+        else args
+    )
 
     cliArgs.configPath?.let { ConfigPaths.overrideConfigFile = java.io.File(it) }
 
@@ -4182,8 +4411,12 @@ fun main(args: Array<String>) {
         kotlin.system.exitProcess(code)
     }
 
+    if (cliArgs.printDevices) {
+        kotlin.system.exitProcess(DevicesCli.run(cliArgs.json))
+    }
+
     if (cliArgs.printBareHint) { CliArgs.printBareHint(); return }
-    if (cliArgs.printHelp)     { CliArgs.printHelp();     return }
+    if (cliArgs.printHelp)     { CliArgs.printHelp(cliArgs.helpTopic, cliArgs.json); return }
     if (cliArgs.printVersion)  { CliArgs.printVersion();  return }
     if (cliArgs.printProtocol) { CliArgs.printProtocol(); return }
     if (cliArgs.printLicenses) { CliArgs.printLicenses(); return }

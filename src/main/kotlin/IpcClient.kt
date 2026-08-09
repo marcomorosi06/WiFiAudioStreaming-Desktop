@@ -114,7 +114,7 @@ object IpcClient {
     }
 
     private fun printStatus(json: String, pid: String) {
-        fun str(key: String)  = Regex("\"$key\"\\s*:\\s*\"([^\"]+)\"").find(json)?.groupValues?.getOrNull(1)
+        fun str(key: String)  = Regex("\"$key\"\\s*:\\s*\"([^\"]*)\"").find(json)?.groupValues?.getOrNull(1)
         fun num(key: String)  = Regex("\"$key\"\\s*:\\s*([\\d.]+)").find(json)?.groupValues?.getOrNull(1)
         fun bool(key: String) = Regex("\"$key\"\\s*:\\s*(true|false)").find(json)?.groupValues?.getOrNull(1)
 
@@ -124,15 +124,14 @@ object IpcClient {
         val port    = num("port")    ?: "?"
         val rtp     = bool("rtp")    == "true"
         val http    = bool("http")   == "true"
+        val dlna     = bool("dlna")     == "true"
+        val snapcast = bool("snapcast") == "true"
         val uptime  = num("uptime")?.toLong()?.let { formatUptime(it) } ?: "?"
 
-        println()
-        println("  ${bold("wfas")}  PID $pid")
-        println("  ${dim("Mode")}    $mode")
-        println("  ${dim("Port")}    $port")
-        println("  ${dim("Volume")}  $volume${if (muted) "  ${yellow("(muted)")}" else ""}")
-        println("  ${dim("RTP")}     ${if (rtp) green("yes") else dim("no")}")
-        println("  ${dim("HTTP")}    ${if (http) green("yes") else dim("no")}")
+        val labelWidth = 8
+        fun row(label: String, value: String) =
+            println("  ${dim(label.padEnd(labelWidth))}$value")
+
         val usbUp  = bool("usb") == "true"
         val usbIf  = str("usb_iface").orEmpty()
         val family = str("family") ?: "auto"
@@ -142,10 +141,47 @@ object IpcClient {
             "off_on_usb" -> "not on USB"
             else         -> str("wfas") ?: "always"
         }
-        println("  ${dim("Link")}    " + (if (usbUp) green("USB") + (if (usbIf.isNotEmpty()) dim(" ($usbIf)") else "") else dim("Wi-Fi")))
-        println("  ${dim("IP")}      ${if (family == "auto") dim("auto") else yellow(family)}")
-        println("  ${dim("WFAS")}    $wfas")
-        println("  ${dim("Uptime")}  $uptime")
+
+        println()
+        println("  ${bold("wfas")}  PID $pid")
+        row("Mode", mode)
+        row("Port", port)
+        row("Volume", "$volume${if (muted) "  ${yellow("(muted)")}" else ""}")
+        row("RTP", if (rtp) green("yes") else dim("no"))
+        row("HTTP", if (http) green("yes") else dim("no"))
+
+        if (dlna) {
+            val dlnaClients = num("dlna_clients")?.toIntOrNull() ?: 0
+            val renderers   = str("dlna_renderers").orEmpty()
+            val extras = buildList {
+                add("port ${num("dlna_port") ?: "?"}")
+                str("dlna_format").orEmpty().takeIf { it.isNotEmpty() }?.let { add(it) }
+                add(if (dlnaClients == 1) "1 renderer" else "$dlnaClients renderers")
+            }
+            row("DLNA", "${green("yes")}  ${dim(extras.joinToString(", "))}")
+            if (renderers.isNotEmpty()) row("", dim(renderers))
+        } else {
+            row("DLNA", dim("no"))
+        }
+
+        if (snapcast) {
+            val snapClients = num("snapcast_clients")?.toIntOrNull() ?: 0
+            val extras = buildList {
+                add("port ${num("snapcast_port") ?: "?"}")
+                add("control ${num("snapcast_control_port") ?: "?"}")
+                str("snapcast_codec").orEmpty().takeIf { it.isNotEmpty() }?.let { add(it) }
+                str("snapcast_stream").orEmpty().takeIf { it.isNotEmpty() }?.let { add("stream '$it'") }
+                add(if (snapClients == 1) "1 client" else "$snapClients clients")
+            }
+            row("Snapcast", "${green("yes")}  ${dim(extras.joinToString(", "))}")
+        } else {
+            row("Snapcast", dim("no"))
+        }
+
+        row("Link", if (usbUp) green("USB") + (if (usbIf.isNotEmpty()) dim(" ($usbIf)") else "") else dim("Wi-Fi"))
+        row("IP", if (family == "auto") dim("auto") else yellow(family))
+        row("WFAS", wfas)
+        row("Uptime", uptime)
         println()
     }
 

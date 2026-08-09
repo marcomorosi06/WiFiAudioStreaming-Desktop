@@ -77,6 +77,7 @@ static volatile int   g_mic_enabled = 0;
 static volatile float g_mic_volume  = 1.0f;
 
 static int g_mute_render = 1;
+static int g_channels_req = 2;
 
 #if defined(_WIN32)
 static SRWLOCK g_mic_srw = SRWLOCK_INIT;
@@ -198,7 +199,6 @@ static IAudioCaptureClient  *g_capture_client = NULL;
 static WAVEFORMATEX         *g_mix_format    = NULL;
 
 static int                   g_initialized   = 0;
-static int                   g_channels_req  = 2;
 static int                   g_rate_req      = 48000;
 static int                   g_src_is_float  = 0;
 static int                   g_src_channels  = 2;
@@ -215,6 +215,34 @@ static double                g_resample_pos  = 0.0;
 static int16_t*              g_src_accum = NULL;
 static int                   g_src_accum_cap = 0;
 static int                   g_src_accum_len = 0;
+
+static int16_t*              g_pending = NULL;
+static int                   g_pending_cap = 0;
+static int                   g_pending_len = 0;
+static long long             g_frames_captured = 0;
+static long long             g_frames_delivered = 0;
+static long long             g_frames_dropped = 0;
+
+static int pending_reserve(int frames) {
+    if (frames <= g_pending_cap) return 1;
+    int new_cap = (g_pending_cap > 0) ? g_pending_cap : 4096;
+    while (new_cap < frames) new_cap *= 2;
+    int16_t *nb = (int16_t *)realloc(g_pending, (size_t)new_cap * 2 * sizeof(int16_t));
+    if (!nb) return 0;
+    g_pending = nb;
+    g_pending_cap = new_cap;
+    return 1;
+}
+
+static void pending_trim(int max_frames) {
+    if (g_pending_len <= max_frames) return;
+    int excess = g_pending_len - max_frames;
+    memmove(g_pending, g_pending + (size_t)excess * 2,
+            (size_t)(g_pending_len - excess) * 2 * sizeof(int16_t));
+    g_pending_len -= excess;
+    g_frames_dropped += excess;
+    AE_LOG("[AE] pending overflow: scartati %d frame, coda limitata a %d\n", excess, max_frames);
+}
 
 static IAudioEndpointVolume *g_endpoint_volume = NULL;
 static BOOL                  g_prev_mute_state = FALSE;
@@ -482,6 +510,10 @@ static jboolean wasapi_start(int sample_rate, int channels) {
     g_resample_pos = 0.0;
     for (int i = 0; i < 8; i++) g_prev_sample[i] = 0;
     g_src_accum_len = 0;
+    g_pending_len = 0;
+    g_frames_captured = 0;
+    g_frames_delivered = 0;
+    g_frames_dropped = 0;
 
     g_initialized = 1;
     return JNI_TRUE;
@@ -532,6 +564,18 @@ static jint wasapi_read(int16_t *out, int num_stereo_samples) {
     int wait_count = 0;
     const int max_wait_ms = g_mic_enabled ? 20 : 2000;
 
+    if (g_pending_len > 0 && num_stereo_samples > 0) {
+        int take = (g_pending_len < num_stereo_samples) ? g_pending_len : num_stereo_samples;
+        memcpy(out, g_pending, (size_t)take * 2 * sizeof(int16_t));
+        written = take;
+        int rem = g_pending_len - take;
+        if (rem > 0) {
+            memmove(g_pending, g_pending + (size_t)take * 2,
+                    (size_t)rem * 2 * sizeof(int16_t));
+        }
+        g_pending_len = rem;
+    }
+
     while (written < num_stereo_samples && !g_stopping) {
         UINT32 packet_size = 0;
         hr = IAudioCaptureClient_GetNextPacketSize(g_capture_client, &packet_size);
@@ -560,6 +604,22 @@ static jint wasapi_read(int16_t *out, int num_stereo_samples) {
                 out[written * 2]     = l;
                 out[written * 2 + 1] = (tgt_ch >= 2) ? r : l;
                 written++;
+            }
+            if (f < frames_available) {
+                int extra = (int)(frames_available - f);
+                if (pending_reserve(g_pending_len + extra)) {
+                    UINT32 k;
+                    for (k = f; k < frames_available; k++) {
+                        int16_t l = fetch_frame_ch(pData, k, 0, flags);
+                        int16_t r = (tgt_ch >= 2) ? fetch_frame_ch(pData, k, 1, flags) : l;
+                        g_pending[(size_t)g_pending_len * 2]     = l;
+                        g_pending[(size_t)g_pending_len * 2 + 1] = r;
+                        g_pending_len++;
+                    }
+                    pending_trim(g_rate_req > 0 ? g_rate_req : 48000);
+                } else {
+                    g_frames_dropped += extra;
+                }
             }
         } else {
             int needed = g_src_accum_len + (int)frames_available;
@@ -620,7 +680,16 @@ static jint wasapi_read(int16_t *out, int num_stereo_samples) {
             }
         }
 
+        g_frames_captured += (long long)frames_available;
         IAudioCaptureClient_ReleaseBuffer(g_capture_client, frames_available);
+    }
+
+    g_frames_delivered += (long long)written;
+    if (g_debug && g_frames_delivered > 0 &&
+        (g_frames_delivered / (g_rate_req > 0 ? g_rate_req : 48000)) !=
+        ((g_frames_delivered - written) / (g_rate_req > 0 ? g_rate_req : 48000))) {
+        AE_LOG("[AE] catturati=%lld consegnati=%lld in_coda=%d scartati=%lld\n",
+               g_frames_captured, g_frames_delivered, g_pending_len, g_frames_dropped);
     }
 
     g_reading = 0;
@@ -636,6 +705,10 @@ static void wasapi_stop(void) {
     g_initialized = 0;
     if (g_audio_client)   IAudioClient_Stop(g_audio_client);
     while (g_reading) { Sleep(1); }
+
+    if (g_pending)   { free(g_pending);   g_pending = NULL;   g_pending_cap = 0;   g_pending_len = 0; }
+    if (g_src_accum) { free(g_src_accum); g_src_accum = NULL; g_src_accum_cap = 0; g_src_accum_len = 0; }
+
     IAudioCaptureClient *cap = g_capture_client; g_capture_client = NULL;
     if (cap) IUnknown_Release((IUnknown *)cap);
     if (g_mix_format)     { CoTaskMemFree(g_mix_format); g_mix_format = NULL; }
@@ -1506,6 +1579,7 @@ Java_AudioEngine_nativeStart(JNIEnv *env, jobject thiz,
     (void)env; (void)thiz;
     g_last_error[0] = '\0';
     g_mute_render = (mute_render == JNI_TRUE) ? 1 : 0;
+    g_channels_req = ((int)channels > 0) ? (int)channels : 2;
 
 #if defined(_WIN32)
     return wasapi_start((int)sample_rate, (int)channels);
@@ -1541,10 +1615,15 @@ Java_AudioEngine_nativeRead(JNIEnv *env, jobject thiz,
 #if defined(_WIN32)
     result = wasapi_read((int16_t *)buf, stereo_frames) * 2;
 #elif defined(__linux__)
-    if (pulse_read((int16_t *)buf, stereo_frames) == JNI_TRUE)
-        result = num_samples;
-    else
-        result = -1;
+    {
+        int ch = (g_channels_req > 0) ? g_channels_req : 2;
+        int want_shorts = stereo_frames * ch;
+        if (want_shorts > (int)num_samples) want_shorts = (int)num_samples;
+        if (pulse_read((int16_t *)buf, want_shorts / 2) == JNI_TRUE)
+            result = (want_shorts / 2) * 2;
+        else
+            result = -1;
+    }
 #elif defined(__APPLE__)
     result = mac_engine_read((int16_t *)buf, stereo_frames) * 2;
 #else
@@ -1564,6 +1643,20 @@ Java_AudioEngine_nativeRead(JNIEnv *env, jobject thiz,
             result = num_samples;
         }
     }
+
+#if defined(_WIN32) || defined(__APPLE__)
+    if (result > 0 && g_channels_req == 1) {
+        int16_t *s = (int16_t *)buf;
+        int frames = (int)result / 2;
+        int i;
+        for (i = 0; i < frames; i++) {
+            int32_t l = (int32_t)s[i * 2];
+            int32_t r = (int32_t)s[i * 2 + 1];
+            s[i] = (int16_t)((l + r) / 2);
+        }
+        result = frames;
+    }
+#endif
 
     (*env)->ReleaseShortArrayElements(env, out_buf, buf, 0);
     return result;

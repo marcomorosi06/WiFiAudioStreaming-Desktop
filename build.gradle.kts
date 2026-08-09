@@ -1,6 +1,7 @@
 import org.jetbrains.compose.desktop.application.dsl.TargetFormat
 import org.gradle.api.tasks.bundling.Compression
 import java.io.ByteArrayOutputStream
+import java.time.LocalDate
 
 plugins {
     kotlin("jvm") version "2.1.0"
@@ -366,10 +367,46 @@ val packagePortableArchives by tasks.registering {
 
 val manPageSrc = file("src/main/resources/man/wfas.1")
 
+val generateMan by tasks.registering(JavaExec::class) {
+    group       = "documentation"
+    description = "Rigenera src/main/resources/man/wfas.1 dalla tabella in CliHelpModel.kt"
+
+    dependsOn("compileKotlin", "generateVersionProperties")
+    classpath = sourceSets["main"].runtimeClasspath
+    mainClass.set("CliHelpGenKt")
+    args(
+        manPageSrc.absolutePath,
+        displayVersion,
+        LocalDate.now().year.toString(),
+        file("src/main/kotlin/CliArgs.kt").absolutePath
+    )
+    inputs.files(
+        file("src/main/kotlin/CliHelpModel.kt"),
+        file("src/main/kotlin/CliHelpMan.kt"),
+        file("src/main/kotlin/CliArgs.kt")
+    )
+    outputs.file(manPageSrc)
+}
+
+val checkHelpCoverage by tasks.registering(JavaExec::class) {
+    group       = "verification"
+    description = "Fallisce se l'help e il parser non documentano gli stessi flag"
+
+    dependsOn("compileKotlin")
+    classpath = sourceSets["main"].runtimeClasspath
+    mainClass.set("CliHelpCheckKt")
+    args(file("src/main/kotlin/CliArgs.kt").absolutePath)
+}
+
+tasks.named("check") {
+    dependsOn(checkHelpCoverage)
+}
+
 tasks.register<Copy>("installManPage") {
     description = "Install wfas.1 man page to /usr/local/share/man/man1/"
     group       = "install"
     onlyIf { isLinux || isMac }
+    dependsOn(generateMan)
 
     from(manPageSrc)
     into(if (isLinux) "/usr/share/man/man1" else "/usr/local/share/man/man1")
@@ -393,6 +430,7 @@ tasks.register<Copy>("installManPage") {
 tasks.register<Copy>("packageManPage") {
     description = "Copy wfas.1 into the build output for inclusion in packages"
     group       = "build"
+    dependsOn(generateMan)
 
     from(manPageSrc)
     into("${layout.buildDirectory.get()}/man/man1")
