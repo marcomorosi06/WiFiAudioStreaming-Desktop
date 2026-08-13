@@ -61,6 +61,7 @@ data class AppSettings(
     val autoUpdateCheckEnabled: Boolean = true,
     val securityMode: String = "OFF",
     val authKey: String = "",
+    val rememberAuthKey: Boolean = true,
     val encryptionEnabled: Boolean = false,
     val qrPairingEnabled: Boolean = false,
     val manualAuthKey: String = "",
@@ -173,23 +174,71 @@ object SettingsRepository {
         else -> 30L
     }
 
+    const val VAULT_AUTH_KEY   = "authKey"
+    const val VAULT_MANUAL_KEY = "manualAuthKey"
+    const val ENV_AUTH_KEY     = "WFAS_AUTH_KEY"
+
     fun saveSettings(settings: AllSettings) {
+        // Prima la custodia, poi il file: ConfigManager.save non scrive piu' i
+        // segreti, quindi se il vault fallisce non restano comunque in chiaro.
+        persistSecrets(settings)
         runCatching { ConfigManager.save(settings) }
         UsbLink.configure(settings.app.usbModeEnabled, settings.app.usbLatencyMs, settings.app.usbInterface)
         WfasPolicy.configure(settings.app.wfasMode)
     }
 
     fun loadSettings(): AllSettings {
-        val settings = if (ConfigManager.exists()) {
+        val stored = if (ConfigManager.exists()) {
             runCatching { ConfigManager.load() }.getOrDefault(ConfigManager.DEFAULTS)
         } else {
             val migrated = if (hasLegacyPreferences()) loadFromPreferencesLegacy() else ConfigManager.DEFAULTS
             runCatching { ConfigManager.save(migrated) }
             migrated
         }
+        val settings = hydrateSecrets(stored)
         UsbLink.configure(settings.app.usbModeEnabled, settings.app.usbLatencyMs, settings.app.usbInterface)
         WfasPolicy.configure(settings.app.wfasMode)
         return settings
+    }
+
+    private fun persistSecrets(settings: AllSettings) {
+        if (!SecretVault.available) return
+        if (!settings.app.rememberAuthKey) {
+            SecretVault.clear(VAULT_AUTH_KEY)
+            SecretVault.clear(VAULT_MANUAL_KEY)
+            return
+        }
+        settings.app.authKey.let {
+            if (it.isNotEmpty()) SecretVault.store(VAULT_AUTH_KEY, it) else SecretVault.clear(VAULT_AUTH_KEY)
+        }
+        settings.app.manualAuthKey.let {
+            if (it.isNotEmpty()) SecretVault.store(VAULT_MANUAL_KEY, it) else SecretVault.clear(VAULT_MANUAL_KEY)
+        }
+    }
+
+    /**
+     * I segreti non stanno piu' nel file di configurazione: arrivano dalla
+     * custodia dell'OS, o da [ENV_AUTH_KEY] per chi fa girare il server senza
+     * sessione desktop. Un valore ancora presente nel file viene da una versione
+     * precedente: si trasferisce nella custodia e il file viene riscritto senza.
+     */
+    private fun hydrateSecrets(stored: AllSettings): AllSettings {
+        val legacyAuth   = stored.app.authKey.takeIf { it.isNotEmpty() }
+        val legacyManual = stored.app.manualAuthKey.takeIf { it.isNotEmpty() }
+        val migrating    = legacyAuth != null || legacyManual != null
+
+        if (migrating && stored.app.rememberAuthKey && SecretVault.available) {
+            legacyAuth?.let { SecretVault.store(VAULT_AUTH_KEY, it) }
+            legacyManual?.let { SecretVault.store(VAULT_MANUAL_KEY, it) }
+        }
+
+        val env = System.getenv(ENV_AUTH_KEY)?.takeIf { it.isNotBlank() }
+        val auth   = env ?: legacyAuth   ?: SecretVault.load(VAULT_AUTH_KEY).orEmpty()
+        val manual = legacyManual ?: SecretVault.load(VAULT_MANUAL_KEY).orEmpty()
+
+        val hydrated = stored.copy(app = stored.app.copy(authKey = auth, manualAuthKey = manual))
+        if (migrating) runCatching { ConfigManager.save(hydrated) }
+        return hydrated
     }
 
     private fun hasLegacyPreferences(): Boolean = try {

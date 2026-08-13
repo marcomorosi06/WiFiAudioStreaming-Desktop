@@ -65,6 +65,7 @@ data class CliArgs(
     val sdpOut:          String?         = null,
     val controlCmd:      ControlCommand? = null,
     val configCmd:       ConfigCommand?  = null,
+    val reveal:          Boolean         = false,
     val firewallCmd:     FirewallCommand? = null,
     val pairCmd:         PairCommand?    = null,
     val qr:              Boolean         = false,
@@ -169,6 +170,7 @@ data class CliArgs(
             var watch           = false
             var json            = false
             var quiet           = false
+            var reveal          = false
             var configPath: String?         = null
             var sdp             = false
             var sdpOut: String?             = null
@@ -466,8 +468,9 @@ data class CliArgs(
                     "--mute" -> mute = true
 
                     "--watch" -> watch = true
-                    "--json"  -> json  = true
-                    "--quiet" -> quiet = true
+                    "--json"   -> json   = true
+                    "--quiet"  -> quiet  = true
+                    "--reveal" -> reveal = true
 
                     "--config" -> {
                         configPath = nextArg(args, i, "--config") ?: parseError("--config requires a file path")
@@ -670,6 +673,7 @@ data class CliArgs(
                 sdpOut          = sdpOut,
                 controlCmd      = controlCmd,
                 configCmd       = configCmd,
+                reveal          = reveal,
                 firewallCmd     = firewallCmd,
                 pairCmd         = pairCmd,
                 qr              = qr,

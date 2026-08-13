@@ -91,6 +91,8 @@ import androidx.compose.ui.res.loadImageBitmap
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.useResource
 import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.input.VisualTransformation
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -511,7 +513,11 @@ fun AppContent(
                                 onEncryptionChange = { onAppSettingsChange(appSettings.copy(encryptionEnabled = it)) },
                                 isMulticast = isMulticastMode || appSettings.rtpEnabled ||
                                     appSettings.httpEnabled || appSettings.dlnaEnabled ||
-                                    appSettings.snapcastEnabled
+                                    appSettings.snapcastEnabled,
+                                rememberAuthKey = appSettings.rememberAuthKey,
+                                onRememberAuthKeyChange = {
+                                    onAppSettingsChange(appSettings.copy(rememberAuthKey = it))
+                                }
                             )
                             ConnectPanel(
                                 localIp = localIp,
@@ -2567,8 +2573,10 @@ fun ServerConfigCard(
     onMicMixInputSelected: (Mixer.Info) -> Unit = {},
     securityMode: String = "OFF",
     authKey: String = "",
+    rememberAuthKey: Boolean = true,
     onSecurityModeChange: (String) -> Unit = {},
     onAuthKeyChange: (String) -> Unit = {},
+    onRememberAuthKeyChange: (Boolean) -> Unit = {},
     encryptionEnabled: Boolean = false,
     onEncryptionChange: (Boolean) -> Unit = {},
     usbModeEnabled: Boolean = false,
@@ -2721,19 +2729,20 @@ fun ServerConfigCard(
             }
 
             if (mode == "KEY") {
-                OutlinedTextField(
+                AuthKeyField(
                     value = authKey,
                     onValueChange = onAuthKeyChange,
-                    label = { Text(stringResource("auth_key_label")) },
                     leadingIcon = { Icon(Icons.Outlined.VpnKey, contentDescription = null) },
-                    singleLine = true,
-                    shape = RoundedCornerShape(16.dp),
                     modifier = Modifier.fillMaxWidth()
                 )
                 Text(
                     stringResource("auth_key_hint"),
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                AuthKeyStorageRow(
+                    rememberKey = rememberAuthKey,
+                    onRememberKeyChange = onRememberAuthKeyChange
                 )
             }
 
@@ -2895,6 +2904,82 @@ fun ServerMicCard(
     }
 }
 
+/**
+ * La chiave e' una password: mascherata di default, con l'occhio per rivelarla
+ * quando serve confrontarla con l'altro dispositivo.
+ */
+/**
+ * Dove finisce la chiave fra un avvio e l'altro. Se il sistema non ha una
+ * custodia utilizzabile l'interruttore non ha senso: l'unica opzione e'
+ * ridigitarla, e va detto invece di lasciare l'utente a chiedersi perche' il
+ * campo e' vuoto a ogni avvio.
+ */
+@Composable
+private fun AuthKeyStorageRow(
+    rememberKey: Boolean,
+    onRememberKeyChange: (Boolean) -> Unit
+) {
+    val vaultAvailable = remember { SecretVault.available }
+    val vaultLabel = remember { SecretVault.label }
+
+    if (!vaultAvailable) {
+        Text(
+            stringResource("auth_key_no_vault"),
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.error
+        )
+        return
+    }
+
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(12.dp),
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Column(Modifier.weight(1f)) {
+            Text(stringResource("auth_key_remember_label"))
+            Text(
+                if (rememberKey) Strings.get("auth_key_remember_on").format(vaultLabel)
+                else stringResource("auth_key_remember_off"),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+        Switch(checked = rememberKey, onCheckedChange = onRememberKeyChange)
+    }
+}
+
+@Composable
+fun AuthKeyField(
+    value: String,
+    onValueChange: (String) -> Unit,
+    modifier: Modifier = Modifier,
+    leadingIcon: (@Composable () -> Unit)? = null
+) {
+    var revealed by remember { mutableStateOf(false) }
+    OutlinedTextField(
+        value = value,
+        onValueChange = onValueChange,
+        label = { Text(stringResource("auth_key_label")) },
+        leadingIcon = leadingIcon,
+        singleLine = true,
+        shape = RoundedCornerShape(16.dp),
+        visualTransformation =
+            if (revealed) VisualTransformation.None else PasswordVisualTransformation(),
+        trailingIcon = {
+            IconButton(onClick = { revealed = !revealed }) {
+                Icon(
+                    imageVector =
+                        if (revealed) Icons.Outlined.VisibilityOff else Icons.Outlined.Visibility,
+                    contentDescription =
+                        stringResource(if (revealed) "auth_key_hide" else "auth_key_show")
+                )
+            }
+        },
+        modifier = modifier
+    )
+}
+
 @Composable
 fun ServerSecurityCard(
     securityMode: String,
@@ -2903,7 +2988,9 @@ fun ServerSecurityCard(
     onAuthKeyChange: (String) -> Unit,
     encryptionEnabled: Boolean,
     onEncryptionChange: (Boolean) -> Unit,
-    isMulticast: Boolean = false
+    isMulticast: Boolean = false,
+    rememberAuthKey: Boolean = true,
+    onRememberAuthKeyChange: (Boolean) -> Unit = {}
 ) {
     ElevatedCard(modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(24.dp)) {
         Column(Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
@@ -2962,19 +3049,20 @@ fun ServerSecurityCard(
             }
 
             if (mode == "KEY") {
-                OutlinedTextField(
+                AuthKeyField(
                     value = authKey,
                     onValueChange = onAuthKeyChange,
-                    label = { Text(stringResource("auth_key_label")) },
                     leadingIcon = { Icon(Icons.Outlined.VpnKey, contentDescription = null) },
-                    singleLine = true,
-                    shape = RoundedCornerShape(16.dp),
                     modifier = Modifier.fillMaxWidth()
                 )
                 Text(
                     stringResource("auth_key_hint"),
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                AuthKeyStorageRow(
+                    rememberKey = rememberAuthKey,
+                    onRememberKeyChange = onRememberAuthKeyChange
                 )
             }
 

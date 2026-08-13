@@ -271,12 +271,48 @@ private fun inheritSecurity(args: CliArgs, settings: AllSettings): CliArgs {
     val app = settings.app
     val mode = SecurityMode.fromStringSafe(app.securityMode)
     if (mode == SecurityMode.OFF) return args
-    if (mode.requiresKey && app.authKey.isBlank()) return args
+
+    // La chiave non sta piu' nel file di configurazione. Se la custodia dell'OS
+    // non ce l'ha (nessun keyring, oppure "non memorizzare"), la si chiede qui,
+    // ma solo se c'e' davvero un terminale: senza, restare senza chiave e' un
+    // caso che deve fermare l'avvio piu' avanti, non partire in chiaro.
+    var key = app.authKey
+    if (mode.requiresKey && key.isBlank()) {
+        key = promptForAuthKey().orEmpty()
+        if (key.isBlank()) return args
+    }
     return args.copy(
         authMode = mode.name,
-        authKey = app.authKey,
+        authKey = key,
         encrypt = app.encryptionEnabled && mode.requiresKey
     )
+}
+
+private fun promptForAuthKey(): String? {
+    val console = System.console() ?: return null
+    System.err.println("Security mode is KEY and no key is stored on this system.")
+    val chars = runCatching { console.readPassword("Key: ") }.getOrNull() ?: return null
+    val value = String(chars).trim()
+    java.util.Arrays.fill(chars, ' ')
+    return value.ifEmpty { null }
+}
+
+/**
+ * Fail-closed. Prima la chiave stava nel file, quindi c'era sempre; ora puo'
+ * mancare, e partire lo stesso significherebbe servire audio senza la
+ * protezione che l'utente ha configurato.
+ */
+private fun requireAuthKey(args: CliArgs, settings: AllSettings) {
+    if (args.authExplicit) return
+    val mode = SecurityMode.fromStringSafe(settings.app.securityMode)
+    if (!mode.requiresKey) return
+    if (args.authKey.isNotBlank()) return
+    System.err.println(
+        "Refusing to start: security mode is KEY but no key is available. " +
+        "It is not in the ${SecretVault.label} credential store and this session has no terminal to ask. " +
+        "Set ${SettingsRepository.ENV_AUTH_KEY}, or pass --auth-key."
+    )
+    kotlin.system.exitProcess(ExitCode.USAGE_ERROR)
 }
 
 private fun prepareQrKey(args: CliArgs): CliArgs {
@@ -484,6 +520,7 @@ private fun printSnapcastClients(args: CliArgs) {
 
 private suspend fun runCliServer(rawArgs: CliArgs, settings: AllSettings) {
     val args = if (rawArgs.qr) prepareQrKey(rawArgs) else rawArgs
+    requireAuthKey(args, settings)
     assertPortFree(args.port,    "streaming", args)
     assertPortFree(args.micPort, "mic",       args)
     if (args.rtp)  assertPortFree(args.rtpPort,  "RTP",  args)
@@ -713,6 +750,7 @@ private suspend fun runCliServer(rawArgs: CliArgs, settings: AllSettings) {
 // ─────────────────────────────────────────────────────────────────────────────
 
 private suspend fun runCliClient(args: CliArgs, settings: AllSettings) {
+    requireAuthKey(args, settings)
     val outputDevice = resolveOutputDevice(args.outputDevice)
     if (outputDevice == null) {
         err(red("!") + " No audio output device found.")

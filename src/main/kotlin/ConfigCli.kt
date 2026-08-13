@@ -32,8 +32,11 @@ object ConfigCli {
 
     private fun jsonEscape(s: String) = s.replace("\\", "\\\\").replace("\"", "\\\"")
 
-    private fun jsonValue(field: CfgField, settings: AllSettings): String {
+    private fun jsonValue(field: CfgField, settings: AllSettings, reveal: Boolean = false): String {
         val v = field.getter(settings)
+        if (field.secret && !reveal && !(v == null || v.toString().isEmpty())) {
+            return "\"${ConfigManager.MASK}\""
+        }
         return when (v) {
             null       -> "null"
             is Boolean -> v.toString()
@@ -43,16 +46,16 @@ object ConfigCli {
         }
     }
 
-    fun run(cmd: ConfigCommand, json: Boolean): Int {
+    fun run(cmd: ConfigCommand, json: Boolean, reveal: Boolean = false): Int {
         return try {
             when (cmd) {
                 is ConfigCommand.Path   -> doPath(json)
-                is ConfigCommand.List   -> doList(json)
-                is ConfigCommand.Get    -> doGet(cmd.key, json)
-                is ConfigCommand.Set    -> doSet(cmd.key, cmd.value, json)
+                is ConfigCommand.List   -> doList(json, reveal)
+                is ConfigCommand.Get    -> doGet(cmd.key, json, reveal)
+                is ConfigCommand.Set    -> doSet(cmd.key, cmd.value, json, reveal)
                 is ConfigCommand.Reset  -> doReset(json)
                 is ConfigCommand.Edit   -> doEdit(json)
-                is ConfigCommand.Export -> doExport(cmd.path, json)
+                is ConfigCommand.Export -> doExport(cmd.path, json, reveal)
                 is ConfigCommand.Import -> doImport(cmd.path, json)
             }
             ExitCode.OK
@@ -72,11 +75,11 @@ object ConfigCli {
         }
     }
 
-    private fun doList(json: Boolean) {
+    private fun doList(json: Boolean, reveal: Boolean) {
         val settings = SettingsRepository.loadSettings()
         if (json) {
             val body = ConfigManager.fields.joinToString(",\n") { f ->
-                "  \"${f.key}\": ${jsonValue(f, settings)}"
+                "  \"${f.key}\": ${jsonValue(f, settings, reveal)}"
             }
             println("{\n$body\n}")
             return
@@ -90,29 +93,37 @@ object ConfigCli {
                 println()
                 println("[$sec]")
             }
-            val value = ConfigManager.display(settings, f)
+            val value = ConfigManager.display(settings, f, reveal)
             println("  ${f.key.padEnd(width)}  = ${value.ifEmpty { "(empty)" }}")
         }
         println()
         println("Config file: ${ConfigPaths.configFile().path}")
     }
 
-    private fun doGet(key: String, json: Boolean) {
+    private fun doGet(key: String, json: Boolean, reveal: Boolean) {
         val field = ConfigManager.fieldByKey(key)
             ?: throw ConfigException("unknown key '$key'. Run 'wfas config list' to see all keys.")
         val settings = SettingsRepository.loadSettings()
-        if (json) println("{\"status\": \"ok\", \"key\": \"${jsonEscape(field.key)}\", \"value\": ${jsonValue(field, settings)}}")
-        else println(ConfigManager.display(settings, field))
+        if (json) println("{\"status\": \"ok\", \"key\": \"${jsonEscape(field.key)}\", \"value\": ${jsonValue(field, settings, reveal)}}")
+        else println(ConfigManager.display(settings, field, reveal))
+        if (field.secret && !reveal && ConfigManager.display(settings, field, true).isNotEmpty()) {
+            System.err.println("Value hidden. Add --reveal to print it.")
+        }
     }
 
-    private fun doSet(key: String, value: String, json: Boolean) {
+    private fun doSet(key: String, value: String, json: Boolean, reveal: Boolean) {
         val field = ConfigManager.fieldByKey(key)
             ?: throw ConfigException("unknown key '$key'. Run 'wfas config list' to see all keys.")
         val current = SettingsRepository.loadSettings()
         val updated = ConfigManager.withSet(current, field.key, value)
         SettingsRepository.saveSettings(updated)
-        if (json) println("{\"status\": \"ok\", \"key\": \"${jsonEscape(field.key)}\", \"value\": ${jsonValue(field, updated)}}")
-        else println("${field.key} = ${ConfigManager.display(updated, field)}")
+        if (json) println("{\"status\": \"ok\", \"key\": \"${jsonEscape(field.key)}\", \"value\": ${jsonValue(field, updated, reveal)}}")
+        else println("${field.key} = ${ConfigManager.display(updated, field, reveal)}")
+        // Il valore e' appena stato battuto sulla riga di comando, quindi e'
+        // gia' nella cronologia della shell: meglio dirlo che lasciarlo li'.
+        if (field.secret) {
+            System.err.println("Warning: this value is now in your shell history. Clear it, or set the key from the app instead.")
+        }
     }
 
     private fun doReset(json: Boolean) {
@@ -149,19 +160,33 @@ object ConfigCli {
         }
     }
 
-    private fun doExport(path: String?, json: Boolean) {
+    private fun doExport(path: String?, json: Boolean, reveal: Boolean) {
         val settings = SettingsRepository.loadSettings()
-        val text = ConfigManager.serialize(settings)
+        val text =
+            if (reveal) ConfigManager.serialize(settings)
+            else ConfigManager.serializeRedacted(settings)
+        val omitted = !reveal && ConfigManager.fields.any {
+            it.secret && ConfigManager.display(settings, it, true).isNotEmpty()
+        }
         if (path == null) {
             print(text)
+            if (omitted) System.err.println(OMITTED_NOTE)
             return
         }
         val file = File(path)
         file.parentFile?.let { if (!it.exists()) it.mkdirs() }
         file.writeText(text)
-        if (json) println("{\"status\": \"ok\", \"exported\": \"${jsonEscape(file.path)}\"}")
+        if (json) println("{\"status\": \"ok\", \"exported\": \"${jsonEscape(file.path)}\", \"secretsOmitted\": $omitted}")
         else System.err.println("Exported configuration to ${file.path}")
+        if (omitted && !json) System.err.println(OMITTED_NOTE)
     }
+
+    private val OMITTED_NOTE: String
+        get() {
+            val keys = ConfigManager.fields.filter { it.secret }.joinToString(", ") { it.key }
+            return "Note: $keys omitted. Importing this file will not restore them. " +
+                "Add --reveal to include them, and treat the result as a secret."
+        }
 
     private fun doImport(path: String, json: Boolean) {
         val file = File(path)

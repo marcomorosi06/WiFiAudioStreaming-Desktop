@@ -29,7 +29,14 @@ class CfgField(
     val enumValues: List<String>,
     val desc: String,
     val getter: (AllSettings) -> Any?,
-    val setter: (AllSettings, Any?) -> AllSettings
+    val setter: (AllSettings, Any?) -> AllSettings,
+    /**
+     * Il valore non deve comparire in nessun output finche' non lo si chiede
+     * esplicitamente con --reveal. Dichiararlo qui e' l'unico posto che conta:
+     * list, get, set ed export leggono questo flag, quindi non esiste un
+     * percorso di stampa che possa dimenticarsene.
+     */
+    val secret: Boolean = false
 )
 
 object ConfigManager {
@@ -137,13 +144,17 @@ object ConfigManager {
         CfgField("security.mode", CfgKind.ENUM, listOf("OFF", "ASK", "KEY"), "Connection authorization mode",
             { it.app.securityMode }, { s, v -> appCopy(s) { copy(securityMode = coerceEnum("security.mode", v, listOf("OFF", "ASK", "KEY"))) } }),
         CfgField("security.authKey", CfgKind.STRING, emptyList(), "Pre-shared key (used when mode = KEY)",
-            { it.app.authKey }, { s, v -> appCopy(s) { copy(authKey = coerceString("security.authKey", v)) } }),
+            { it.app.authKey }, { s, v -> appCopy(s) { copy(authKey = coerceString("security.authKey", v)) } },
+            secret = true),
+        CfgField("security.rememberKey", CfgKind.BOOL, emptyList(), "Keep the key in the OS credential store between runs; when false it is asked at every start",
+            { it.app.rememberAuthKey }, { s, v -> appCopy(s) { copy(rememberAuthKey = coerceBool("security.rememberKey", v)) } }),
         CfgField("security.encryptionEnabled", CfgKind.BOOL, emptyList(), "Encrypt audio with ChaCha20-Poly1305",
             { it.app.encryptionEnabled }, { s, v -> appCopy(s) { copy(encryptionEnabled = coerceBool("security.encryptionEnabled", v)) } }),
         CfgField("security.qrPairing", CfgKind.BOOL, emptyList(), "Key comes from a QR invite instead of a typed passphrase (mode stays KEY)",
             { it.app.qrPairingEnabled }, { s, v -> appCopy(s) { copy(qrPairingEnabled = coerceBool("security.qrPairing", v)) } }),
         CfgField("security.manualAuthKey", CfgKind.STRING, emptyList(), "Last passphrase typed by hand, restored when leaving QR pairing",
-            { it.app.manualAuthKey }, { s, v -> appCopy(s) { copy(manualAuthKey = coerceString("security.manualAuthKey", v)) } }),
+            { it.app.manualAuthKey }, { s, v -> appCopy(s) { copy(manualAuthKey = coerceString("security.manualAuthKey", v)) } },
+            secret = true),
 
         CfgField("app.theme", CfgKind.ENUM, listOf("Light", "Dark", "System"), "UI theme",
             { it.app.theme.name }, { s, v -> appCopy(s) { copy(theme = Theme.valueOf(coerceEnum("app.theme", v, listOf("Light", "Dark", "System")))) } }),
@@ -218,9 +229,10 @@ object ConfigManager {
         return result
     }
 
-    fun serialize(settings: AllSettings): String {
+    fun serialize(settings: AllSettings, skip: Set<String> = emptySet()): String {
         val sections = LinkedHashMap<String, LinkedHashMap<String, Any?>>()
         for (field in fields) {
+            if (field.key in skip) continue
             val dot = field.key.indexOf('.')
             val section = if (dot >= 0) field.key.substring(0, dot) else "general"
             val leaf = if (dot >= 0) field.key.substring(dot + 1) else field.key
@@ -247,7 +259,8 @@ object ConfigManager {
         val file = ConfigPaths.configFile()
         val dir = file.parentFile
         if (dir != null && !dir.exists()) dir.mkdirs()
-        val text = serialize(settings)
+        // I segreti vivono nella custodia dell'OS, mai in questo file.
+        val text = serializeRedacted(settings)
         val tmp = File(file.parentFile ?: File("."), file.name + ".tmp")
         tmp.writeText(text)
         try {
@@ -262,14 +275,29 @@ object ConfigManager {
         }
     }
 
-    fun display(settings: AllSettings, field: CfgField): String {
+    const val MASK = "********"
+
+    fun display(settings: AllSettings, field: CfgField, reveal: Boolean = false): String {
         val v = field.getter(settings)
-        return when (v) {
+        val raw = when (v) {
             null -> ""
             is List<*> -> v.joinToString(",")
             else -> v.toString()
         }
+        // Un segreto vuoto resta vuoto: mascherarlo direbbe "c'e' una chiave"
+        // quando non c'e', e a quel punto la maschera informa invece di coprire.
+        if (field.secret && !reveal && raw.isNotEmpty()) return MASK
+        return raw
     }
+
+    /**
+     * Come [serialize], ma i segreti non finiscono nel file esportato. Vengono
+     * omessi del tutto invece che svuotati: un export e' un file che si
+     * condivide, e una chiave azzerata sarebbe indistinguibile da una chiave
+     * cancellata di proposito.
+     */
+    fun serializeRedacted(settings: AllSettings): String =
+        serialize(settings, skip = fields.filter { it.secret }.map { it.key }.toSet())
 
     fun withSet(settings: AllSettings, key: String, rawValue: Any?): AllSettings {
         val field = fieldByKey(key) ?: throw ConfigException("unknown key '$key'. Run 'wfas config list' to see all keys.")

@@ -10,9 +10,9 @@ plugins {
 }
 
 group = "com.wifiaudiostreaming"
-version = "6.0"
+version = "7.0"
 
-val appVersion = "5.1.0"
+val appVersion = "5.2.0"
 
 val displayVersion = appVersion.split(".").let { p ->
     val major = ((p.getOrNull(0)?.toIntOrNull() ?: 0) - 4).coerceAtLeast(0)
@@ -251,6 +251,10 @@ dependencies {
     implementation("org.bytedeco:ffmpeg:$javacvVersion:$targetPlatform")
     implementation("org.bytedeco:javacpp:$javacvVersion:$targetPlatform")
     implementation("com.google.zxing:core:3.5.3")
+    // DPAPI su Windows. La versione segue quella che dorkbox:SystemTray porta
+    // gia' a runtime, ma va dichiarata: le transitive di un 'implementation'
+    // non finiscono sul compile classpath.
+    implementation("net.java.dev.jna:jna-platform-jpms:5.13.0")
     implementation("com.dorkbox:SystemTray:4.4")
     implementation("org.slf4j:slf4j-nop:2.0.9")
 }

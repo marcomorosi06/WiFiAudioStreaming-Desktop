@@ -4402,7 +4402,7 @@ fun main(args: Array<String>) {
     cliArgs.configPath?.let { ConfigPaths.overrideConfigFile = java.io.File(it) }
 
     if (cliArgs.configCmd != null) {
-        val code = ConfigCli.run(cliArgs.configCmd, cliArgs.json)
+        val code = ConfigCli.run(cliArgs.configCmd, cliArgs.json, cliArgs.reveal)
         kotlin.system.exitProcess(code)
     }
 
@@ -4821,11 +4821,9 @@ fun startGuiApplication(cliArgs: CliArgs) = application {
                             Column {
                                 Text(if (wrong) stringResource("key_dialog_wrong") else stringResource("key_dialog_body"))
                                 Spacer(Modifier.height(8.dp))
-                                OutlinedTextField(
+                                AuthKeyField(
                                     value = keyText,
                                     onValueChange = { keyText = it },
-                                    singleLine = true,
-                                    label = { Text(stringResource("auth_key_label")) },
                                     modifier = Modifier.fillMaxWidth()
                                 )
                             }

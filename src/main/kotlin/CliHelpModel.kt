@@ -915,6 +915,16 @@ object CliHelpModel {
                         tokens = listOf("--json")
                     ),
                     HelpEntry(
+                        syntax = "--reveal",
+                        brief = "Print secret config values instead of masking them.",
+                        tokens = listOf("--reveal"),
+                        detail = "Secrets such as security.authKey are shown as ******** by " +
+                                 "'config list', 'config get' and 'config export', so they do not " +
+                                 "end up in terminal scrollback, shell history or a shared export " +
+                                 "by accident. Pass --reveal when you actually need the value, and " +
+                                 "treat whatever it lands in as a secret."
+                    ),
+                    HelpEntry(
                         syntax = "--quiet",
                         brief = "Suppress logs; only errors go to stderr.",
                         tokens = listOf("--quiet")
