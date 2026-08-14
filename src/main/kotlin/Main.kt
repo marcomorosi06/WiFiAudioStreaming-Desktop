@@ -1643,14 +1643,18 @@ object NetworkHandler_v1 {
     }
 
     // ── AudioEngine factory ────────────────────────────────────────────────────
-    private fun buildAndStartEngine(audioSettings: AudioSettings_V1): AudioEngine? {
+    private fun buildAndStartEngine(
+        audioSettings: AudioSettings_V1,
+        muteRender: Boolean = true
+    ): AudioEngine? {
         val targetLatencyMs = 10
         val bufFrames = (audioSettings.sampleRate.toInt() * targetLatencyMs / 1000)
             .coerceAtLeast(256)
         val engine = AudioEngine(
             sampleRate   = audioSettings.sampleRate.toInt(),
             channels     = audioSettings.channels,
-            bufferFrames = bufFrames
+            bufferFrames = bufFrames,
+            muteRender   = muteRender
         )
         return if (engine.start()) {
             engine
@@ -2453,6 +2457,8 @@ object NetworkHandler_v1 {
         rtpPort: Int,
         useNativeEngine: Boolean = true,
         micMixInputInfo: Mixer.Info? = null,
+        muteRender: Boolean = true,
+        persist: Boolean = false,
         dlnaConfig: DlnaServerConfig? = null,
         snapcastConfig: SnapcastServerConfig? = null,
         onAudioFrame: ((ShortArray) -> Unit)? = null,
@@ -2467,7 +2473,13 @@ object NetworkHandler_v1 {
                 startServerInstanceLocked(
                     audioSettings, port, isMulticast, capabilities,
                     micRoutingMode, micOutputMixerInfo, micPort, rtpPort,
-                    useNativeEngine, micMixInputInfo, dlnaConfig, snapcastConfig, onAudioFrame, onStatusUpdate
+                    useNativeEngine, micMixInputInfo,
+                    muteRender = muteRender,
+                    persist = persist,
+                    dlnaConfig = dlnaConfig,
+                    snapcastConfig = snapcastConfig,
+                    onAudioFrame = onAudioFrame,
+                    onStatusUpdate = onStatusUpdate
                 )
             }
         }
@@ -2484,6 +2496,8 @@ object NetworkHandler_v1 {
         rtpPort: Int,
         useNativeEngine: Boolean = true,
         micMixInputInfo: Mixer.Info? = null,
+        muteRender: Boolean = true,
+        persist: Boolean = false,
         dlnaConfig: DlnaServerConfig? = null,
         snapcastConfig: SnapcastServerConfig? = null,
         onAudioFrame: ((ShortArray) -> Unit)? = null,
@@ -2508,8 +2522,11 @@ object NetworkHandler_v1 {
             )
         }
 
+        // macOS non ha un mute di endpoint come Windows/Linux: si abbassa il volume
+        // di sistema. E' la stessa scelta che muteRender governa altrove, quindi
+        // --no-mute-render deve saltare anche questa.
         val isMacOS = System.getProperty("os.name").lowercase().let { it.contains("mac") || it.contains("darwin") }
-        if (isMacOS && AudioEngine.loadLibrary()) {
+        if (isMacOS && muteRender && AudioEngine.loadLibrary()) {
             val helperEngine = AudioEngine()
             val vol = helperEngine.getSystemVolume()
             if (vol >= 0f) {
@@ -2583,7 +2600,7 @@ object NetworkHandler_v1 {
             try {
                 if (isMulticast) {
                     if (useNativeEngine) {
-                        serverEngine = buildAndStartEngine(audioSettings)
+                        serverEngine = buildAndStartEngine(audioSettings, muteRender)
                         if (serverEngine == null) {
                             onStatusUpdate("error_virtual_driver_missing", emptyArray())
                             return@launch
@@ -2872,7 +2889,7 @@ object NetworkHandler_v1 {
                             WfasStats.add(WfasStats.Cat.HELLO, ackText.length)
 
                             if (useNativeEngine) {
-                                serverEngine = buildAndStartEngine(audioSettings)
+                                serverEngine = buildAndStartEngine(audioSettings, muteRender)
                                 if (serverEngine == null) {
                                     onStatusUpdate("error_virtual_driver_missing", emptyArray())
                                     break
@@ -3057,7 +3074,17 @@ object NetworkHandler_v1 {
                             }
                             if (!clientAlive.get() && isActive) {
                                 onStatusUpdate("status_client_disconnected", emptyArray())
-                                break
+                                if (!persist) break
+                                // --persist: e' finita la sessione, non il server. Azzero
+                                // lo stato del peer appena uscito e torno in cima al loop,
+                                // che ricomincia ad annunciarsi e riapre le porte al
+                                // prossimo client sullo stesso socket.
+                                pendCnonce   = ""
+                                pendSnonce   = ""
+                                micRecvDir   = null
+                                micRecvWin   = WfasCrypto.ReplayWindow()
+                                activePeerIp = null
+                                AppDebug.log("[SERVER][UNICAST] persist: session over, waiting for the next client")
                             }
                         }
                     }
@@ -4952,6 +4979,8 @@ fun startGuiApplication(cliArgs: CliArgs) = application {
                             audioSettings, port, isMulticastMode, serverCapabilities,
                             micRoutingMode, selectedServerMicOutput, mic, rtp,
                             appSettings.useNativeEngine, selectedMicMixInput,
+                            muteRender = cliArgs.muteRender ?: appSettings.muteRender,
+                            persist = cliArgs.persist ?: appSettings.serverPersist,
                             dlnaConfig = appSettings.toDlnaConfig(),
                             snapcastConfig = appSettings.toSnapcastConfig(),
                             onAudioFrame = vizSink
@@ -4961,7 +4990,10 @@ fun startGuiApplication(cliArgs: CliArgs) = application {
                                 virtualDriverStatus = NetworkHandler_v1.checkVirtualDriverStatus(appSettings.useNativeEngine)
                                 connectionStatus = Strings.get("status_inactive")
                             } else if (key == "status_client_disconnected") {
-                                scope.launch {
+                                // --persist: la sessione e' finita, il server no: resta in ascolto.
+                                if (cliArgs.persist ?: appSettings.serverPersist) {
+                                    connectionStatus = Strings.get("status_client_disconnected")
+                                } else scope.launch {
                                     NetworkHandler_v1.stopCurrentStream()
                                     isStreaming = false
                                     connectionStatus = Strings.get("status_inactive")
@@ -5019,6 +5051,8 @@ fun startGuiApplication(cliArgs: CliArgs) = application {
                                 audioSettings, port, isMulticastMode, caps,
                                 micMode, selectedServerMicOutput, mic, rtp,
                                 cliArgs.useNativeEngine, selectedMicMixInput,
+                                muteRender = cliArgs.muteRender ?: appSettings.muteRender,
+                                persist = cliArgs.persist ?: appSettings.serverPersist,
                                 dlnaConfig = appSettings.copy(
                                     dlnaEnabled = cliArgs.dlna || appSettings.dlnaEnabled,
                                     dlnaPort = if (cliArgs.dlna) cliArgs.dlnaPort.toString() else appSettings.dlnaPort,
@@ -5040,7 +5074,10 @@ fun startGuiApplication(cliArgs: CliArgs) = application {
                                     virtualDriverStatus = NetworkHandler_v1.checkVirtualDriverStatus(cliArgs.useNativeEngine)
                                     connectionStatus = Strings.get("status_inactive")
                                 } else if (key == "status_client_disconnected") {
-                                    scope.launch {
+                                    // --persist: la sessione e' finita, il server no: resta in ascolto.
+                                    if (cliArgs.persist ?: appSettings.serverPersist) {
+                                        connectionStatus = Strings.get("status_client_disconnected")
+                                    } else scope.launch {
                                         NetworkHandler_v1.stopCurrentStream()
                                         isStreaming = false
                                         connectionStatus = Strings.get("status_inactive")
@@ -5226,6 +5263,8 @@ fun startGuiApplication(cliArgs: CliArgs) = application {
                                     audioSettings, port, isMulticastMode, serverCapabilities,
                                     micRoutingMode, selectedServerMicOutput, mic, rtp,
                                     appSettings.useNativeEngine, selectedMicMixInput,
+                                    muteRender = cliArgs.muteRender ?: appSettings.muteRender,
+                                    persist = cliArgs.persist ?: appSettings.serverPersist,
                                     dlnaConfig = appSettings.toDlnaConfig(),
                                     snapcastConfig = appSettings.toSnapcastConfig(),
                                     onAudioFrame = vizSink
@@ -5235,7 +5274,10 @@ fun startGuiApplication(cliArgs: CliArgs) = application {
                                         virtualDriverStatus  = NetworkHandler_v1.checkVirtualDriverStatus(appSettings.useNativeEngine)
                                         connectionStatus     = Strings.get("status_inactive")
                                     } else if (key == "status_client_disconnected") {
-                                        scope.launch {
+                                        // --persist: la sessione e' finita, il server no: resta in ascolto.
+                                        if (cliArgs.persist ?: appSettings.serverPersist) {
+                                            connectionStatus = Strings.get("status_client_disconnected")
+                                        } else scope.launch {
                                             NetworkHandler_v1.stopCurrentStream()
                                             isStreaming = false
                                             connectionStatus = Strings.get("status_inactive")

@@ -50,6 +50,8 @@ data class AppSettings(
     val launchAtStartup: Boolean = false,
     val autoStartServer: Boolean = false,
     val autoStartMulticast: Boolean = true,
+    val muteRender: Boolean = true,
+    val serverPersist: Boolean = false,
     val lastMulticastMode: Boolean = false,
     val autoConnectClientEnabled: Boolean = false,
     val autoConnectIps: List<String> = emptyList(),

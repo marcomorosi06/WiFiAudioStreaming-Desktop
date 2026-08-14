@@ -57,6 +57,10 @@ data class CliArgs(
     val micRouting:      MicRoutingMode  = MicRoutingMode.OFF,
     val volume:          Float?          = null,
     val mute:            Boolean         = false,
+    // null = usa l'impostazione salvata (server.muteRender / server.persist),
+    // il flag da riga di comando vale solo per questa esecuzione.
+    val muteRender:      Boolean?        = null,
+    val persist:         Boolean?        = null,
     val watch:           Boolean         = false,
     val json:            Boolean         = false,
     val quiet:           Boolean         = false,
@@ -167,6 +171,8 @@ data class CliArgs(
             var micRouting      = MicRoutingMode.OFF
             var volume: Float?              = null
             var mute            = false
+            var muteRender: Boolean?        = null
+            var persist: Boolean?           = null
             var watch           = false
             var json            = false
             var quiet           = false
@@ -466,6 +472,8 @@ data class CliArgs(
                         volume = (pct / 100f).coerceIn(0f, 2f)
                     }
                     "--mute" -> mute = true
+                    "--no-mute-render" -> muteRender = false
+                    "--persist" -> persist = true
 
                     "--watch" -> watch = true
                     "--json"   -> json   = true
@@ -619,6 +627,20 @@ data class CliArgs(
 
             if (groove > 0f && !viz) parseError("--groove requires --viz")
 
+            // Entrambe le opzioni riguardano il lato che cattura l'audio: fuori
+            // dal server non hanno nulla su cui agire, meglio dirlo subito che
+            // farle passare come no-op silenziosi.
+            if (runMode != RunMode.CLI_SERVER && runMode != RunMode.GUI) {
+                if (muteRender == false) parseError(
+                    "--no-mute-render applies to a server: the server is the side that mutes " +
+                        "this machine's speakers while it captures them."
+                )
+                if (persist == true) parseError(
+                    "--persist applies to a server: it keeps the server waiting for the next " +
+                        "client instead of exiting when one disconnects."
+                )
+            }
+
             if (qr && pairCmd == null) {
                 if (runMode != RunMode.CLI_SERVER && runMode != RunMode.GUI)
                     parseError("--qr shows a pairing code for a server. Use 'wfas pair connect <link>' to join one.")
@@ -665,6 +687,8 @@ data class CliArgs(
                 micRouting      = if (mic && micRouting == MicRoutingMode.OFF) MicRoutingMode.MIX_INTO_STREAM else micRouting,
                 volume          = volume,
                 mute            = mute,
+                muteRender      = muteRender,
+                persist         = persist,
                 watch           = watch,
                 json            = json,
                 quiet           = quiet,

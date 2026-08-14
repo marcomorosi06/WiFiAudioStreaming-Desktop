@@ -40,7 +40,7 @@ Each section below is also reachable on its own with 'wfas \-\-help <topic>'.
 Getting started \- modes, GUI vs CLI, discovery
 .TP
 .B server
-Server options \- ports, capture engine, SDP
+Server options \- ports, capture engine, session, SDP
 .TP
 .B client
 Client options \- output device, volume, microphone
@@ -138,7 +138,26 @@ Implied by \-\-rtp, \-\-http, \-\-dlna and \-\-snapcast. Note that \-\-auth\-mod
 Network interface to bind and announce on.
 .br
 Default: Auto.
+.SS Session lifetime
+.TP
+.B \-\-persist
+Keep the server up when a client disconnects, waiting for the next one.
+.br
+Default: off: a unicast server exits with its client.
+.RS
+.PP
+A unicast server normally serves one session and exits when that client leaves. With \-\-persist the disconnect ends the session only: the port stays bound, discovery starts announcing again and the next client is served without restarting anything. Made for headless and systemd use, where Restart=always would otherwise bounce the whole process after every normal disconnect. The server then ends only when you end it: q on the terminal, Ctrl\-C, or systemctl stop. Multicast has no per\-client session and already behaves this way, so there the flag changes nothing. To make it the default: 'wfas config set server.persist true', or the switch in Settings > Startup & window. The flag then only matters for a run where the setting is off.
+.RE
 .SS Capture engine
+.TP
+.B \-\-no\-mute\-render
+Keep playing on this machine's speakers while streaming.
+.br
+Default: off: local playback is muted for the session.
+.RS
+.PP
+While capturing, the server mutes local playback so the same audio is not heard twice, once from the speakers here and once from the client. What it mutes is the render side, not the capture: the WASAPI render endpoint on Windows, the default PulseAudio/PipeWire sink on Linux, the system volume on macOS. The previous state is restored when the server stops. Pass \-\-no\-mute\-render to leave it alone and hear the audio in both places, e.g. headphones on this machine and earbuds on the phone. Native engine only: with \-\-legacy\-engine capture goes through a virtual cable, which takes the audio off the speakers by itself. To make it the default: 'wfas config set server.muteRender false', or the switch in Settings > Audio Quality. The flag then only matters for a run where the setting is on.
+.RE
 .TP
 .B \-\-legacy\-engine
 Use the legacy FFmpeg grabber instead of the native C audio engine.
@@ -685,6 +704,12 @@ Serve every listener on the group.
 .TP
 .B wfas \-\-mode server \-\-rtp \-\-sdp
 Server plus RTP, printing the SDP.
+.TP
+.B wfas \-\-server \-\-persist
+Stay up across client disconnects.
+.TP
+.B wfas \-\-server \-\-no\-mute\-render
+Keep hearing the audio on this machine too.
 .TP
 .B wfas \-\-server \-\-legacy\-engine
 Fall back to the FFmpeg grabber.

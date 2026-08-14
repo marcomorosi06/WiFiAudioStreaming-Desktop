@@ -1277,7 +1277,17 @@ fun SettingsScreen(
                             checked = appSettings.useNativeEngine,
                             onCheckedChange = { onAppSettingsChange(appSettings.copy(useNativeEngine = it)) }
                         )
-                    
+
+                        HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp))
+
+                        SwitchSetting(
+                            title = stringResource("mute_render_title"),
+                            description = stringResource("mute_render_desc"),
+                            icon = Icons.Outlined.VolumeOff,
+                            checked = appSettings.muteRender,
+                            onCheckedChange = { onAppSettingsChange(appSettings.copy(muteRender = it)) }
+                        )
+
                         }
                         2 -> {
                         NetworkSettingsContent(
@@ -1356,6 +1366,17 @@ fun SettingsScreen(
                                 }
                             }
                         }
+
+                        HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp))
+
+                        SwitchSetting(
+                            title = stringResource("server_persist_title"),
+                            description = stringResource("server_persist_desc"),
+                            icon = Icons.Outlined.AllInclusive,
+                            checked = appSettings.serverPersist,
+                            onCheckedChange = { onAppSettingsChange(appSettings.copy(serverPersist = it)) }
+                        )
+
                         HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp))
                         SwitchSetting(
                             title = stringResource("auto_connect_client_title"),

@@ -531,6 +531,10 @@ private suspend fun runCliServer(rawArgs: CliArgs, settings: AllSettings) {
     }
 
     val audio = settings.audio
+    // I flag valgono per questa esecuzione, l'impostazione salvata (anche dalla GUI)
+    // e' il default.
+    val muteRender = args.muteRender ?: settings.app.muteRender
+    val persist    = args.persist    ?: settings.app.serverPersist
     val protocols = mutableSetOf(StreamingProtocol.WFAS)
     if (args.rtp)  protocols += StreamingProtocol.RTP
     if (args.http) protocols += StreamingProtocol.HTTP
@@ -561,6 +565,8 @@ private suspend fun runCliServer(rawArgs: CliArgs, settings: AllSettings) {
             "snapcast_port" to args.snapcastPort,
             "snapcast_control_port" to args.snapcastControlPort,
             "snapcast_codec" to args.snapcastCodec,
+            "mute_render"   to muteRender,
+            "persist"       to persist,
         )
     } else if (!args.viz) {
         out("", args)
@@ -573,6 +579,14 @@ private suspend fun runCliServer(rawArgs: CliArgs, settings: AllSettings) {
             out("  ${dim("Snapcast")} stream ${args.snapcastPort}, control ${args.snapcastControlPort}, codec ${args.snapcastCodec}", args)
         }
         if (args.mic)  out("  ${dim("Mic")}     ${args.micRouting.name.lowercase().replace('_', '-')}", args)
+        if (!muteRender) out("  ${dim("Speakers")} ${green("kept on")} ${dim("(local playback is not muted)")}", args)
+        if (persist) out(
+            "  ${dim("Persist")} " + if (args.multicast)
+                dim("implicit in multicast: there is no per-client session to end")
+            else
+                "${green("on")} ${dim("- waits for the next client instead of exiting")}",
+            args
+        )
         reportLink(args)
         out("", args)
         out(
@@ -624,6 +638,8 @@ private suspend fun runCliServer(rawArgs: CliArgs, settings: AllSettings) {
         rtpPort        = args.rtpPort,
         useNativeEngine = args.useNativeEngine,
         micMixInputInfo = micMixInput,
+        muteRender      = muteRender,
+        persist         = persist,
         dlnaConfig      = SettingsRepository.loadSettings().app
             .copy(dlnaEnabled = args.dlna, dlnaPort = args.dlnaPort.toString(), dlnaFormat = args.dlnaFormat)
             .toDlnaConfig(),
@@ -660,7 +676,10 @@ private suspend fun runCliServer(rawArgs: CliArgs, settings: AllSettings) {
             }
             out("  $icon  $msg", args)
         }
-        if (key.contains("disconnect")) {
+        // Senza --persist il server e' una sessione sola: quando il client se ne
+        // va il processo ha finito. Con --persist il loop unicast resta in ascolto,
+        // quindi qui non c'e' niente da chiudere.
+        if (key.contains("disconnect") && !persist) {
             if (!done.isCompleted) done.complete(Unit)
         }
     }

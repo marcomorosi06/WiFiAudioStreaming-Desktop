@@ -167,6 +167,8 @@ WiFi Audio Streaming ships with `wfas`, a fully-featured CLI and headless daemon
 
 ```bash
 wfas --server --rtp                     # start a headless RTP server
+wfas --server --persist                 # stay up across client disconnects
+wfas --server --no-mute-render          # keep hearing the audio on this machine too
 wfas --server --snapcast                # serve synchronised multiroom audio
 wfas --server --snapcast --snapcast-codec flac   # halve the bandwidth per room
 wfas --client 192.168.1.42              # connect as a client

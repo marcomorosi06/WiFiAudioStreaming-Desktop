@@ -153,7 +153,7 @@ object CliHelpModel {
     private val SERVER = HelpTopic(
         key = "server",
         title = "Server options",
-        tagline = "ports, capture engine, SDP",
+        tagline = "ports, capture engine, session, SDP",
         aliases = listOf("source", "send"),
         intro = "The server captures what this machine is playing and sends it out over the native " +
                 "WFAS protocol. Everything here is about that native stream; the extra protocols " +
@@ -190,8 +190,50 @@ object CliHelpModel {
                 )
             ),
             HelpBlock(
+                heading = "Session lifetime",
+                entries = listOf(
+                    HelpEntry(
+                        syntax = "--persist",
+                        brief = "Keep the server up when a client disconnects, waiting for the next one.",
+                        default = "off: a unicast server exits with its client",
+                        tokens = listOf("--persist"),
+                        detail = "A unicast server normally serves one session and exits when that " +
+                                 "client leaves. With --persist the disconnect ends the session only: " +
+                                 "the port stays bound, discovery starts announcing again and the next " +
+                                 "client is served without restarting anything. Made for headless and " +
+                                 "systemd use, where Restart=always would otherwise bounce the whole " +
+                                 "process after every normal disconnect. The server then ends only " +
+                                 "when you end it: q on the terminal, Ctrl-C, or systemctl stop. " +
+                                 "Multicast has no per-client session and already behaves this way, " +
+                                 "so there the flag changes nothing.\n" +
+                                 "To make it the default: 'wfas config set server.persist true', or " +
+                                 "the switch in Settings > Startup & window. The flag then only " +
+                                 "matters for a run where the setting is off."
+                    )
+                )
+            ),
+            HelpBlock(
                 heading = "Capture engine",
                 entries = listOf(
+                    HelpEntry(
+                        syntax = "--no-mute-render",
+                        brief = "Keep playing on this machine's speakers while streaming.",
+                        default = "off: local playback is muted for the session",
+                        tokens = listOf("--no-mute-render"),
+                        detail = "While capturing, the server mutes local playback so the same audio " +
+                                 "is not heard twice, once from the speakers here and once from the " +
+                                 "client. What it mutes is the render side, not the capture: the " +
+                                 "WASAPI render endpoint on Windows, the default PulseAudio/PipeWire " +
+                                 "sink on Linux, the system volume on macOS. The previous state is " +
+                                 "restored when the server stops. Pass --no-mute-render to leave it " +
+                                 "alone and hear the audio in both places, e.g. headphones on this " +
+                                 "machine and earbuds on the phone. Native engine only: with " +
+                                 "--legacy-engine capture goes through a virtual cable, which takes " +
+                                 "the audio off the speakers by itself.\n" +
+                                 "To make it the default: 'wfas config set server.muteRender false', " +
+                                 "or the switch in Settings > Audio Quality. The flag then only " +
+                                 "matters for a run where the setting is on."
+                    ),
                     HelpEntry(
                         syntax = "--legacy-engine",
                         brief = "Use the legacy FFmpeg grabber instead of the native C audio engine.",
@@ -228,6 +270,8 @@ object CliHelpModel {
             "wfas --server --port 9500"      to "serve on a non-default port",
             "wfas --server --multicast"      to "serve every listener on the group",
             "wfas --mode server --rtp --sdp" to "server plus RTP, printing the SDP",
+            "wfas --server --persist"        to "stay up across client disconnects",
+            "wfas --server --no-mute-render" to "keep hearing the audio on this machine too",
             "wfas --server --legacy-engine"  to "fall back to the FFmpeg grabber"
         ),
         seeAlso = listOf("protocols", "security", "network")
