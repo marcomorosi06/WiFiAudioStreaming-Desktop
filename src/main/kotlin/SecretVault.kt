@@ -59,6 +59,19 @@ object SecretVault {
         backend?.let { runCatching { it.clear(name) } }
     }
 
+    fun serverKeyAccount(serverId: String): String =
+        "server_key_${serverId.replace(':', '_').replace('/', '_').replace('@', '_').replace(' ', '_')}"
+
+    fun storeServerKey(serverId: String, key: String): Boolean =
+        store(serverKeyAccount(serverId), key)
+
+    fun loadServerKey(serverId: String): String? =
+        load(serverKeyAccount(serverId))
+
+    fun clearServerKey(serverId: String) {
+        clear(serverKeyAccount(serverId))
+    }
+
     private fun detect(): Backend? = when (ConfigPaths.os) {
         HostOs.WINDOWS -> DpapiBackend.takeIf { it.usable() }
         HostOs.MACOS   -> MacKeychainBackend.takeIf { it.usable() }

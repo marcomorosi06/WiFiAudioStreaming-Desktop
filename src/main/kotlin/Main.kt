@@ -17,6 +17,7 @@
 
 import androidx.compose.desktop.ui.tooling.preview.Preview
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
@@ -485,6 +486,16 @@ object NetworkHandler_v1 {
     }
 
     data class McastSnapshot(val epoch: Long, val key: String, val encrypted: Boolean)
+    data class KeyPromptParam(
+        val wrong: Boolean,
+        val wasSaved: Boolean = false,
+        val serverIp: String = "",
+        val serverName: String = ""
+    )
+    data class KeyPromptResult(
+        val key: String,
+        val remember: Boolean = false
+    )
 
     val mcastSession = MutableStateFlow<McastSnapshot?>(null)
     @Volatile private var mcastRekey: ((String) -> Unit)? = null
@@ -516,6 +527,9 @@ object NetworkHandler_v1 {
     @Volatile var micSendDir: WfasCrypto.Dir? = null
     var onAuthRequest: ((peer: String) -> Boolean)? = null
     var onKeyRequest: (suspend (wrong: Boolean) -> String?)? = null
+    var onKeyRequestWithParam: (suspend (param: KeyPromptParam) -> KeyPromptResult?)? = null
+    var onSaveServerCredential: ((ip: String, name: String, port: Int) -> Unit)? = null
+    var onRecordRecentServer: ((ip: String, name: String, port: Int) -> Unit)? = null
 
     private fun clientHelloMessage(): String = "$CLIENT_HELLO_MESSAGE;v=$WFAS_PROTOCOL_VERSION"
     private fun helloAckMessage():    String = "$HELLO_ACK_PREFIX;v=$WFAS_PROTOCOL_VERSION"
@@ -3210,6 +3224,15 @@ object NetworkHandler_v1 {
                         var proved = false
                         var clientSnonce = ""
                         var clientKey = clientPresharedKey
+                        var usingSavedKey = false
+                        if (clientKey.isEmpty()) {
+                            val saved = SecretVault.loadServerKey(serverInfo.ip)
+                            if (!saved.isNullOrBlank()) {
+                                clientKey = saved
+                                usingSavedKey = true
+                                AppDebug.log("[CLIENT][UNICAST] Using saved key from SecretVault for ${serverInfo.ip}")
+                            }
+                        }
                         var sessionEncrypted = false
                         socket.send(Datagram(buildPacket { writeText(helloMsg) }, remoteAddress))
                         AppDebug.log("[CLIENT][UNICAST] HELLO sent, waiting for reply...")
@@ -3218,10 +3241,26 @@ object NetworkHandler_v1 {
                         var handshakeDeadline = System.currentTimeMillis() + 30000
                         var handshakeOk = false
 
-                        suspend fun promptKeyAndRestart(wrong: Boolean): Boolean {
-                            val k = onKeyRequest?.invoke(wrong) ?: return false
-                            if (k.isBlank()) return false
-                            clientKey = k
+                        suspend fun promptKeyAndRestart(wrong: Boolean, wasSaved: Boolean = false): Boolean {
+                            if (wasSaved || usingSavedKey) {
+                                SecretVault.clearServerKey(serverInfo.ip)
+                                usingSavedKey = false
+                            }
+                            val res = onKeyRequestWithParam?.invoke(
+                                KeyPromptParam(
+                                    wrong = wrong,
+                                    wasSaved = wasSaved,
+                                    serverIp = serverInfo.ip,
+                                    serverName = serverInfo.ip
+                                )
+                            ) ?: onKeyRequest?.invoke(wrong)?.let { KeyPromptResult(it, remember = false) } ?: return false
+
+                            if (res.key.isBlank()) return false
+                            clientKey = res.key
+                            if (res.remember && SecretVault.available) {
+                                SecretVault.storeServerKey(serverInfo.ip, res.key)
+                                onSaveServerCredential?.invoke(serverInfo.ip, serverInfo.ip, serverInfo.port)
+                            }
                             proved = false
                             helloMsg = "${clientHelloMessage()};cnonce=$cnonce"
                             socket.send(Datagram(buildPacket { writeText(helloMsg) }, remoteAddress))
@@ -3266,7 +3305,7 @@ object NetworkHandler_v1 {
                                         onStatusUpdate("status_unauthorized", emptyArray())
                                         return@use
                                     }
-                                    if (!promptKeyAndRestart(true)) {
+                                    if (!promptKeyAndRestart(wrong = true, wasSaved = usingSavedKey)) {
                                         onStatusUpdate("status_unauthorized", emptyArray())
                                         return@use
                                     }
@@ -3277,12 +3316,24 @@ object NetworkHandler_v1 {
                                 ackText.startsWith(AUTH_REQUIRED_PREFIX) -> {
                                     if (clientKey.isEmpty()) {
                                         AppDebug.log("[CLIENT][UNICAST] server requires a key")
-                                        val k = onKeyRequest?.invoke(false)
-                                        if (k.isNullOrBlank()) {
+                                        val res = onKeyRequestWithParam?.invoke(
+                                            KeyPromptParam(
+                                                wrong = false,
+                                                wasSaved = false,
+                                                serverIp = serverInfo.ip,
+                                                serverName = serverInfo.ip
+                                            )
+                                        ) ?: onKeyRequest?.invoke(false)?.let { KeyPromptResult(it, remember = false) }
+
+                                        if (res == null || res.key.isBlank()) {
                                             onStatusUpdate("status_key_required", emptyArray())
                                             return@use
                                         }
-                                        clientKey = k
+                                        clientKey = res.key
+                                        if (res.remember && SecretVault.available) {
+                                            SecretVault.storeServerKey(serverInfo.ip, res.key)
+                                            onSaveServerCredential?.invoke(serverInfo.ip, serverInfo.ip, serverInfo.port)
+                                        }
                                         handshakeDeadline = System.currentTimeMillis() + 30000
                                     }
                                     val snonce = WfasAuth.getToken(ackText, "snonce") ?: ""
@@ -3290,7 +3341,7 @@ object NetworkHandler_v1 {
                                     val sproof = WfasAuth.getToken(ackText, "sproof") ?: ""
                                     if (!WfasAuth.constantTimeEquals(sproof, WfasAuth.proof(clientKey, 'S', cnonce, snonce))) {
                                         AppDebug.log("[CLIENT][UNICAST] server proof invalid (rogue server or wrong key)")
-                                        if (!promptKeyAndRestart(true)) {
+                                        if (!promptKeyAndRestart(wrong = true, wasSaved = usingSavedKey)) {
                                             onStatusUpdate("status_unauthorized", emptyArray())
                                             return@use
                                         }
@@ -3329,6 +3380,7 @@ object NetworkHandler_v1 {
                             onStatusUpdate("status_handshake_failed", emptyArray())
                             return@use
                         }
+                        onRecordRecentServer?.invoke(serverInfo.ip, serverInfo.ip, serverInfo.port)
                         AppDebug.log("[CLIENT][UNICAST] handshake OK in ${System.currentTimeMillis() - handshakeStartedAt}ms " +
                                 "after $helloAttempts resend(s), streaming from $remoteAddress")
                         onStatusUpdate("status_connected_streaming_from", arrayOf(remoteAddress))
@@ -3492,6 +3544,15 @@ object NetworkHandler_v1 {
                         var mcDir: WfasCrypto.Dir? = null
                         var mcWin = WfasCrypto.ReplayWindow()
                         var mcKey = clientPresharedKey
+                        var mcUsingSaved = false
+                        if (mcKey.isEmpty()) {
+                            val saved = SecretVault.loadServerKey(serverInfo.ip)
+                            if (!saved.isNullOrBlank()) {
+                                mcKey = saved
+                                mcUsingSaved = true
+                                AppDebug.log("[CLIENT][MULTICAST] Using saved key from SecretVault for ${serverInfo.ip}")
+                            }
+                        }
                         var mcAsked = false
                         var mcWrong = false
                         val mcExpectedEpoch = expectedMcastEpoch
@@ -3529,13 +3590,26 @@ object NetworkHandler_v1 {
                                 val beaconStr = String(packet.data, 0, packet.length, Charsets.US_ASCII)
                                 if (mcDir == null) {
                                     if (mcKey.isEmpty()) {
-                                        if (mcAsked && onKeyRequest == null) continue
+                                        if (mcAsked && onKeyRequestWithParam == null && onKeyRequest == null) continue
                                         mcAsked = true
-                                        mcKey = onKeyRequest?.invoke(mcWrong)?.takeIf { it.isNotBlank() } ?: ""
+                                        val res = onKeyRequestWithParam?.invoke(
+                                            KeyPromptParam(
+                                                wrong = mcWrong,
+                                                wasSaved = mcUsingSaved,
+                                                serverIp = serverInfo.ip,
+                                                serverName = serverInfo.ip
+                                            )
+                                        ) ?: onKeyRequest?.invoke(mcWrong)?.let { KeyPromptResult(it, remember = false) }
+                                        mcKey = res?.key?.takeIf { it.isNotBlank() } ?: ""
                                         if (mcKey.isEmpty()) { onStatusUpdate("status_key_required", emptyArray()); continue }
+                                        if (res?.remember == true && SecretVault.available) {
+                                            SecretVault.storeServerKey(serverInfo.ip, res.key)
+                                            onSaveServerCredential?.invoke(serverInfo.ip, serverInfo.ip, serverInfo.port)
+                                        }
                                     }
                                     val info = WfasCrypto.parseMcastBeacon(mcKey, beaconStr, -1L)
                                     if (info != null) {
+                                        onRecordRecentServer?.invoke(serverInfo.ip, serverInfo.ip, serverInfo.port)
                                         if (!mcEpochVerified) {
                                             mcEpochVerified = true
                                             if (mcExpectedEpoch != null && info.epoch != mcExpectedEpoch) {
@@ -3559,6 +3633,10 @@ object NetworkHandler_v1 {
                                             onStatusUpdate("status_group_rekeyed", emptyArray())
                                         }
                                     } else {
+                                        if (mcUsingSaved) {
+                                            SecretVault.clearServerKey(serverInfo.ip)
+                                            mcUsingSaved = false
+                                        }
                                         mcWrong = true
                                         mcKey = ""
                                     }
@@ -4508,11 +4586,16 @@ fun main(args: Array<String>) {
 
 fun startGuiApplication(cliArgs: CliArgs) = application {
     val loadedSettings = SettingsRepository.loadSettings()
+    Strings.setLanguage(loadedSettings.app.language)
     var appSettings    by remember { mutableStateOf(loadedSettings.app) }
     var audioSettings  by remember { mutableStateOf(loadedSettings.audio) }
     var streamingPort  by remember { mutableStateOf(loadedSettings.streamingPort) }
     var micPort        by remember { mutableStateOf(loadedSettings.micPort) }
     var micRoutingMode by remember { mutableStateOf(MicRoutingMode.fromStringSafe(loadedSettings.micRoutingMode)) }
+
+    LaunchedEffect(appSettings.language) {
+        Strings.setLanguage(appSettings.language)
+    }
 
     val isWindowsOS = remember { System.getProperty("os.name").lowercase().contains("win") }
     var serverVolume by remember { mutableStateOf(1f) }
@@ -4577,6 +4660,8 @@ fun startGuiApplication(cliArgs: CliArgs) = application {
     val discoveredDevices  = remember { mutableStateMapOf<String, ServerInfo>() }
     var connectionStatus   by remember { mutableStateOf(Strings.get("status_inactive")) }
     var isStreaming         by remember { mutableStateOf(false) }
+    var lastConnectedServerInfo by remember { mutableStateOf<ServerInfo?>(null) }
+    var isAutoReconnecting      by remember { mutableStateOf(false) }
     LaunchedEffect(isStreaming) {
         if (!isStreaming) SpectrumAnalyzer.reset()
     }
@@ -4803,14 +4888,36 @@ fun startGuiApplication(cliArgs: CliArgs) = application {
                 runCatching { kotlinx.coroutines.runBlocking { def.await() } }.getOrDefault(false)
             }
         }
-        var keyRequestWrong by remember { mutableStateOf<Boolean?>(null) }
-        val keyDecision = remember { java.util.concurrent.atomic.AtomicReference<kotlinx.coroutines.CompletableDeferred<String?>?>(null) }
+        var keyRequestState by remember { mutableStateOf<NetworkHandler_v1.KeyPromptParam?>(null) }
+        val keyDecision = remember { java.util.concurrent.atomic.AtomicReference<kotlinx.coroutines.CompletableDeferred<NetworkHandler_v1.KeyPromptResult?>?>(null) }
         LaunchedEffect(Unit) {
-            NetworkHandler_v1.onKeyRequest = { wrong ->
-                val def = kotlinx.coroutines.CompletableDeferred<String?>()
+            NetworkHandler_v1.onKeyRequestWithParam = { param ->
+                val def = kotlinx.coroutines.CompletableDeferred<NetworkHandler_v1.KeyPromptResult?>()
                 keyDecision.set(def)
-                keyRequestWrong = wrong
+                keyRequestState = param
                 runCatching { def.await() }.getOrNull()
+            }
+            NetworkHandler_v1.onKeyRequest = { wrong ->
+                val def = kotlinx.coroutines.CompletableDeferred<NetworkHandler_v1.KeyPromptResult?>()
+                keyDecision.set(def)
+                keyRequestState = NetworkHandler_v1.KeyPromptParam(wrong = wrong)
+                runCatching { def.await() }?.getOrNull()?.key
+            }
+            NetworkHandler_v1.onSaveServerCredential = { ip, name, port ->
+                val newItem = SavedServerItem(ip, name, ip, port.toString())
+                val filtered = appSettings.savedServers.filter {
+                    val p = SavedServerItem.fromSerialized(it)
+                    p?.ip != ip && p?.id != ip
+                }
+                appSettings = appSettings.copy(savedServers = filtered + newItem.toSerialized())
+            }
+            NetworkHandler_v1.onRecordRecentServer = { ip, name, port ->
+                val item = SavedServerItem(ip, name, ip, port.toString(), System.currentTimeMillis())
+                val filtered = appSettings.recentServers.filter {
+                    val p = SavedServerItem.fromSerialized(it)
+                    p?.ip != ip
+                }
+                appSettings = appSettings.copy(recentServers = (listOf(item.toSerialized()) + filtered).take(10))
             }
         }
         val customColor = appSettings.customThemeColor?.toULong()?.let { Color(it) }
@@ -4839,29 +4946,78 @@ fun startGuiApplication(cliArgs: CliArgs) = application {
                         }
                     )
                 }
-                keyRequestWrong?.let { wrong ->
+                keyRequestState?.let { state ->
                     var keyText by remember { mutableStateOf("") }
+                    var rememberKey by remember { mutableStateOf(true) }
                     AlertDialog(
-                        onDismissRequest = { keyDecision.getAndSet(null)?.complete(null); keyRequestWrong = null },
+                        onDismissRequest = {
+                            keyDecision.getAndSet(null)?.complete(null)
+                            keyRequestState = null
+                        },
                         title = { Text(stringResource("key_dialog_title")) },
                         text = {
-                            Column {
-                                Text(if (wrong) stringResource("key_dialog_wrong") else stringResource("key_dialog_body"))
-                                Spacer(Modifier.height(8.dp))
+                            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                                if (state.wasSaved) {
+                                    Text(
+                                        stringResource("key_dialog_wrong_saved"),
+                                        color = MaterialTheme.colorScheme.error,
+                                        style = MaterialTheme.typography.bodyMedium
+                                    )
+                                } else if (state.wrong) {
+                                    Text(
+                                        stringResource("key_dialog_wrong"),
+                                        color = MaterialTheme.colorScheme.error,
+                                        style = MaterialTheme.typography.bodyMedium
+                                    )
+                                } else {
+                                    Text(stringResource("key_dialog_body"), style = MaterialTheme.typography.bodyMedium)
+                                }
+
+                                if (state.serverIp.isNotBlank()) {
+                                    Text(
+                                        "${state.serverName.ifBlank { "Server" }} (${state.serverIp})",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
+
                                 AuthKeyField(
                                     value = keyText,
                                     onValueChange = { keyText = it },
                                     modifier = Modifier.fillMaxWidth()
                                 )
+
+                                if (SecretVault.available) {
+                                    Row(
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        modifier = Modifier.clickable { rememberKey = !rememberKey }
+                                    ) {
+                                        Checkbox(
+                                            checked = rememberKey,
+                                            onCheckedChange = { rememberKey = it }
+                                        )
+                                        Spacer(Modifier.width(8.dp))
+                                        Text(
+                                            stringResource("key_dialog_remember"),
+                                            style = MaterialTheme.typography.bodyMedium
+                                        )
+                                    }
+                                }
                             }
                         },
                         confirmButton = {
-                            Button(onClick = { keyDecision.getAndSet(null)?.complete(keyText); keyRequestWrong = null }) {
+                            Button(onClick = {
+                                keyDecision.getAndSet(null)?.complete(NetworkHandler_v1.KeyPromptResult(keyText, rememberKey))
+                                keyRequestState = null
+                            }) {
                                 Text(stringResource("key_dialog_connect"))
                             }
                         },
                         dismissButton = {
-                            TextButton(onClick = { keyDecision.getAndSet(null)?.complete(null); keyRequestWrong = null }) {
+                            TextButton(onClick = {
+                                keyDecision.getAndSet(null)?.complete(null)
+                                keyRequestState = null
+                            }) {
                                 Text(stringResource("key_dialog_cancel"))
                             }
                         }
@@ -4944,19 +5100,50 @@ fun startGuiApplication(cliArgs: CliArgs) = application {
                     )
                 }
 
-                val clientStatusHandler: (key: String, args: Array<out Any>) -> Unit = { key, args ->
+                lateinit var clientStatusHandler: (key: String, args: Array<out Any>) -> Unit
+                clientStatusHandler = { key, args ->
                     connectionStatus = if (args.isEmpty()) Strings.get(key) else Strings.get(key, *args)
+                    if (key == "status_connected_streaming_from" || key == "status_multicast_streaming") {
+                        isAutoReconnecting = false
+                    }
                     if (key in clientDisconnectKeys) {
                         scope.launch {
                             NetworkHandler_v1.stopCurrentStream()
                             isStreaming = false
-                            connectionStatus = Strings.get("status_inactive")
-                            if (!isServer) {
-                                NetworkHandler_v1.beginDeviceDiscovery { hostname, serverInfo ->
-                                    if (serverInfo.lastSeen == 0L) {
-                                        discoveredDevices.remove(hostname)
-                                    } else {
-                                        discoveredDevices[hostname] = serverInfo
+                            val target = lastConnectedServerInfo
+                            if (appSettings.autoReconnectEnabled && target != null && !isServer &&
+                                key in setOf("status_server_disconnected", "status_server_no_response")
+                            ) {
+                                isAutoReconnecting = true
+                                var delaySec = 2
+                                while (isActive && isAutoReconnecting && lastConnectedServerInfo != null && !isServer) {
+                                    connectionStatus = Strings.get("status_reconnecting", delaySec)
+                                    delay(delaySec * 1000L)
+                                    if (!isActive || !isAutoReconnecting || lastConnectedServerInfo == null || isServer) break
+                                    connectionStatus = Strings.get("status_reconnecting_now", target.ip)
+                                    isStreaming = true
+                                    val mic = micPort.toIntOrNull() ?: 9092
+                                    val outDev = selectedOutputDevice ?: break
+                                    NetworkHandler_v1.launchClientInstance(
+                                        audioSettings, target, outDev,
+                                        sendMicrophone, selectedClientMic, mic,
+                                        appSettings.connectionSoundEnabled,
+                                        appSettings.disconnectionSoundEnabled,
+                                        onAudioFrame = vizSink,
+                                        onStatusUpdate = clientStatusHandler
+                                    )
+                                    delaySec = (delaySec * 2).coerceAtMost(10)
+                                    break
+                                }
+                            } else {
+                                connectionStatus = Strings.get("status_inactive")
+                                if (!isServer) {
+                                    NetworkHandler_v1.beginDeviceDiscovery { hostname, serverInfo ->
+                                        if (serverInfo.lastSeen == 0L) {
+                                            discoveredDevices.remove(hostname)
+                                        } else {
+                                            discoveredDevices[hostname] = serverInfo
+                                        }
                                     }
                                 }
                             }
@@ -5226,7 +5413,7 @@ fun startGuiApplication(cliArgs: CliArgs) = application {
                                         appSettings.connectionSoundEnabled,
                                         appSettings.disconnectionSoundEnabled,
                                         onAudioFrame = vizSink,
-                                onStatusUpdate = clientStatusHandler
+                                        onStatusUpdate = clientStatusHandler
                                     )
                                 }
                             },
@@ -5234,6 +5421,7 @@ fun startGuiApplication(cliArgs: CliArgs) = application {
                                 isServer = isSrv
                                 isStreaming = false
                                 connectionStatus = Strings.get("status_inactive")
+                                lastConnectedServerInfo = null
                                 discoveredDevices.clear(); NetworkHandler_v1.forgetDiscoveredAddresses() // Svuota SEMPRE al cambio modalità
 
                                 if (!isSrv) {
@@ -5288,12 +5476,16 @@ fun startGuiApplication(cliArgs: CliArgs) = application {
                                 }
                             },
                             onStopStreaming = {
-                                isStreaming      = false
-                                connectionStatus = Strings.get("status_inactive")
+                                lastConnectedServerInfo = null
+                                isAutoReconnecting      = false
+                                isStreaming             = false
+                                connectionStatus        = Strings.get("status_inactive")
                                 NetworkHandler_v1.requestStopCurrentStream()
                             },
                             onConnectToServer = { serverInfo ->
-                                isStreaming = true
+                                lastConnectedServerInfo = serverInfo
+                                isAutoReconnecting      = false
+                                isStreaming             = true
                                 val mic = micPort.toIntOrNull() ?: 9092
                                 NetworkHandler_v1.endDeviceDiscovery()
                                 NetworkHandler_v1.launchClientInstance(
@@ -5302,7 +5494,7 @@ fun startGuiApplication(cliArgs: CliArgs) = application {
                                     appSettings.connectionSoundEnabled,
                                     appSettings.disconnectionSoundEnabled,
                                     onAudioFrame = vizSink,
-                                onStatusUpdate = clientStatusHandler
+                                    onStatusUpdate = clientStatusHandler
                                 )
                             },
                             onRefreshDevices = {

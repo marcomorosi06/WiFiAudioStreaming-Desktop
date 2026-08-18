@@ -274,7 +274,7 @@ compose.desktop {
         jvmArgs += baseArgs
 
         nativeDistributions {
-            targetFormats(TargetFormat.Dmg, TargetFormat.Deb, TargetFormat.Rpm)
+            targetFormats(TargetFormat.Dmg, TargetFormat.Deb, TargetFormat.Rpm, TargetFormat.Msi, TargetFormat.Exe)
 
             packageName = "WiFi Audio Streaming"
             packageVersion = appVersion
@@ -402,8 +402,17 @@ val checkHelpCoverage by tasks.registering(JavaExec::class) {
     args(file("src/main/kotlin/CliArgs.kt").absolutePath)
 }
 
+val checkNewFeatures by tasks.registering(JavaExec::class) {
+    group       = "verification"
+    description = "Runs automated checks for multi-language, SecretVault, and saved server features"
+
+    dependsOn("compileTestKotlin")
+    classpath = sourceSets["test"].runtimeClasspath
+    mainClass.set("NewFeaturesCheckKt")
+}
+
 tasks.named("check") {
-    dependsOn(checkHelpCoverage)
+    dependsOn(checkHelpCoverage, checkNewFeatures)
 }
 
 tasks.register<Copy>("installManPage") {

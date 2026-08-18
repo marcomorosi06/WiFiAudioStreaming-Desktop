@@ -25,8 +25,34 @@ data class AllSettings(
     val micRoutingMode: String = "OFF"
 )
 
+data class SavedServerItem(
+    val id: String,
+    val name: String,
+    val ip: String,
+    val port: String = "9090",
+    val lastConnected: Long = System.currentTimeMillis(),
+    val isFavorite: Boolean = false
+) {
+    fun toSerialized(): String = "$id|$name|$ip|$port|$lastConnected|$isFavorite"
+
+    companion object {
+        fun fromSerialized(s: String): SavedServerItem? {
+            val parts = s.split("|")
+            if (parts.size < 3) return null
+            val id = parts[0]
+            val name = parts[1]
+            val ip = parts[2]
+            val port = parts.getOrNull(3)?.ifBlank { "9090" } ?: "9090"
+            val lastConnected = parts.getOrNull(4)?.toLongOrNull() ?: 0L
+            val isFav = parts.getOrNull(5)?.toBooleanStrictOrNull() ?: false
+            return SavedServerItem(id, name, ip, port, lastConnected, isFav)
+        }
+    }
+}
+
 data class AppSettings(
     val theme: Theme = Theme.System,
+    val language: String = "auto",
     val hideWindowsPrivacyBanner: Boolean = false,
     val hideWindowsRoutingBanner: Boolean = false,
     val customThemeColor: Long? = null,
@@ -55,6 +81,9 @@ data class AppSettings(
     val lastMulticastMode: Boolean = false,
     val autoConnectClientEnabled: Boolean = false,
     val autoConnectIps: List<String> = emptyList(),
+    val autoReconnectEnabled: Boolean = true,
+    val savedServers: List<String> = emptyList(),
+    val recentServers: List<String> = emptyList(),
     val connectionSoundEnabled: Boolean = true,
     val disconnectionSoundEnabled: Boolean = true,
     val useNativeEngine: Boolean = true,

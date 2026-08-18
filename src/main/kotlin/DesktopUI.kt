@@ -460,6 +460,8 @@ fun AppContent(
                                 virtualDriverStatus = virtualDriverStatus,
                                 isMulticast = isMulticastMode,
                                 onMulticastChanged = onMulticastModeChange,
+                                serverPersist = appSettings.serverPersist,
+                                onServerPersistChange = { onAppSettingsChange(appSettings.copy(serverPersist = it)) },
                                 rtpEnabled = appSettings.rtpEnabled,
                                 httpEnabled = appSettings.httpEnabled,
                                 dlnaEnabled = appSettings.dlnaEnabled,
@@ -562,6 +564,10 @@ fun AppContent(
                                         newList.add(ip)
                                     }
                                     onAppSettingsChange(appSettings.copy(autoConnectIps = newList))
+                                },
+                                recentServers = appSettings.recentServers,
+                                onClearRecentServers = {
+                                    onAppSettingsChange(appSettings.copy(recentServers = emptyList()))
                                 }
                             )
                         }
@@ -1154,6 +1160,7 @@ fun SettingsScreen(
                 "appearance" to Icons.Outlined.Palette,
                 "audio_quality" to Icons.Outlined.Tune,
                 "network" to Icons.Outlined.SettingsEthernet,
+                "saved_servers_title" to Icons.Outlined.Lock,
                 "startup_window" to Icons.Outlined.PowerSettingsNew,
                 "sounds_group" to Icons.Outlined.VolumeUp,
                 "system_group" to Icons.Outlined.Terminal,
@@ -1208,6 +1215,13 @@ fun SettingsScreen(
                         ThemeSelector(
                             currentTheme = appSettings.theme,
                             onThemeChange = { onAppSettingsChange(appSettings.copy(theme = it)) }
+                        )
+
+                        HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
+
+                        LanguageSelector(
+                            currentLanguage = appSettings.language,
+                            onLanguageChange = { onAppSettingsChange(appSettings.copy(language = it)) }
                         )
 
                         HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
@@ -1302,6 +1316,12 @@ fun SettingsScreen(
                     
                         }
                         3 -> {
+                        SavedServersSettingsContent(
+                            appSettings = appSettings,
+                            onAppSettingsChange = onAppSettingsChange
+                        )
+                        }
+                        4 -> {
                         SwitchSetting(
                             title = stringResource("launch_at_startup"),
                             description = stringResource("launch_at_startup_desc"),
@@ -1439,7 +1459,7 @@ fun SettingsScreen(
                         }
                     
                         }
-                        4 -> {
+                        5 -> {
                         SwitchSetting(
                             title = stringResource("connection_sound_title"),
                             description = stringResource("connection_sound_desc"),
@@ -1459,7 +1479,7 @@ fun SettingsScreen(
                         )
                     
                         }
-                        5 -> {
+                        6 -> {
                         Row(
                             modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp),
                             verticalAlignment = Alignment.CenterVertically,
@@ -1640,7 +1660,7 @@ fun SettingsScreen(
                         }
                     
                         }
-                        6 -> {
+                        7 -> {
                         InfoSetting(
                             title = stringResource("license_info_title"),
                             description = stringResource("license_info_desc"),
@@ -2812,6 +2832,8 @@ fun ServerLinkCard(
     virtualDriverStatus: VirtualDriverStatus,
     isMulticast: Boolean,
     onMulticastChanged: (Boolean) -> Unit,
+    serverPersist: Boolean = false,
+    onServerPersistChange: (Boolean) -> Unit = {},
     rtpEnabled: Boolean,
     httpEnabled: Boolean,
     dlnaEnabled: Boolean = false,
@@ -2889,6 +2911,33 @@ fun ServerLinkCard(
                     enabled = !multicastLocked,
                     onCheckedChange = onMulticastChanged
                 )
+            }
+
+            val multicastLocked = rtpEnabled || httpEnabled || dlnaEnabled || snapcastEnabled
+            val actualMulticast = isMulticast || multicastLocked
+
+            AnimatedVisibility(visible = !actualMulticast) {
+                Column {
+                    HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp))
+                    Row(
+                        modifier = Modifier.fillMaxWidth().padding(top = 4.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Column(Modifier.weight(1f)) {
+                            Text(stringResource("server_persist_title"), style = MaterialTheme.typography.bodyLarge)
+                            Text(
+                                stringResource("server_persist_desc"),
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                        Switch(
+                            checked = serverPersist,
+                            onCheckedChange = onServerPersistChange
+                        )
+                    }
+                }
             }
         }
     }
@@ -3596,13 +3645,57 @@ fun DeviceDiscoveryList(
     onRefresh: () -> Unit,
     enabled: Boolean,
     autoConnectIps: List<String>,
-    onToggleAutoConnectIp: (String) -> Unit
+    onToggleAutoConnectIp: (String) -> Unit,
+    recentServers: List<String> = emptyList(),
+    onClearRecentServers: () -> Unit = {}
 ) {
     ElevatedCard(
         modifier = Modifier.fillMaxWidth().heightIn(min = 340.dp),
         shape = RoundedCornerShape(24.dp)
     ) {
         Column(Modifier.padding(16.dp)) {
+            val parsedRecents = remember(recentServers) {
+                recentServers.mapNotNull { SavedServerItem.fromSerialized(it) }
+            }
+            if (parsedRecents.isNotEmpty()) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                        Icon(Icons.Outlined.History, contentDescription = null, modifier = Modifier.size(18.dp), tint = MaterialTheme.colorScheme.primary)
+                        Text(stringResource("recent_servers_title"), style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+                    }
+                    IconButton(onClick = onClearRecentServers, modifier = Modifier.size(24.dp)) {
+                        Icon(Icons.Outlined.Clear, stringResource("recent_servers_clear"), modifier = Modifier.size(16.dp))
+                    }
+                }
+                Spacer(Modifier.height(8.dp))
+                Row(
+                    modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    parsedRecents.take(3).forEach { recent ->
+                        SuggestionChip(
+                            onClick = {
+                                onConnect(
+                                    ServerInfo(
+                                        ip = recent.ip,
+                                        isMulticast = false,
+                                        port = recent.port.toIntOrNull() ?: 9090
+                                    )
+                                )
+                            },
+                            label = { Text(recent.name.ifBlank { recent.ip }, maxLines = 1, overflow = TextOverflow.Ellipsis) },
+                            icon = { Icon(Icons.Outlined.Computer, null, modifier = Modifier.size(16.dp)) },
+                            enabled = enabled
+                        )
+                    }
+                }
+                HorizontalDivider(modifier = Modifier.padding(bottom = 12.dp))
+            }
+
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 verticalAlignment = Alignment.CenterVertically,
@@ -4390,6 +4483,190 @@ fun ThemeSelector(currentTheme: Theme, onThemeChange: (Theme) -> Unit) {
             shape = SegmentedButtonDefaults.itemShape(2, 3),
             icon = { Icon(Icons.Outlined.Tonality, contentDescription = null, Modifier.size(ButtonDefaults.IconSize)) }
         ) { Text(stringResource("system")) }
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun LanguageSelector(currentLanguage: String, onLanguageChange: (String) -> Unit) {
+    var expanded by remember { mutableStateOf(false) }
+    val languages = listOf(
+        "auto" to stringResource("language_auto"),
+        "en" to stringResource("language_en"),
+        "it" to stringResource("language_it"),
+        "vi" to stringResource("language_vi")
+    )
+    val selectedLabel = languages.find { it.first.equals(currentLanguage, ignoreCase = true) }?.second
+        ?: stringResource("language_auto")
+
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(16.dp)
+    ) {
+        Icon(Icons.Outlined.Language, contentDescription = null, tint = MaterialTheme.colorScheme.onSurfaceVariant)
+        Column(modifier = Modifier.weight(1f)) {
+            Text(stringResource("language"), style = MaterialTheme.typography.bodyLarge)
+            Text(stringResource("language_desc"), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+        ExposedDropdownMenuBox(
+            expanded = expanded,
+            onExpandedChange = { expanded = it }
+        ) {
+            OutlinedTextField(
+                value = selectedLabel,
+                onValueChange = {},
+                readOnly = true,
+                trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded) },
+                modifier = Modifier.menuAnchor(MenuAnchorType.PrimaryNotEditable).width(200.dp),
+                shape = RoundedCornerShape(12.dp)
+            )
+            ExposedDropdownMenu(
+                expanded = expanded,
+                onDismissRequest = { expanded = false }
+            ) {
+                languages.forEach { (code, label) ->
+                    DropdownMenuItem(
+                        text = { Text(label) },
+                        onClick = {
+                            onLanguageChange(code)
+                            Strings.setLanguage(code)
+                            expanded = false
+                        }
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+fun SavedServersSettingsContent(
+    appSettings: AppSettings,
+    onAppSettingsChange: (AppSettings) -> Unit
+) {
+    val vaultAvailable = remember { SecretVault.available }
+    val vaultLabel = remember { SecretVault.label }
+    var showForgetDialog by remember { mutableStateOf(false) }
+
+    SwitchSetting(
+        title = stringResource("auto_reconnect_title"),
+        description = stringResource("auto_reconnect_desc"),
+        icon = Icons.Outlined.Sync,
+        checked = appSettings.autoReconnectEnabled,
+        onCheckedChange = { onAppSettingsChange(appSettings.copy(autoReconnectEnabled = it)) }
+    )
+
+    HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
+
+    Text(stringResource("saved_servers_title"), style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+    Text(
+        if (vaultAvailable) "${stringResource("saved_servers_desc")} ($vaultLabel)."
+        else stringResource("auth_key_no_vault"),
+        style = MaterialTheme.typography.bodySmall,
+        color = if (vaultAvailable) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.error
+    )
+
+    val savedItems = remember(appSettings.savedServers) {
+        appSettings.savedServers.mapNotNull { SavedServerItem.fromSerialized(it) }
+    }
+
+    if (savedItems.isEmpty()) {
+        Card(
+            modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp),
+            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerLow)
+        ) {
+            Box(modifier = Modifier.fillMaxWidth().padding(24.dp), contentAlignment = Alignment.Center) {
+                Text(
+                    stringResource("saved_servers_empty"),
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+        }
+    } else {
+        Column(verticalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
+            savedItems.forEach { item ->
+                ElevatedCard(modifier = Modifier.fillMaxWidth()) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth().padding(16.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(12.dp),
+                            modifier = Modifier.weight(1f)
+                        ) {
+                            Box(
+                                modifier = Modifier.size(40.dp).clip(CircleShape).background(MaterialTheme.colorScheme.primaryContainer),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Icon(Icons.Outlined.Computer, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
+                            }
+                            Column {
+                                Text(item.name.ifBlank { item.ip }, style = MaterialTheme.typography.bodyLarge, fontWeight = FontWeight.Bold)
+                                Text("${item.ip}:${item.port}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            }
+                        }
+                        OutlinedButton(
+                            onClick = {
+                                SecretVault.clearServerKey(item.id)
+                                SecretVault.clearServerKey(item.ip)
+                                val updated = appSettings.savedServers.filter {
+                                    val parsed = SavedServerItem.fromSerialized(it)
+                                    parsed?.id != item.id && parsed?.ip != item.ip
+                                }
+                                onAppSettingsChange(appSettings.copy(savedServers = updated))
+                            }
+                        ) {
+                            Icon(Icons.Outlined.KeyOff, contentDescription = null, modifier = Modifier.size(16.dp))
+                            Spacer(Modifier.width(6.dp))
+                            Text(stringResource("saved_servers_forget"))
+                        }
+                    }
+                }
+            }
+
+            Spacer(Modifier.height(8.dp))
+            OutlinedButton(
+                onClick = { showForgetDialog = true },
+                colors = ButtonDefaults.outlinedButtonColors(contentColor = MaterialTheme.colorScheme.error),
+                modifier = Modifier.align(Alignment.End)
+            ) {
+                Icon(Icons.Outlined.DeleteForever, contentDescription = null, modifier = Modifier.size(18.dp))
+                Spacer(Modifier.width(6.dp))
+                Text(stringResource("saved_servers_forget_all"))
+            }
+        }
+    }
+
+    if (showForgetDialog) {
+        AlertDialog(
+            onDismissRequest = { showForgetDialog = false },
+            title = { Text(stringResource("saved_servers_forget_confirm_title")) },
+            text = { Text(stringResource("saved_servers_forget_confirm_body")) },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        savedItems.forEach {
+                            SecretVault.clearServerKey(it.id)
+                            SecretVault.clearServerKey(it.ip)
+                        }
+                        onAppSettingsChange(appSettings.copy(savedServers = emptyList()))
+                        showForgetDialog = false
+                    },
+                    colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error)
+                ) {
+                    Text(stringResource("saved_servers_forget_all"))
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showForgetDialog = false }) {
+                    Text(stringResource("cancel"))
+                }
+            }
+        )
     }
 }
 

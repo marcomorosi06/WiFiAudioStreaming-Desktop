@@ -22,13 +22,34 @@ import java.util.Properties
 
 object Strings {
     private val props = Properties()
+    var currentLanguage: String = "auto"
+        private set
 
     init {
+        loadLanguage("auto")
+    }
+
+    fun setLanguage(lang: String) {
+        currentLanguage = lang
+        loadLanguage(lang)
+    }
+
+    private fun loadLanguage(lang: String) {
+        props.clear()
         val loader = Strings::class.java.classLoader
         loader.getResourceAsStream("strings.properties")
             ?.use { props.load(InputStreamReader(it, Charsets.UTF_8)) }
-        if (java.util.Locale.getDefault().language == "it") {
-            loader.getResourceAsStream("strings_it.properties")
+
+        val target = if (lang.equals("auto", ignoreCase = true) || lang.equals("system", ignoreCase = true)) {
+            java.util.Locale.getDefault().language.lowercase()
+        } else {
+            lang.lowercase()
+        }
+
+        when (target) {
+            "vi" -> loader.getResourceAsStream("strings_vi.properties")
+                ?.use { props.load(InputStreamReader(it, Charsets.UTF_8)) }
+            "it" -> loader.getResourceAsStream("strings_it.properties")
                 ?.use { props.load(InputStreamReader(it, Charsets.UTF_8)) }
         }
     }
