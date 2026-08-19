@@ -85,6 +85,15 @@ Start the GUI without the Linux tray icon.
 .PP
 Use this if the app segfaults inside libgtk\-3 on launch; the tray is the only part that touches GTK. Same as WFAS_NO_TRAY=1, or 'wfas config set ui.linuxTray OFF' to make it permanent.
 .RE
+.TP
+.B \-\-tray <auto|on|off>
+Override the tray decision for this run.
+.br
+Default: auto.
+.RS
+.PP
+auto looks for a StatusNotifierItem host on the session bus, which is what KDE Plasma provides on both X11 and Wayland, and falls back to the GTK status icon on X11. Use on to try anyway when the probe cannot reach the bus. If the icon never appears on Wayland the usual cause is a missing AppIndicator library: install libappindicator\-gtk3 on Fedora, libayatana\-appindicator3\-1 on Debian and Ubuntu.
+.RE
 .SS Modes
 .TP
 .B \-\-server
@@ -111,6 +120,10 @@ Discovery is passive: servers announce themselves on the multicast group, so not
 .TP
 .B \-\-watch
 Keep scanning and update the list live instead of exiting after one pass.
+.RS
+.PP
+It applies to discovery and to 'wfas pair invite', the two views that would otherwise print once and exit. Anywhere else there is nothing to keep open, so wfas refuses the flag rather than ignoring it and falling back to starting a server.
+.RE
 .PP
 See also: wfas \-\-help server, wfas \-\-help client, wfas \-\-help network.
 .SH SERVER OPTIONS
@@ -421,6 +434,15 @@ key  require the pre\-shared key
 .RE
 .RE
 .TP
+.B \-\-ask\-timeout <sec>
+Only with \-\-auth\-mode ask: seconds before an unanswered client is refused.
+.br
+Default: 60, 0 waits forever.
+.RS
+.PP
+The prompt appears on the terminal, or inside the visualizer panel when \-\-viz owns the screen. No terminal at all, or \-\-json, means nobody can answer: the client is refused and the reason is logged, because a silent yes is not a decision anyone made.
+.RE
+.TP
 .B \-\-auth\-key <key>
 Pre\-shared key. Implies \-\-auth\-mode key.
 .RS
@@ -623,7 +645,7 @@ Emit all output as JSON.
 Print secret config values instead of masking them.
 .RS
 .PP
-Secrets such as security.authKey are shown as ******** by 'config list', 'config get' and 'config export', so they do not end up in terminal scrollback, shell history or a shared export by accident. Pass \-\-reveal when you actually need the value, and treat whatever it lands in as a secret.
+Secrets such as security.authKey are shown as ******** by 'config list', 'config get' and 'config export', so they do not end up in terminal scrollback, shell history or a shared export by accident. Pass \-\-reveal when you actually need the value, and treat whatever it lands in as a secret. It prints only to an interactive terminal: redirected output and \-\-json are refused, and 'config export \-\-reveal' asks for confirmation before writing secrets in plain text. For unattended use pass the key through WFAS_AUTH_KEY instead. Note that this guards against accidents, not against a hostile program: anything running as your user can read the same secret straight from the credential store.
 .RE
 .TP
 .B \-\-quiet

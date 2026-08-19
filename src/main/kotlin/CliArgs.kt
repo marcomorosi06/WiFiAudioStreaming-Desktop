@@ -57,8 +57,6 @@ data class CliArgs(
     val micRouting:      MicRoutingMode  = MicRoutingMode.OFF,
     val volume:          Float?          = null,
     val mute:            Boolean         = false,
-    // null = usa l'impostazione salvata (server.muteRender / server.persist),
-    // il flag da riga di comando vale solo per questa esecuzione.
     val muteRender:      Boolean?        = null,
     val persist:         Boolean?        = null,
     val watch:           Boolean         = false,
@@ -84,6 +82,8 @@ data class CliArgs(
     val latency:         Int?            = null,
     val usbIface:        String?         = null,
     val noTray:          Boolean         = false,
+    val trayMode:        String?         = null,
+    val askTimeoutSec:   Int             = 60,
     val wfasMode:        String?         = null,
     val useNativeEngine: Boolean         = true,
     val viz:             Boolean         = false,
@@ -140,7 +140,7 @@ data class CliArgs(
                 // comportamento storico, altrimenti l'app non si aprirebbe piu'.
                 if (System.console() != null) return CliArgs(printBareHint = true)
                 return if (isHeadless) CliArgs(runMode = RunMode.CLI_SERVER)
-                       else CliArgs(runMode = RunMode.GUI)
+                else CliArgs(runMode = RunMode.GUI)
             }
 
             var runMode         = RunMode.CLI_SERVER
@@ -217,6 +217,8 @@ data class CliArgs(
             var authMode        = "OFF"
             var authKey         = ""
             var encrypt         = false
+            var trayMode: String?           = null
+            var askTimeoutSec   = 60
 
             var i = 0
             while (i < args.size) {
@@ -334,8 +336,8 @@ data class CliArgs(
                                     PairCommand.Connect(args[i])
                                 } else parseError(
                                     "Unknown pair subcommand '$sub'. Valid: invite, regenerate, " +
-                                        "connect <link>, inspect <link>, encode <text>, status, off, " +
-                                        "register, unregister"
+                                            "connect <link>, inspect <link>, encode <text>, status, off, " +
+                                            "register, unregister"
                                 )
                             }
                         }
@@ -516,6 +518,27 @@ data class CliArgs(
                         latency = ms
                     }
                     "--no-tray" -> noTray = true
+                    "--tray" -> {
+                        val v = nextArg(args, i, "--tray")
+                            ?: parseError("--tray requires a value: auto, on or off")
+                        i++
+                        trayMode = when (v.lowercase()) {
+                            "auto" -> LinuxTray.MODE_AUTO
+                            "on", "force", "yes"  -> LinuxTray.MODE_ON
+                            "off", "no"           -> LinuxTray.MODE_OFF
+                            else -> parseError("--tray must be auto, on or off, got '$v'")
+                        }
+                        if (trayMode == LinuxTray.MODE_OFF) noTray = true
+                    }
+                    "--ask-timeout" -> {
+                        val raw = nextArg(args, i, "--ask-timeout")
+                            ?: parseError("--ask-timeout requires a value in seconds, or 0 to wait forever")
+                        i++
+                        val n = raw.toIntOrNull()
+                            ?: parseError("--ask-timeout must be numeric, got '$raw'")
+                        if (n < 0 || n > 3600) parseError("--ask-timeout must be between 0 and 3600, got $n")
+                        askTimeoutSec = n
+                    }
                     "--usb-iface" -> {
                         usbIface = nextArg(args, i, "--usb-iface")
                             ?: parseError("--usb-iface requires an interface name, or 'Auto'")
@@ -625,6 +648,37 @@ data class CliArgs(
                 runMode = RunMode.CLI_MONITOR
             }
 
+            // --watch tiene aperta una vista che altrimenti stampa una volta e
+            // finisce. Fuori da 'discover' e da 'pair invite' non ha niente da
+            // tenere aperto, e passava in silenzio: il modo restava quello di
+            // default, cioe' CLI_SERVER, e al posto della lista che l'utente
+            // aspettava partiva un server -- con la cattura audio avviata, le
+            // porte aperte e l'annuncio in multicast.
+            if (watch && runMode != RunMode.CLI_DISCOVER && pairCmd !is PairCommand.Invite) {
+                parseError(
+                    "--watch keeps a live view open, and belongs to discovery or to a pairing " +
+                            "invite. Use 'wfas --mode discover --watch' to keep the server list " +
+                            "updating, or 'wfas pair invite --watch' for a QR code that renews " +
+                            "itself before it expires."
+                )
+            }
+
+            // Stessa classe di problema, caso piu' ristretto: --connect da solo
+            // implica gia' il modo client, ma accanto a un modo esplicito diverso
+            // veniva ignorato in silenzio. 'wfas --server --connect 1.2.3.4'
+            // avviava un server e buttava via l'indirizzo, senza dire niente.
+            if (serverIp != null &&
+                runMode != RunMode.CLI_CLIENT &&
+                !(runMode == RunMode.GUI && guiSubMode == "client")
+            ) {
+                parseError(
+                    "--connect names the server to join, so it applies to a client, but the " +
+                            "requested mode is ${runMode.name.lowercase().removePrefix("cli_")}. " +
+                            "Use 'wfas --client --connect $serverIp', or drop --connect to start a " +
+                            "server here."
+                )
+            }
+
             if (groove > 0f && !viz) parseError("--groove requires --viz")
 
             // Entrambe le opzioni riguardano il lato che cattura l'audio: fuori
@@ -633,11 +687,11 @@ data class CliArgs(
             if (runMode != RunMode.CLI_SERVER && runMode != RunMode.GUI) {
                 if (muteRender == false) parseError(
                     "--no-mute-render applies to a server: the server is the side that mutes " +
-                        "this machine's speakers while it captures them."
+                            "this machine's speakers while it captures them."
                 )
                 if (persist == true) parseError(
                     "--persist applies to a server: it keeps the server waiting for the next " +
-                        "client instead of exiting when one disconnects."
+                            "client instead of exiting when one disconnects."
                 )
             }
 
@@ -652,7 +706,7 @@ data class CliArgs(
             if (authMode == SecurityMode.KEY.name && authKey.isBlank() && !qr) {
                 parseError(
                     "key authentication needs a key. Pass --auth-key <key>, or --qr to have " +
-                        "one generated and shown as a pairing code."
+                            "one generated and shown as a pairing code."
                 )
             }
             if (encrypt && authMode != SecurityMode.KEY.name) {
@@ -712,6 +766,8 @@ data class CliArgs(
                 latency         = latency,
                 usbIface        = usbIface,
                 noTray          = noTray,
+                trayMode        = trayMode,
+                askTimeoutSec   = askTimeoutSec,
                 wfasMode        = wfasMode,
                 useNativeEngine = useNativeEngine,
                 viz             = viz,

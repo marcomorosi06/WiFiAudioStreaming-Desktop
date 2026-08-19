@@ -46,8 +46,38 @@ object ConfigCli {
         }
     }
 
+    private fun outputIsTerminal(): Boolean {
+        val console = System.console() ?: return false
+        return runCatching {
+            val m = console.javaClass.getMethod("isTerminal")
+            m.invoke(console) as Boolean
+        }.getOrDefault(true)
+    }
+
+    private fun requireRevealAllowed(reveal: Boolean, json: Boolean) {
+        if (!reveal) return
+        if (json) throw ConfigException(
+            "--reveal is refused with --json: that output is meant for a program or a log file, " +
+                    "which is exactly where a key should not end up. Read the value on a terminal, " +
+                    "or pass it through ${SettingsRepository.ENV_AUTH_KEY}."
+        )
+        if (!outputIsTerminal()) throw ConfigException(
+            "--reveal only prints to an interactive terminal, and this output is redirected. " +
+                    "Piping or saving a key turns one secret into two copies, and the second one " +
+                    "outlives the first. Run it on a terminal, or set ${SettingsRepository.ENV_AUTH_KEY} " +
+                    "for unattended use."
+        )
+    }
+
+    private fun confirmPlaintextExport(target: String): Boolean {
+        System.err.println("This writes ${ConfigManager.fields.count { it.secret }} secret value(s) to $target in plain text.")
+        System.err.println("Anything that can read that file can use them: backups, sync folders and issue reports included.")
+        return ConsoleInput.askYesNo("Continue? [y/N]", 60_000L, default = false)
+    }
+
     fun run(cmd: ConfigCommand, json: Boolean, reveal: Boolean = false): Int {
         return try {
+            requireRevealAllowed(reveal, json)
             when (cmd) {
                 is ConfigCommand.Path   -> doPath(json)
                 is ConfigCommand.List   -> doList(json, reveal)
@@ -162,6 +192,12 @@ object ConfigCli {
 
     private fun doExport(path: String?, json: Boolean, reveal: Boolean) {
         val settings = SettingsRepository.loadSettings()
+        if (reveal && ConfigManager.fields.any { it.secret && ConfigManager.display(settings, it, true).isNotEmpty() }) {
+            if (!confirmPlaintextExport(path ?: "standard output")) {
+                System.err.println("Export cancelled. Nothing was written.")
+                return
+            }
+        }
         val text =
             if (reveal) ConfigManager.serialize(settings)
             else ConfigManager.serializeRedacted(settings)
@@ -185,7 +221,7 @@ object ConfigCli {
         get() {
             val keys = ConfigManager.fields.filter { it.secret }.joinToString(", ") { it.key }
             return "Note: $keys omitted. Importing this file will not restore them. " +
-                "Add --reveal to include them, and treat the result as a secret."
+                    "Add --reveal to include them, and treat the result as a secret."
         }
 
     private fun doImport(path: String, json: Boolean) {

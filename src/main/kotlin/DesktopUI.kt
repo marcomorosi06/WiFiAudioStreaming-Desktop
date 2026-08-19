@@ -243,355 +243,355 @@ fun AppContent(
             focusRequester.requestFocus()
         }
         BoxWithConstraints(modifier = Modifier.fillMaxSize().padding(paddingValues)) {
-        val twoPane = maxWidth >= 1040.dp
-        LazyColumn(
-            state = listState,
-            modifier = Modifier
-                .fillMaxSize()
-                .focusRequester(focusRequester)
-                .onFocusChanged { /* keep focus awareness */ }
-                .onKeyEvent { keyEvent ->
-                    if (keyEvent.type != KeyEventType.KeyDown) return@onKeyEvent false
-                    scrollScope.launch {
-                        when {
-                            keyEvent.key == Key.DirectionDown -> listState.scrollBy(80f)
-                            keyEvent.key == Key.DirectionUp   -> listState.scrollBy(-80f)
-                            keyEvent.key == Key.PageDown      -> listState.scrollBy(400f)
-                            keyEvent.key == Key.PageUp        -> listState.scrollBy(-400f)
-                        }
-                    }
-                    when (keyEvent.key) {
-                        Key.DirectionDown, Key.DirectionUp, Key.PageDown, Key.PageUp -> true
-                        else -> false
-                    }
-                }
-                .pointerInput(Unit) { detectTapGestures { focusRequester.requestFocus() } },
-            contentPadding = PaddingValues(20.dp),
-            verticalArrangement = Arrangement.spacedBy(16.dp)
-        ) {
-            // --- Virtual Driver Warning Banner ---
-            // Only shown in server mode (ffmpeg) when the required virtual audio driver is missing.
-            if (isServer && !appSettings.useNativeEngine) {
-                val driverStatus = virtualDriverStatus
-                if (driverStatus is VirtualDriverStatus.Missing) {
-                    item {
-                        VirtualDriverBanner(status = driverStatus)
-                    }
-                }
-            }
-
-            // --- BANNER WINDOWS (Instradamento e Privacy) ---
-            if (isWindowsOS && isServer && !isStreaming && !appSettings.useNativeEngine) {
-                if (!appSettings.hideWindowsRoutingBanner) {
-                    item { WindowsRoutingBanner(onDismiss = onDismissRoutingBanner) }
-                }
-                if (!appSettings.hideWindowsPrivacyBanner) {
-                    item { WindowsPrivacyBanner(onDismiss = onDismissPrivacyBanner) }
-                }
-            }
-
-            item {
-                val serverReady = !(isServer && !appSettings.useNativeEngine && virtualDriverStatus is VirtualDriverStatus.Missing)
-                val startAllowed = WfasPolicy.canStartServerWith(
-                    appSettings.wfasMode,
-                    UsbLink.isReady(),
-                    appSettings.rtpEnabled,
-                    appSettings.httpEnabled,
-                    appSettings.dlnaEnabled
-                )
-                SessionHeaderBar(
-                    isServer = isServer,
-                    isStreaming = isStreaming,
-                    isServerReady = serverReady,
-                    canStartServer = startAllowed,
-                    connectionStatus = connectionStatus,
-                    localIp = localIp,
-                    streamingPort = streamingPort,
-                    serverVolume = serverVolume,
-                    onServerVolumeChange = onServerVolumeChange,
-                    showMicMute = (!isServer && sendMicrophone) || (isServer && micRoutingMode == MicRoutingMode.MIX_INTO_STREAM),
-                    isMicMuted = isMicMuted,
-                    onMicMuteToggle = onMicMuteToggle,
-                    onModeChange = onModeChange,
-                    onStart = onStartStreaming,
-                    onStop = onStopStreaming
-                )
-            }
-
-            item {
-                QrPairingBar(
-                    appSettings = appSettings,
-                    isServer = isServer,
-                    isStreaming = isStreaming,
-                    isMulticastMode = isMulticastMode,
-                    localIp = localIp,
-                    streamingPort = streamingPort,
-                    onAppSettingsChange = onAppSettingsChange,
-                    onPairingReady = { payload ->
-                        val target = NetAddr.normalize(payload.ip)
-                        val known = discoveredDevices.values.firstOrNull {
-                            NetAddr.normalize(it.ip) == target
-                        }
-                        onConnectToServer(
-                            ServerInfo(
-                                ip = target,
-                                isMulticast = payload.isMulticast,
-                                port = payload.port,
-                                capabilities = known?.capabilities,
-                                serverAudioSettings = known?.serverAudioSettings
-                            )
-                        )
-                    },
-                    showScanButton = false
-                )
-            }
-
-            if (isStreaming) {
-                item {
-                    SpectrumPanel(
-                        enabled = appSettings.vizEnabled,
-                        onEnabledChange = { onAppSettingsChange(appSettings.copy(vizEnabled = it)) },
-                        groove = appSettings.vizGroove / 100f,
-                        onGrooveChange = {
-                            onAppSettingsChange(appSettings.copy(vizGroove = (it * 100f).toInt().coerceIn(0, 160)))
-                        }
-                    )
-                }
-            }
-
-            if (isStreaming && !isServer) {
-                item {
-                    ClientSessionPanel(
-                        audioSettings = audioSettings,
-                        selectedOutputDevice = selectedOutputDevice,
-                        sendMicrophone = sendMicrophone,
-                        selectedClientMic = selectedClientMic
-                    )
-                }
-            }
-
-            if (isStreaming && isServer) {
-                item {
-                    val liveLeft: @Composable ColumnScope.() -> Unit = {
-                        if (isServer) {
-                            ConnectPanel(
-                                localIp = localIp,
-                                streamingPort = streamingPort,
-                                appSettings = appSettings,
-                                audioSettings = audioSettings,
-                                isMulticastMode = isMulticastMode
-                            )
-                        }
-                    }
-                    val liveRight: @Composable ColumnScope.() -> Unit = {
-                        if (isServer && httpUrl != null) {
-                            HttpUrlBanner(url = httpUrl)
-                        }
-                        if (isServer && appSettings.snapcastEnabled) {
-                            SnapcastServerBanner()
-                        }
-                        if (isServer && appSettings.rtpEnabled) {
-                            RtpSdpBanner(
-                                localIp = localIp,
-                                isMulticast = isMulticastMode,
-                                port = appSettings.rtpPort,
-                                sampleRate = audioSettings.sampleRate.toInt(),
-                                channels = audioSettings.channels
-                            )
-                        }
-                        if (isServer && appSettings.dlnaEnabled) {
-                            DlnaStatusCard(
-                                localIp = localIp,
-                                port = appSettings.dlnaPort.toIntOrNull() ?: 8081,
-                                formatPreference = DlnaFormatPreference.fromId(appSettings.dlnaFormat),
-                                hasSelection = appSettings.dlnaDevices.isNotEmpty()
-                            )
-                        }
-                    }
-                    if (twoPane) {
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.spacedBy(16.dp)
-                        ) {
-                            Column(
-                                modifier = Modifier.weight(1f),
-                                verticalArrangement = Arrangement.spacedBy(16.dp),
-                                content = liveLeft
-                            )
-                            Column(
-                                modifier = Modifier.weight(1f),
-                                verticalArrangement = Arrangement.spacedBy(16.dp),
-                                content = liveRight
-                            )
-                        }
-                    } else {
-                        Column(verticalArrangement = Arrangement.spacedBy(16.dp)) {
-                            liveLeft()
-                            liveRight()
-                        }
-                    }
-                }
-            }
-
-            if (!isStreaming) {
-                val startAllowed = WfasPolicy.canStartServerWith(
-                    appSettings.wfasMode,
-                    UsbLink.isReady(),
-                    appSettings.rtpEnabled,
-                    appSettings.httpEnabled,
-                    appSettings.dlnaEnabled
-                )
-                if (isServer && !startAllowed) {
-                    item {
-                        WfasNoProtocolBanner(
-                            onActivateWfas = {
-                                onAppSettingsChange(appSettings.copy(wfasMode = WfasPolicy.MODE_OFF_ON_USB))
+            val twoPane = maxWidth >= 1040.dp
+            LazyColumn(
+                state = listState,
+                modifier = Modifier
+                    .fillMaxSize()
+                    .focusRequester(focusRequester)
+                    .onFocusChanged { /* keep focus awareness */ }
+                    .onKeyEvent { keyEvent ->
+                        if (keyEvent.type != KeyEventType.KeyDown) return@onKeyEvent false
+                        scrollScope.launch {
+                            when {
+                                keyEvent.key == Key.DirectionDown -> listState.scrollBy(80f)
+                                keyEvent.key == Key.DirectionUp   -> listState.scrollBy(-80f)
+                                keyEvent.key == Key.PageDown      -> listState.scrollBy(400f)
+                                keyEvent.key == Key.PageUp        -> listState.scrollBy(-400f)
                             }
-                        )
-                    }
-                }
-                item {
-                    val leftPane: @Composable ColumnScope.() -> Unit = {
-                        if (isServer) {
-                            ServerLinkCard(
-                                usbModeEnabled = appSettings.usbModeEnabled,
-                                onUsbModeChange = { onAppSettingsChange(appSettings.copy(usbModeEnabled = it)) },
-                                useNativeEngine = appSettings.useNativeEngine,
-                                virtualDriverStatus = virtualDriverStatus,
-                                isMulticast = isMulticastMode,
-                                onMulticastChanged = onMulticastModeChange,
-                                rtpEnabled = appSettings.rtpEnabled,
-                                httpEnabled = appSettings.httpEnabled,
-                                dlnaEnabled = appSettings.dlnaEnabled,
-                                snapcastEnabled = appSettings.snapcastEnabled
-                            )
-                            ServerMicCard(
-                                outputDevices = outputDevices,
-                                selectedServerMicOutput = selectedServerMicOutput,
-                                onServerMicOutputSelected = onSelectedServerMicOutputChange,
-                                micRoutingMode = micRoutingMode,
-                                onMicRoutingModeChange = onMicRoutingModeChange,
-                                micRoutingDisabled = appSettings.rtpEnabled,
-                                virtualMicDisabled = isMulticastMode,
-                                inputDevices = inputDevices,
-                                selectedMicMixInput = selectedMicMixInput,
-                                onMicMixInputSelected = onMicMixInputSelected
-                            )
-                        } else {
-                            ClientConfigCard(
-                                outputDevices = outputDevices,
-                                selectedOutputDevice = selectedOutputDevice,
-                                onOutputDeviceSelected = onSelectedOutputDeviceChange,
-                                sendMicrophone = sendMicrophone,
-                                onSendMicrophoneChanged = onSendMicrophoneChange,
-                                inputDevices = inputDevices,
-                                selectedClientMic = selectedClientMic,
-                                onClientMicSelected = onSelectedClientMicChange,
-                                usbModeEnabled = appSettings.usbModeEnabled,
-                                onUsbModeChange = { onAppSettingsChange(appSettings.copy(usbModeEnabled = it)) }
-                            )
+                        }
+                        when (keyEvent.key) {
+                            Key.DirectionDown, Key.DirectionUp, Key.PageDown, Key.PageUp -> true
+                            else -> false
                         }
                     }
+                    .pointerInput(Unit) { detectTapGestures { focusRequester.requestFocus() } },
+                contentPadding = PaddingValues(20.dp),
+                verticalArrangement = Arrangement.spacedBy(16.dp)
+            ) {
+                // --- Virtual Driver Warning Banner ---
+                // Only shown in server mode (ffmpeg) when the required virtual audio driver is missing.
+                if (isServer && !appSettings.useNativeEngine) {
+                    val driverStatus = virtualDriverStatus
+                    if (driverStatus is VirtualDriverStatus.Missing) {
+                        item {
+                            VirtualDriverBanner(status = driverStatus)
+                        }
+                    }
+                }
 
-                    val rightPane: @Composable ColumnScope.() -> Unit = {
-                        if (isServer) {
-                            ServerSecurityCard(
-                                securityMode = SecurityMode.uiMode(
-                                    appSettings.securityMode,
-                                    appSettings.qrPairingEnabled
-                                ),
-                                authKey = appSettings.authKey,
-                                onSecurityModeChange = {
-                                    onAppSettingsChange(applySecurityUiMode(appSettings, it))
-                                },
-                                onAuthKeyChange = {
-                                    onAppSettingsChange(
-                                        appSettings.copy(authKey = it, manualAuthKey = it)
-                                    )
-                                },
-                                encryptionEnabled = appSettings.encryptionEnabled,
-                                onEncryptionChange = { onAppSettingsChange(appSettings.copy(encryptionEnabled = it)) },
-                                isMulticast = isMulticastMode || appSettings.rtpEnabled ||
-                                    appSettings.httpEnabled || appSettings.dlnaEnabled ||
-                                    appSettings.snapcastEnabled,
-                                rememberAuthKey = appSettings.rememberAuthKey,
-                                onRememberAuthKeyChange = {
-                                    onAppSettingsChange(appSettings.copy(rememberAuthKey = it))
-                                }
-                            )
-                            ConnectPanel(
-                                localIp = localIp,
-                                streamingPort = streamingPort,
-                                appSettings = appSettings,
-                                audioSettings = audioSettings,
-                                isMulticastMode = isMulticastMode
-                            )
-                        } else {
-                            var manualIp by remember { mutableStateOf("") }
-                            Row(
-                                modifier = Modifier.widthIn(max = 700.dp).fillMaxWidth(),
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.spacedBy(8.dp)
-                            ) {
-                                OutlinedTextField(
-                                    value = manualIp,
-                                    onValueChange = { manualIp = it },
-                                    label = { Text("Manual Server IP") },
-                                    modifier = Modifier.weight(1f),
-                                    singleLine = true
+                // --- BANNER WINDOWS (Instradamento e Privacy) ---
+                if (isWindowsOS && isServer && !isStreaming && !appSettings.useNativeEngine) {
+                    if (!appSettings.hideWindowsRoutingBanner) {
+                        item { WindowsRoutingBanner(onDismiss = onDismissRoutingBanner) }
+                    }
+                    if (!appSettings.hideWindowsPrivacyBanner) {
+                        item { WindowsPrivacyBanner(onDismiss = onDismissPrivacyBanner) }
+                    }
+                }
+
+                item {
+                    val serverReady = !(isServer && !appSettings.useNativeEngine && virtualDriverStatus is VirtualDriverStatus.Missing)
+                    val startAllowed = WfasPolicy.canStartServerWith(
+                        appSettings.wfasMode,
+                        UsbLink.isReady(),
+                        appSettings.rtpEnabled,
+                        appSettings.httpEnabled,
+                        appSettings.dlnaEnabled
+                    )
+                    SessionHeaderBar(
+                        isServer = isServer,
+                        isStreaming = isStreaming,
+                        isServerReady = serverReady,
+                        canStartServer = startAllowed,
+                        connectionStatus = connectionStatus,
+                        localIp = localIp,
+                        streamingPort = streamingPort,
+                        serverVolume = serverVolume,
+                        onServerVolumeChange = onServerVolumeChange,
+                        showMicMute = (!isServer && sendMicrophone) || (isServer && micRoutingMode == MicRoutingMode.MIX_INTO_STREAM),
+                        isMicMuted = isMicMuted,
+                        onMicMuteToggle = onMicMuteToggle,
+                        onModeChange = onModeChange,
+                        onStart = onStartStreaming,
+                        onStop = onStopStreaming
+                    )
+                }
+
+                item {
+                    QrPairingBar(
+                        appSettings = appSettings,
+                        isServer = isServer,
+                        isStreaming = isStreaming,
+                        isMulticastMode = isMulticastMode,
+                        localIp = localIp,
+                        streamingPort = streamingPort,
+                        onAppSettingsChange = onAppSettingsChange,
+                        onPairingReady = { payload ->
+                            val target = NetAddr.normalize(payload.ip)
+                            val known = discoveredDevices.values.firstOrNull {
+                                NetAddr.normalize(it.ip) == target
+                            }
+                            onConnectToServer(
+                                ServerInfo(
+                                    ip = target,
+                                    isMulticast = payload.isMulticast,
+                                    port = payload.port,
+                                    capabilities = known?.capabilities,
+                                    serverAudioSettings = known?.serverAudioSettings
                                 )
-                                Button(
-                                    onClick = { onConnectManual(manualIp) },
-                                    enabled = manualIp.isNotBlank() && selectedOutputDevice != null
-                                ) {
-                                    Text("Connect")
-                                }
-                                QrScanButton()
+                            )
+                        },
+                        showScanButton = false
+                    )
+                }
+
+                if (isStreaming) {
+                    item {
+                        SpectrumPanel(
+                            enabled = appSettings.vizEnabled,
+                            onEnabledChange = { onAppSettingsChange(appSettings.copy(vizEnabled = it)) },
+                            groove = appSettings.vizGroove / 100f,
+                            onGrooveChange = {
+                                onAppSettingsChange(appSettings.copy(vizGroove = (it * 100f).toInt().coerceIn(0, 160)))
                             }
-                            DeviceDiscoveryList(
-                                devices = discoveredDevices,
-                                onConnect = onConnectToServer,
-                                onRefresh = onRefreshDevices,
-                                enabled = selectedOutputDevice != null && (!sendMicrophone || selectedClientMic != null),
-                                autoConnectIps = appSettings.autoConnectIps,
-                                onToggleAutoConnectIp = { ip ->
-                                    val newList = appSettings.autoConnectIps.toMutableList()
-                                    if (newList.contains(ip)) {
-                                        newList.remove(ip)
-                                    } else {
-                                        newList.add(ip)
-                                    }
-                                    onAppSettingsChange(appSettings.copy(autoConnectIps = newList))
+                        )
+                    }
+                }
+
+                if (isStreaming && !isServer) {
+                    item {
+                        ClientSessionPanel(
+                            audioSettings = audioSettings,
+                            selectedOutputDevice = selectedOutputDevice,
+                            sendMicrophone = sendMicrophone,
+                            selectedClientMic = selectedClientMic
+                        )
+                    }
+                }
+
+                if (isStreaming && isServer) {
+                    item {
+                        val liveLeft: @Composable ColumnScope.() -> Unit = {
+                            if (isServer) {
+                                ConnectPanel(
+                                    localIp = localIp,
+                                    streamingPort = streamingPort,
+                                    appSettings = appSettings,
+                                    audioSettings = audioSettings,
+                                    isMulticastMode = isMulticastMode
+                                )
+                            }
+                        }
+                        val liveRight: @Composable ColumnScope.() -> Unit = {
+                            if (isServer && httpUrl != null) {
+                                HttpUrlBanner(url = httpUrl)
+                            }
+                            if (isServer && appSettings.snapcastEnabled) {
+                                SnapcastServerBanner()
+                            }
+                            if (isServer && appSettings.rtpEnabled) {
+                                RtpSdpBanner(
+                                    localIp = localIp,
+                                    isMulticast = isMulticastMode,
+                                    port = appSettings.rtpPort,
+                                    sampleRate = audioSettings.sampleRate.toInt(),
+                                    channels = audioSettings.channels
+                                )
+                            }
+                            if (isServer && appSettings.dlnaEnabled) {
+                                DlnaStatusCard(
+                                    localIp = localIp,
+                                    port = appSettings.dlnaPort.toIntOrNull() ?: 8081,
+                                    formatPreference = DlnaFormatPreference.fromId(appSettings.dlnaFormat),
+                                    hasSelection = appSettings.dlnaDevices.isNotEmpty()
+                                )
+                            }
+                        }
+                        if (twoPane) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.spacedBy(16.dp)
+                            ) {
+                                Column(
+                                    modifier = Modifier.weight(1f),
+                                    verticalArrangement = Arrangement.spacedBy(16.dp),
+                                    content = liveLeft
+                                )
+                                Column(
+                                    modifier = Modifier.weight(1f),
+                                    verticalArrangement = Arrangement.spacedBy(16.dp),
+                                    content = liveRight
+                                )
+                            }
+                        } else {
+                            Column(verticalArrangement = Arrangement.spacedBy(16.dp)) {
+                                liveLeft()
+                                liveRight()
+                            }
+                        }
+                    }
+                }
+
+                if (!isStreaming) {
+                    val startAllowed = WfasPolicy.canStartServerWith(
+                        appSettings.wfasMode,
+                        UsbLink.isReady(),
+                        appSettings.rtpEnabled,
+                        appSettings.httpEnabled,
+                        appSettings.dlnaEnabled
+                    )
+                    if (isServer && !startAllowed) {
+                        item {
+                            WfasNoProtocolBanner(
+                                onActivateWfas = {
+                                    onAppSettingsChange(appSettings.copy(wfasMode = WfasPolicy.MODE_OFF_ON_USB))
                                 }
                             )
                         }
                     }
-
-                    if (twoPane) {
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.spacedBy(16.dp)
-                        ) {
-                            Column(
-                                modifier = Modifier.weight(1f),
-                                verticalArrangement = Arrangement.spacedBy(16.dp),
-                                content = leftPane
-                            )
-                            Column(
-                                modifier = Modifier.weight(1f),
-                                verticalArrangement = Arrangement.spacedBy(16.dp),
-                                content = rightPane
-                            )
+                    item {
+                        val leftPane: @Composable ColumnScope.() -> Unit = {
+                            if (isServer) {
+                                ServerLinkCard(
+                                    usbModeEnabled = appSettings.usbModeEnabled,
+                                    onUsbModeChange = { onAppSettingsChange(appSettings.copy(usbModeEnabled = it)) },
+                                    useNativeEngine = appSettings.useNativeEngine,
+                                    virtualDriverStatus = virtualDriverStatus,
+                                    isMulticast = isMulticastMode,
+                                    onMulticastChanged = onMulticastModeChange,
+                                    rtpEnabled = appSettings.rtpEnabled,
+                                    httpEnabled = appSettings.httpEnabled,
+                                    dlnaEnabled = appSettings.dlnaEnabled,
+                                    snapcastEnabled = appSettings.snapcastEnabled
+                                )
+                                ServerMicCard(
+                                    outputDevices = outputDevices,
+                                    selectedServerMicOutput = selectedServerMicOutput,
+                                    onServerMicOutputSelected = onSelectedServerMicOutputChange,
+                                    micRoutingMode = micRoutingMode,
+                                    onMicRoutingModeChange = onMicRoutingModeChange,
+                                    micRoutingDisabled = appSettings.rtpEnabled,
+                                    virtualMicDisabled = isMulticastMode,
+                                    inputDevices = inputDevices,
+                                    selectedMicMixInput = selectedMicMixInput,
+                                    onMicMixInputSelected = onMicMixInputSelected
+                                )
+                            } else {
+                                ClientConfigCard(
+                                    outputDevices = outputDevices,
+                                    selectedOutputDevice = selectedOutputDevice,
+                                    onOutputDeviceSelected = onSelectedOutputDeviceChange,
+                                    sendMicrophone = sendMicrophone,
+                                    onSendMicrophoneChanged = onSendMicrophoneChange,
+                                    inputDevices = inputDevices,
+                                    selectedClientMic = selectedClientMic,
+                                    onClientMicSelected = onSelectedClientMicChange,
+                                    usbModeEnabled = appSettings.usbModeEnabled,
+                                    onUsbModeChange = { onAppSettingsChange(appSettings.copy(usbModeEnabled = it)) }
+                                )
+                            }
                         }
-                    } else {
-                        Column(verticalArrangement = Arrangement.spacedBy(16.dp)) {
-                            leftPane()
-                            rightPane()
+
+                        val rightPane: @Composable ColumnScope.() -> Unit = {
+                            if (isServer) {
+                                ServerSecurityCard(
+                                    securityMode = SecurityMode.uiMode(
+                                        appSettings.securityMode,
+                                        appSettings.qrPairingEnabled
+                                    ),
+                                    authKey = appSettings.authKey,
+                                    onSecurityModeChange = {
+                                        onAppSettingsChange(applySecurityUiMode(appSettings, it))
+                                    },
+                                    onAuthKeyChange = {
+                                        onAppSettingsChange(
+                                            appSettings.copy(authKey = it, manualAuthKey = it)
+                                        )
+                                    },
+                                    encryptionEnabled = appSettings.encryptionEnabled,
+                                    onEncryptionChange = { onAppSettingsChange(appSettings.copy(encryptionEnabled = it)) },
+                                    isMulticast = isMulticastMode || appSettings.rtpEnabled ||
+                                            appSettings.httpEnabled || appSettings.dlnaEnabled ||
+                                            appSettings.snapcastEnabled,
+                                    rememberAuthKey = appSettings.rememberAuthKey,
+                                    onRememberAuthKeyChange = {
+                                        onAppSettingsChange(appSettings.copy(rememberAuthKey = it))
+                                    }
+                                )
+                                ConnectPanel(
+                                    localIp = localIp,
+                                    streamingPort = streamingPort,
+                                    appSettings = appSettings,
+                                    audioSettings = audioSettings,
+                                    isMulticastMode = isMulticastMode
+                                )
+                            } else {
+                                var manualIp by remember { mutableStateOf("") }
+                                Row(
+                                    modifier = Modifier.widthIn(max = 700.dp).fillMaxWidth(),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                ) {
+                                    OutlinedTextField(
+                                        value = manualIp,
+                                        onValueChange = { manualIp = it },
+                                        label = { Text("Manual Server IP") },
+                                        modifier = Modifier.weight(1f),
+                                        singleLine = true
+                                    )
+                                    Button(
+                                        onClick = { onConnectManual(manualIp) },
+                                        enabled = manualIp.isNotBlank() && selectedOutputDevice != null
+                                    ) {
+                                        Text("Connect")
+                                    }
+                                    QrScanButton()
+                                }
+                                DeviceDiscoveryList(
+                                    devices = discoveredDevices,
+                                    onConnect = onConnectToServer,
+                                    onRefresh = onRefreshDevices,
+                                    enabled = selectedOutputDevice != null && (!sendMicrophone || selectedClientMic != null),
+                                    autoConnectIps = appSettings.autoConnectIps,
+                                    onToggleAutoConnectIp = { ip ->
+                                        val newList = appSettings.autoConnectIps.toMutableList()
+                                        if (newList.contains(ip)) {
+                                            newList.remove(ip)
+                                        } else {
+                                            newList.add(ip)
+                                        }
+                                        onAppSettingsChange(appSettings.copy(autoConnectIps = newList))
+                                    }
+                                )
+                            }
+                        }
+
+                        if (twoPane) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.spacedBy(16.dp)
+                            ) {
+                                Column(
+                                    modifier = Modifier.weight(1f),
+                                    verticalArrangement = Arrangement.spacedBy(16.dp),
+                                    content = leftPane
+                                )
+                                Column(
+                                    modifier = Modifier.weight(1f),
+                                    verticalArrangement = Arrangement.spacedBy(16.dp),
+                                    content = rightPane
+                                )
+                            }
+                        } else {
+                            Column(verticalArrangement = Arrangement.spacedBy(16.dp)) {
+                                leftPane()
+                                rightPane()
+                            }
                         }
                     }
                 }
             }
-        }
         }
     }
 }
@@ -1150,689 +1150,650 @@ fun SettingsScreen(
             modifier = Modifier.fillMaxSize().background(MaterialTheme.colorScheme.surface)
         ) { padding ->
             Box(modifier = Modifier.fillMaxSize().padding(padding)) {
-            val categories = listOf(
-                "appearance" to Icons.Outlined.Palette,
-                "audio_quality" to Icons.Outlined.Tune,
-                "network" to Icons.Outlined.SettingsEthernet,
-                "startup_window" to Icons.Outlined.PowerSettingsNew,
-                "sounds_group" to Icons.Outlined.VolumeUp,
-                "system_group" to Icons.Outlined.Terminal,
-                "info_group" to Icons.Outlined.Info
-            )
-            BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
-            val compactRail = maxWidth < 860.dp
-            Row(modifier = Modifier.fillMaxSize()) {
-                Column(
-                    modifier = Modifier
-                        .width(if (compactRail) 68.dp else 248.dp)
-                        .fillMaxHeight()
-                        .background(MaterialTheme.colorScheme.surfaceContainerLow)
-                        .verticalScroll(rememberScrollState())
-                        .padding(horizontal = if (compactRail) 8.dp else 10.dp, vertical = 14.dp),
-                    verticalArrangement = Arrangement.spacedBy(3.dp),
-                    horizontalAlignment = Alignment.CenterHorizontally
-                ) {
-                    categories.forEachIndexed { index, (key, icon) ->
-                        SettingsNavItem(
-                            label = stringResource(key),
-                            icon = icon,
-                            selected = selectedSettingsTab == index,
-                            compact = compactRail,
-                            onClick = { selectedSettingsTab = index }
-                        )
-                    }
-                }
-                VerticalDivider(color = MaterialTheme.colorScheme.outlineVariant)
-                Column(
-                    modifier = Modifier
-                        .weight(1f)
-                        .fillMaxHeight()
-                        .verticalScroll(rememberScrollState())
-                        .padding(
-                            horizontal = if (compactRail) 18.dp else 32.dp,
-                            vertical = 26.dp
-                        )
-                ) {
-                    Text(
-                        stringResource(categories[selectedSettingsTab].first),
-                        style = MaterialTheme.typography.headlineSmall,
-                        fontWeight = FontWeight.Bold,
-                        modifier = Modifier.padding(bottom = 22.dp)
-                    )
-                    Column(
-                        modifier = Modifier.widthIn(max = 780.dp),
-                        verticalArrangement = Arrangement.spacedBy(16.dp)
-                    ) {
-                        when (selectedSettingsTab) {
-                        0 -> {
-                        ThemeSelector(
-                            currentTheme = appSettings.theme,
-                            onThemeChange = { onAppSettingsChange(appSettings.copy(theme = it)) }
-                        )
-
-                        HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
-
-                        Row(
-                            modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp),
-                            horizontalArrangement = Arrangement.spacedBy(24.dp),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                          Box(modifier = Modifier.weight(1f)) {
-                            AdvancedColorPicker(
-                                initialColor = appSettings.customThemeColor,
-                                onColorChange = { colorLong -> onCustomColorChange(colorLong) }
-                            )
-                          }
-
-                            // 2. I controlli aggiuntivi sulla destra
-                            Column(
-                                verticalArrangement = Arrangement.spacedBy(16.dp),
-                                horizontalAlignment = Alignment.CenterHorizontally
-                            ) {
-                                Button(
-                                    onClick = {
-                                        val extractedColor = ThemeEngine.pickImageAndExtractColor()
-                                        if (extractedColor != null) onCustomColorChange(extractedColor)
-                                    }
-                                ) {
-                                    Icon(Icons.Outlined.Image, contentDescription = null)
-                                    Spacer(Modifier.width(8.dp))
-                                    Text("Extract from Image")
-                                }
-
-                                OutlinedButton(
-                                    onClick = { onCustomColorChange(null) },
-                                    enabled = appSettings.customThemeColor != null
-                                ) {
-                                    Icon(Icons.Outlined.Restore, contentDescription = null)
-                                    Spacer(Modifier.width(8.dp))
-                                    Text("Reset to Default")
-                                }
-
-                                if (appSettings.customThemeColor != null) {
-                                    Row(verticalAlignment = Alignment.CenterVertically) {
-                                        Text("Current Seed: ", style = MaterialTheme.typography.bodyMedium)
-                                        Box(
-                                            modifier = Modifier
-                                                .size(32.dp)
-                                                .clip(CircleShape)
-                                                .background(Color(appSettings.customThemeColor!!.toULong()))
-                                                .border(1.dp, MaterialTheme.colorScheme.onSurface, CircleShape)
-                                        )
-                                    }
-                                }
-                            }
-                        }
-                    
-                        }
-                        1 -> {
-                        AudioSettingsContent(settings = audioSettings, onSettingsChange = onAudioSettingsChange)
-
-                        HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
-
-                        SwitchSetting(
-                            title = stringResource("native_engine_title"),
-                            description = stringResource("native_engine_desc"),
-                            icon = Icons.Outlined.Memory,
-                            checked = appSettings.useNativeEngine,
-                            onCheckedChange = { onAppSettingsChange(appSettings.copy(useNativeEngine = it)) }
-                        )
-
-                        HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp))
-
-                        SwitchSetting(
-                            title = stringResource("mute_render_title"),
-                            description = stringResource("mute_render_desc"),
-                            icon = Icons.Outlined.VolumeOff,
-                            checked = appSettings.muteRender,
-                            onCheckedChange = { onAppSettingsChange(appSettings.copy(muteRender = it)) }
-                        )
-
-                        }
-                        2 -> {
-                        NetworkSettingsContent(
-                            port = streamingPort,
-                            onPortChange = onStreamingPortChange,
-                            micPort = micPort,
-                            onMicPortChange = onMicPortChange,
-                            appSettings = appSettings,
-                            audioSettings = audioSettings,
-                            onAppSettingsChange = onAppSettingsChange
-                        )
-                    
-                        }
-                        3 -> {
-                        SwitchSetting(
-                            title = stringResource("launch_at_startup"),
-                            description = stringResource("launch_at_startup_desc"),
-                            icon = Icons.Outlined.PowerSettingsNew,
-                            checked = appSettings.launchAtStartup,
-                            onCheckedChange = { isEnabled ->
-                                onAppSettingsChange(appSettings.copy(launchAtStartup = isEnabled))
-                                val result = AutostartManager.toggleAutostart(isEnabled)
-                                if (result != null && System.getProperty("os.name").lowercase().contains("linux")) {
-                                    linuxAutostartInfo = result
-                                }
-                            }
-                        )
-
-                        HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp))
-
-                        SwitchSetting(
-                            title = stringResource("start_minimized_tray"),
-                            description = stringResource("start_minimized_tray_desc"),
-                            icon = Icons.Outlined.VisibilityOff,
-                            checked = appSettings.startMinimizedToTray,
-                            onCheckedChange = { onAppSettingsChange(appSettings.copy(startMinimizedToTray = it)) }
-                        )
-
-                        HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp))
-
-                        SwitchSetting(
-                            title = stringResource("close_to_tray"),
-                            description = stringResource("close_to_tray_desc"),
-                            icon = Icons.Outlined.ExitToApp,
-                            checked = appSettings.closeToTray,
-                            onCheckedChange = { onAppSettingsChange(appSettings.copy(closeToTray = it)) }
-                        )
-
-                        HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp))
-
-                        // NUOVO: Switch Auto-start Server
-                        SwitchSetting(
-                            title = stringResource("auto_start_server"),
-                            description = stringResource("auto_start_server_desc"),
-                            icon = Icons.Outlined.PlayCircleOutline,
-                            checked = appSettings.autoStartServer,
-                            onCheckedChange = { onAppSettingsChange(appSettings.copy(autoStartServer = it)) }
-                        )
-
-                        // Selettore modalità (appare solo se auto-start è attivo)
-                        AnimatedVisibility(visible = appSettings.autoStartServer) {
-                            Column(modifier = Modifier.padding(start = 48.dp, top = 8.dp)) {
-                                Text(stringResource("auto_start_mode"), style = MaterialTheme.typography.labelLarge)
-                                Spacer(Modifier.height(8.dp))
-                                SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {
-                                    SegmentedButton(
-                                        selected = appSettings.autoStartMulticast,
-                                        onClick = { onAppSettingsChange(appSettings.copy(autoStartMulticast = true)) },
-                                        shape = SegmentedButtonDefaults.itemShape(0, 2)
-                                    ) { Text(stringResource("multicast")) }
-                                    SegmentedButton(
-                                        selected = !appSettings.autoStartMulticast,
-                                        onClick = { onAppSettingsChange(appSettings.copy(autoStartMulticast = false)) },
-                                        shape = SegmentedButtonDefaults.itemShape(1, 2)
-                                    ) { Text(stringResource("unicast")) }
-                                }
-                            }
-                        }
-
-                        HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp))
-
-                        SwitchSetting(
-                            title = stringResource("server_persist_title"),
-                            description = stringResource("server_persist_desc"),
-                            icon = Icons.Outlined.AllInclusive,
-                            checked = appSettings.serverPersist,
-                            onCheckedChange = { onAppSettingsChange(appSettings.copy(serverPersist = it)) }
-                        )
-
-                        HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp))
-                        SwitchSetting(
-                            title = stringResource("auto_connect_client_title"),
-                            description = stringResource("auto_connect_client_desc"),
-                            icon = Icons.Outlined.Sensors,
-                            checked = appSettings.autoConnectClientEnabled,
-                            onCheckedChange = { onAppSettingsChange(appSettings.copy(autoConnectClientEnabled = it)) }
-                        )
-
-                        AnimatedVisibility(visible = appSettings.autoConnectClientEnabled) {
-                            Column(modifier = Modifier.padding(start = 48.dp, top = 8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                                Text(stringResource("priority_ips"), style = MaterialTheme.typography.labelLarge)
-                                appSettings.autoConnectIps.forEachIndexed { index, ip ->
-                                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                                        var textValue by remember(ip) { mutableStateOf(ip) }
-                                        OutlinedTextField(
-                                            value = textValue,
-                                            onValueChange = {
-                                                textValue = it
-                                                val newList = appSettings.autoConnectIps.toMutableList()
-                                                newList[index] = it
-                                                onAppSettingsChange(appSettings.copy(autoConnectIps = newList))
-                                            },
-                                            modifier = Modifier.weight(1f),
-                                            singleLine = true
-                                        )
-                                        IconButton(onClick = {
-                                            if (index > 0) {
-                                                val newList = appSettings.autoConnectIps.toMutableList()
-                                                val temp = newList[index]
-                                                newList[index] = newList[index - 1]
-                                                newList[index - 1] = temp
-                                                onAppSettingsChange(appSettings.copy(autoConnectIps = newList))
-                                            }
-                                        }, enabled = index > 0) { Icon(Icons.Default.KeyboardArrowUp, null) }
-                                        IconButton(onClick = {
-                                            if (index < appSettings.autoConnectIps.size - 1) {
-                                                val newList = appSettings.autoConnectIps.toMutableList()
-                                                val temp = newList[index]
-                                                newList[index] = newList[index + 1]
-                                                newList[index + 1] = temp
-                                                onAppSettingsChange(appSettings.copy(autoConnectIps = newList))
-                                            }
-                                        }, enabled = index < appSettings.autoConnectIps.size - 1) { Icon(Icons.Default.KeyboardArrowDown, null) }
-                                        IconButton(onClick = {
-                                            val newList = appSettings.autoConnectIps.toMutableList()
-                                            newList.removeAt(index)
-                                            onAppSettingsChange(appSettings.copy(autoConnectIps = newList))
-                                        }) { Icon(Icons.Default.Delete, null, tint = MaterialTheme.colorScheme.error) }
-                                    }
-                                }
-                                OutlinedButton(onClick = {
-                                    val newList = appSettings.autoConnectIps.toMutableList()
-                                    newList.add("")
-                                    onAppSettingsChange(appSettings.copy(autoConnectIps = newList))
-                                }) {
-                                    Text(stringResource("add_ip"))
-                                }
-                            }
-                        }
-                    
-                        }
-                        4 -> {
-                        SwitchSetting(
-                            title = stringResource("connection_sound_title"),
-                            description = stringResource("connection_sound_desc"),
-                            icon = Icons.Outlined.VolumeUp,
-                            checked = appSettings.connectionSoundEnabled,
-                            onCheckedChange = { onAppSettingsChange(appSettings.copy(connectionSoundEnabled = it)) }
-                        )
-
-                        HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp))
-
-                        SwitchSetting(
-                            title = stringResource("disconnection_sound_title"),
-                            description = stringResource("disconnection_sound_desc"),
-                            icon = Icons.Outlined.VolumeOff,
-                            checked = appSettings.disconnectionSoundEnabled,
-                            onCheckedChange = { onAppSettingsChange(appSettings.copy(disconnectionSoundEnabled = it)) }
-                        )
-                    
-                        }
-                        5 -> {
-                        Row(
-                            modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.SpaceBetween
-                        ) {
-                            Column(modifier = Modifier.weight(1f).padding(end = 16.dp)) {
-                                Text(
-                                    text = stringResource("cli_install_title"),
-                                    style = MaterialTheme.typography.bodyLarge
-                                )
-                                Spacer(Modifier.height(2.dp))
-                                Text(
-                                    text = if (cliIsInstalled)
-                                        stringResource("cli_status_installed")
-                                    else
-                                        stringResource("cli_status_not_installed"),
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = if (cliIsInstalled)
-                                        MaterialTheme.colorScheme.primary
-                                    else
-                                        MaterialTheme.colorScheme.onSurfaceVariant
-                                )
-                                Spacer(Modifier.height(4.dp))
-                                Text(
-                                    text = stringResource("cli_install_desc"),
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                                )
-                            }
-                            Button(
-                                enabled = !cliInstalling,
-                                onClick = {
-                                    settingsScope.launch(Dispatchers.IO) {
-                                        cliInstalling = true
-                                        val result = CliPathInstaller.install()
-                                        cliInstallResult = result
-                                        if (result is CliPathInstaller.InstallResult.Success) {
-                                            cliIsInstalled = true
-                                        }
-                                        cliInstalling = false
-                                    }
-                                }
-                            ) {
-                                if (cliInstalling) {
-                                    CircularProgressIndicator(
-                                        modifier = Modifier.size(18.dp),
-                                        strokeWidth = 2.dp
-                                    )
-                                } else {
-                                    Icon(
-                                        if (cliIsInstalled) Icons.Outlined.Refresh else Icons.Outlined.Download,
-                                        contentDescription = null,
-                                        modifier = Modifier.size(18.dp)
-                                    )
-                                }
-                                Spacer(Modifier.width(6.dp))
-                                Text(
-                                    if (cliIsInstalled) stringResource("cli_btn_update")
-                                    else stringResource("cli_btn_install")
-                                )
-                            }
-                        }
-                        if (FirewallHelper.isWindows) {
-                            HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
-                            Column(modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp)) {
-                                Text(
-                                    text = stringResource("fw_title"),
-                                    style = MaterialTheme.typography.bodyLarge
-                                )
-                                Spacer(Modifier.height(2.dp))
-                                Text(
-                                    text = if (fwActive) stringResource("fw_status_active") else stringResource("fw_status_inactive"),
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = if (fwActive) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
-                                )
-                                Spacer(Modifier.height(4.dp))
-                                Text(
-                                    text = stringResource("fw_desc"),
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                                )
-                                Spacer(Modifier.height(12.dp))
-                                Row(
-                                    modifier = Modifier.fillMaxWidth(),
-                                    verticalAlignment = Alignment.CenterVertically,
-                                    horizontalArrangement = Arrangement.SpaceBetween
-                                ) {
-                                    OutlinedTextField(
-                                        value = fwPorts,
-                                        onValueChange = { fwPorts = it },
-                                        label = { Text(stringResource("fw_ports_label")) },
-                                        singleLine = true,
-                                        modifier = Modifier.weight(1f).padding(end = 16.dp)
-                                    )
-                                    Button(
-                                        enabled = !fwBusy,
-                                        onClick = {
-                                            val ports = fwPorts.split(Regex("[^0-9]+")).mapNotNull { it.toIntOrNull() }
-                                            settingsScope.launch(Dispatchers.IO) {
-                                                fwBusy = true
-                                                val r = FirewallHelper.openInboundPorts(ports, fwTcpPorts)
-                                                fwResult = r
-                                                fwActive = FirewallHelper.rulesActive()
-                                                fwBusy = false
-                                            }
-                                        }
-                                    ) {
-                                        if (fwBusy) {
-                                            CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp)
-                                        } else {
-                                            Icon(Icons.Outlined.Security, contentDescription = null, modifier = Modifier.size(18.dp))
-                                        }
-                                        Spacer(Modifier.width(6.dp))
-                                        Text(stringResource("fw_btn"))
-                                    }
-                                }
-                            }
-                        }
-
-                        if (FirewallHelper.isLinux && linuxFirewall != FirewallHelper.LinuxFirewall.NONE) {
-                            HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
-                            Column(modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp)) {
-                                Text(
-                                    text = stringResource("fw_title_linux"),
-                                    style = MaterialTheme.typography.bodyLarge
-                                )
-                                Spacer(Modifier.height(2.dp))
-                                Text(
-                                    text = stringResource(
-                                        if (linuxFirewall == FirewallHelper.LinuxFirewall.FIREWALLD)
-                                            "fw_detected_firewalld" else "fw_detected_ufw"
-                                    ),
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.primary
-                                )
-                                Spacer(Modifier.height(4.dp))
-                                Text(
-                                    text = stringResource("fw_desc_linux"),
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                                )
-                                Spacer(Modifier.height(12.dp))
-                                OutlinedTextField(
-                                    value = fwPorts,
-                                    onValueChange = { fwPorts = it },
-                                    label = { Text(stringResource("fw_ports_label")) },
-                                    singleLine = true,
-                                    modifier = Modifier.fillMaxWidth()
-                                )
-                                val linuxCmd = FirewallHelper.linuxAllowCommand(
-                                    fwPorts.split(Regex("[^0-9]+")).mapNotNull { it.toIntOrNull() },
-                                    fwTcpPorts
-                                )
-                                if (linuxCmd != null) {
-                                    Spacer(Modifier.height(12.dp))
-                                    Surface(
-                                        color = MaterialTheme.colorScheme.surfaceVariant,
-                                        shape = RoundedCornerShape(8.dp),
-                                        modifier = Modifier.fillMaxWidth()
-                                    ) {
-                                        Text(
-                                            text = linuxCmd,
-                                            style = MaterialTheme.typography.bodySmall,
-                                            fontFamily = FontFamily.Monospace,
-                                            modifier = Modifier.padding(12.dp)
-                                        )
-                                    }
-                                    Spacer(Modifier.height(8.dp))
-                                    Button(onClick = {
-                                        clipboard.setText(AnnotatedString(linuxCmd))
-                                    }) {
-                                        Icon(Icons.Outlined.ContentCopy, contentDescription = null, modifier = Modifier.size(18.dp))
-                                        Spacer(Modifier.width(6.dp))
-                                        Text(stringResource("fw_copy_btn"))
-                                    }
-                                }
-                            }
-                        }
-                    
-                        }
-                        6 -> {
-                        InfoSetting(
-                            title = stringResource("license_info_title"),
-                            description = stringResource("license_info_desc"),
-                            icon = Icons.Outlined.VerifiedUser
-                        )
-                        HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
-                        ClickableSetting(
-                            title = stringResource("license_read_full"),
-                            description = stringResource("license_read_full_desc"),
-                            icon = Icons.Outlined.OpenInBrowser,
-                            onClick = {
-                                openUrl("https://eupl.eu/")
-                            }
-                        )
-                        HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
-                        ClickableSetting(
-                            title = stringResource("licenses_open_source"),
-                            description = stringResource("licenses_open_source_desc"),
-                            icon = Icons.Outlined.Description,
-                            onClick = { showLicensesDialog = true }
-                        )
-
-                        HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
-
-                        InfoSetting(
-                            title = stringResource("developed_by"),
-                            description = "Marco Morosi",
-                            icon = Icons.Outlined.Person
-                        )
-                        HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
-                        ClickableSetting(
-                            title = stringResource("support_kofi_title"),
-                            description = stringResource("support_kofi_desc"),
-                            icon = Icons.Outlined.LocalCafe,
-                            onClick = {
-                                openUrl("https://ko-fi.com/marcomorosi")
-                            }
-                        )
-                        HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
-                        ClickableSetting(
-                            title = stringResource("source_code_android"),
-                            description = stringResource("source_code_github_short"),
-                            icon = Icons.Outlined.Code,
-                            onClick = {
-                                openUrl("https://github.com/marcomorosi06/WiFiAudioStreaming-Android/")
-                            }
-                        )
-                        ClickableSetting(
-                            title = stringResource("source_code_desktop"),
-                            description = stringResource("source_code_github_short"),
-                            icon = Icons.Outlined.Code,
-                            onClick = {
-                                openUrl("https://github.com/marcomorosi06/WiFiAudioStreaming-Desktop")
-                            }
-                        )
-                        ClickableSetting(
-                            title = stringResource("source_code_protocol"),
-                            description = stringResource("source_code_protocol_desc"),
-                            icon = Icons.Outlined.Code,
-                            onClick = {
-                                openUrl("https://github.com/marcomorosi06/wfas-protocol")
-                            }
-                        )
-                    
-
-                        SwitchSetting(
-                            title = stringResource("developer_title"),
-                            description = stringResource("developer_desc"),
-                            icon = Icons.Outlined.Code,
-                            checked = appSettings.developerMode,
-                            onCheckedChange = { on ->
-                                // Spegnendo la modalita' sviluppatore non deve restare
-                                // attivo un DSP che poi non si puo' piu' disattivare.
-                                onAppSettingsChange(
-                                    appSettings.copy(
-                                        developerMode = on,
-                                        noiseReductionEnabled = if (on) appSettings.noiseReductionEnabled else false
-                                    )
-                                )
-                            }
-                        )
-
-                        AnimatedVisibility(visible = appSettings.developerMode) {
-                            Column {
-                                SwitchSetting(
-                                    title = stringResource("nr_title"),
-                                    description = stringResource("nr_desc"),
-                                    icon = Icons.Outlined.GraphicEq,
-                                    checked = appSettings.noiseReductionEnabled,
-                                    onCheckedChange = {
-                                        onAppSettingsChange(appSettings.copy(noiseReductionEnabled = it))
-                                    }
-                                )
-                                AnimatedVisibility(visible = appSettings.noiseReductionEnabled) {
-                                    Column(modifier = Modifier.padding(horizontal = 20.dp)) {
-                                        Text(
-                                            text = stringResource("nr_strength", appSettings.noiseReductionStrength),
-                                            style = MaterialTheme.typography.bodyMedium,
-                                            color = MaterialTheme.colorScheme.primary
-                                        )
-                                        Slider(
-                                            value = appSettings.noiseReductionStrength.toFloat(),
-                                            onValueChange = {
-                                                onAppSettingsChange(appSettings.copy(noiseReductionStrength = it.toInt()))
-                                            },
-                                            valueRange = 0f..100f,
-                                            steps = 19
-                                        )
-                                        Text(
-                                            text = stringResource("nr_hint"),
-                                            style = MaterialTheme.typography.bodySmall,
-                                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                            modifier = Modifier.padding(bottom = 12.dp)
-                                        )
-                                    }
-                                }
-                            }
-                        }
-
-                        SwitchSetting(
-                            title = stringResource("update_auto_title"),
-                            description = stringResource("update_auto_desc"),
-                            icon = Icons.Outlined.Update,
-                            checked = appSettings.autoUpdateCheckEnabled,
-                            onCheckedChange = { onAppSettingsChange(appSettings.copy(autoUpdateCheckEnabled = it)) }
-                        )
-                        Spacer(Modifier.height(8.dp))
-                        OutlinedButton(
-                            onClick = onCheckForUpdates,
-                            enabled = !checkingForUpdate,
-                            modifier = Modifier.fillMaxWidth()
-                        ) {
-                            if (checkingForUpdate) {
-                                CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp)
-                            } else {
-                                Icon(Icons.Outlined.Update, contentDescription = null, modifier = Modifier.size(18.dp))
-                            }
-                            Spacer(Modifier.width(8.dp))
-                            Text(stringResource("update_check_now"))
-                        }
-                        Spacer(Modifier.height(8.dp))
-                
-
-                        OutlinedButton(
-                            onClick = { onShowWelcome(); onClose() },
-                            modifier = Modifier.fillMaxWidth()
-                        ) {
-                            Icon(Icons.Outlined.Celebration, contentDescription = null, modifier = Modifier.size(18.dp))
-                            Spacer(Modifier.width(8.dp))
-                            Text(stringResource("show_welcome_screen"))
-                        }
-                        Spacer(Modifier.height(8.dp))
-                
-
-                        OutlinedButton(
-                            onClick = { showResetConfirmDialog = true },
-                            modifier = Modifier.fillMaxWidth(),
-                            colors = ButtonDefaults.outlinedButtonColors(
-                                contentColor = MaterialTheme.colorScheme.error
-                            ),
-                            border = androidx.compose.foundation.BorderStroke(
-                                1.dp,
-                                MaterialTheme.colorScheme.error.copy(alpha = 0.5f)
-                            )
-                        ) {
-                            Icon(Icons.Outlined.Restore, contentDescription = null, modifier = Modifier.size(18.dp))
-                            Spacer(Modifier.width(8.dp))
-                            Text(stringResource("reset_all_settings"))
-                        }
-                        Spacer(Modifier.height(8.dp))
-                
-
-                        Box(
+                val categories = listOf(
+                    "appearance" to Icons.Outlined.Palette,
+                    "audio_quality" to Icons.Outlined.Tune,
+                    "network" to Icons.Outlined.SettingsEthernet,
+                    "startup_window" to Icons.Outlined.PowerSettingsNew,
+                    "sounds_group" to Icons.Outlined.VolumeUp,
+                    "system_group" to Icons.Outlined.Terminal,
+                    "info_group" to Icons.Outlined.Info
+                )
+                BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
+                    val compactRail = maxWidth < 860.dp
+                    Row(modifier = Modifier.fillMaxSize()) {
+                        Column(
                             modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(bottom = 20.dp),
-                            contentAlignment = Alignment.Center
+                                .width(if (compactRail) 68.dp else 248.dp)
+                                .fillMaxHeight()
+                                .background(MaterialTheme.colorScheme.surfaceContainerLow)
+                                .verticalScroll(rememberScrollState())
+                                .padding(horizontal = if (compactRail) 8.dp else 10.dp, vertical = 14.dp),
+                            verticalArrangement = Arrangement.spacedBy(3.dp),
+                            horizontalAlignment = Alignment.CenterHorizontally
+                        ) {
+                            categories.forEachIndexed { index, (key, icon) ->
+                                SettingsNavItem(
+                                    label = stringResource(key),
+                                    icon = icon,
+                                    selected = selectedSettingsTab == index,
+                                    compact = compactRail,
+                                    onClick = { selectedSettingsTab = index }
+                                )
+                            }
+                        }
+                        VerticalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+                        Column(
+                            modifier = Modifier
+                                .weight(1f)
+                                .fillMaxHeight()
+                                .verticalScroll(rememberScrollState())
+                                .padding(
+                                    horizontal = if (compactRail) 18.dp else 32.dp,
+                                    vertical = 26.dp
+                                )
                         ) {
                             Text(
-                                text = "${stringResource("app_version_label")} ${Strings.appVersion}",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                                stringResource(categories[selectedSettingsTab].first),
+                                style = MaterialTheme.typography.headlineSmall,
+                                fontWeight = FontWeight.Bold,
+                                modifier = Modifier.padding(bottom = 22.dp)
                             )
-                        }
-                
-                        }
+                            Column(
+                                modifier = Modifier.widthIn(max = 780.dp),
+                                verticalArrangement = Arrangement.spacedBy(16.dp)
+                            ) {
+                                when (selectedSettingsTab) {
+                                    0 -> {
+                                        ThemeSelector(
+                                            currentTheme = appSettings.theme,
+                                            onThemeChange = { onAppSettingsChange(appSettings.copy(theme = it)) }
+                                        )
+
+                                        HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
+
+                                        Row(
+                                            modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp),
+                                            horizontalArrangement = Arrangement.spacedBy(24.dp),
+                                            verticalAlignment = Alignment.CenterVertically
+                                        ) {
+                                            Box(modifier = Modifier.weight(1f)) {
+                                                AdvancedColorPicker(
+                                                    initialColor = appSettings.customThemeColor,
+                                                    onColorChange = { colorLong -> onCustomColorChange(colorLong) }
+                                                )
+                                            }
+
+                                            // 2. I controlli aggiuntivi sulla destra
+                                            Column(
+                                                verticalArrangement = Arrangement.spacedBy(16.dp),
+                                                horizontalAlignment = Alignment.CenterHorizontally
+                                            ) {
+                                                Button(
+                                                    onClick = {
+                                                        val extractedColor = ThemeEngine.pickImageAndExtractColor()
+                                                        if (extractedColor != null) onCustomColorChange(extractedColor)
+                                                    }
+                                                ) {
+                                                    Icon(Icons.Outlined.Image, contentDescription = null)
+                                                    Spacer(Modifier.width(8.dp))
+                                                    Text("Extract from Image")
+                                                }
+
+                                                OutlinedButton(
+                                                    onClick = { onCustomColorChange(null) },
+                                                    enabled = appSettings.customThemeColor != null
+                                                ) {
+                                                    Icon(Icons.Outlined.Restore, contentDescription = null)
+                                                    Spacer(Modifier.width(8.dp))
+                                                    Text("Reset to Default")
+                                                }
+
+                                                if (appSettings.customThemeColor != null) {
+                                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                                        Text("Current Seed: ", style = MaterialTheme.typography.bodyMedium)
+                                                        Box(
+                                                            modifier = Modifier
+                                                                .size(32.dp)
+                                                                .clip(CircleShape)
+                                                                .background(Color(appSettings.customThemeColor!!.toULong()))
+                                                                .border(1.dp, MaterialTheme.colorScheme.onSurface, CircleShape)
+                                                        )
+                                                    }
+                                                }
+                                            }
+                                        }
+
+                                    }
+                                    1 -> {
+                                        AudioSettingsContent(settings = audioSettings, onSettingsChange = onAudioSettingsChange)
+
+                                        HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
+
+                                        SwitchSetting(
+                                            title = stringResource("native_engine_title"),
+                                            description = stringResource("native_engine_desc"),
+                                            icon = Icons.Outlined.Memory,
+                                            checked = appSettings.useNativeEngine,
+                                            onCheckedChange = { onAppSettingsChange(appSettings.copy(useNativeEngine = it)) }
+                                        )
+
+                                        HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp))
+
+                                        SwitchSetting(
+                                            title = stringResource("mute_render_title"),
+                                            description = stringResource("mute_render_desc"),
+                                            icon = Icons.Outlined.VolumeOff,
+                                            checked = appSettings.muteRender,
+                                            onCheckedChange = { onAppSettingsChange(appSettings.copy(muteRender = it)) }
+                                        )
+
+                                    }
+                                    2 -> {
+                                        NetworkSettingsContent(
+                                            port = streamingPort,
+                                            onPortChange = onStreamingPortChange,
+                                            micPort = micPort,
+                                            onMicPortChange = onMicPortChange,
+                                            appSettings = appSettings,
+                                            audioSettings = audioSettings,
+                                            onAppSettingsChange = onAppSettingsChange
+                                        )
+
+                                    }
+                                    3 -> {
+                                        SwitchSetting(
+                                            title = stringResource("launch_at_startup"),
+                                            description = stringResource("launch_at_startup_desc"),
+                                            icon = Icons.Outlined.PowerSettingsNew,
+                                            checked = appSettings.launchAtStartup,
+                                            onCheckedChange = { isEnabled ->
+                                                onAppSettingsChange(appSettings.copy(launchAtStartup = isEnabled))
+                                                val result = AutostartManager.toggleAutostart(isEnabled)
+                                                if (result != null && System.getProperty("os.name").lowercase().contains("linux")) {
+                                                    linuxAutostartInfo = result
+                                                }
+                                            }
+                                        )
+
+                                        HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp))
+
+                                        SwitchSetting(
+                                            title = stringResource("start_minimized_tray"),
+                                            description = stringResource("start_minimized_tray_desc"),
+                                            icon = Icons.Outlined.VisibilityOff,
+                                            checked = appSettings.startMinimizedToTray,
+                                            onCheckedChange = { onAppSettingsChange(appSettings.copy(startMinimizedToTray = it)) }
+                                        )
+
+                                        HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp))
+
+                                        SwitchSetting(
+                                            title = stringResource("close_to_tray"),
+                                            description = stringResource("close_to_tray_desc"),
+                                            icon = Icons.Outlined.ExitToApp,
+                                            checked = appSettings.closeToTray,
+                                            onCheckedChange = { onAppSettingsChange(appSettings.copy(closeToTray = it)) }
+                                        )
+
+                                        HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp))
+
+                                        // NUOVO: Switch Auto-start Server
+                                        SwitchSetting(
+                                            title = stringResource("auto_start_server"),
+                                            description = stringResource("auto_start_server_desc"),
+                                            icon = Icons.Outlined.PlayCircleOutline,
+                                            checked = appSettings.autoStartServer,
+                                            onCheckedChange = { onAppSettingsChange(appSettings.copy(autoStartServer = it)) }
+                                        )
+
+                                        // Selettore modalità (appare solo se auto-start è attivo)
+                                        AnimatedVisibility(visible = appSettings.autoStartServer) {
+                                            Column(modifier = Modifier.padding(start = 48.dp, top = 8.dp)) {
+                                                Text(stringResource("auto_start_mode"), style = MaterialTheme.typography.labelLarge)
+                                                Spacer(Modifier.height(8.dp))
+                                                SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {
+                                                    SegmentedButton(
+                                                        selected = appSettings.autoStartMulticast,
+                                                        onClick = { onAppSettingsChange(appSettings.copy(autoStartMulticast = true)) },
+                                                        shape = SegmentedButtonDefaults.itemShape(0, 2)
+                                                    ) { Text(stringResource("multicast")) }
+                                                    SegmentedButton(
+                                                        selected = !appSettings.autoStartMulticast,
+                                                        onClick = { onAppSettingsChange(appSettings.copy(autoStartMulticast = false)) },
+                                                        shape = SegmentedButtonDefaults.itemShape(1, 2)
+                                                    ) { Text(stringResource("unicast")) }
+                                                }
+
+                                                Spacer(Modifier.height(12.dp))
+                                                AutoStartOptions(appSettings, onAppSettingsChange)
+                                            }
+                                        }
+
+                                        HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp))
+
+                                        SwitchSetting(
+                                            title = stringResource("server_persist_title"),
+                                            description = stringResource("server_persist_desc"),
+                                            icon = Icons.Outlined.AllInclusive,
+                                            checked = appSettings.serverPersist,
+                                            onCheckedChange = { onAppSettingsChange(appSettings.copy(serverPersist = it)) }
+                                        )
+
+                                        HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp))
+                                        SwitchSetting(
+                                            title = stringResource("auto_connect_client_title"),
+                                            description = stringResource("auto_connect_client_desc"),
+                                            icon = Icons.Outlined.Sensors,
+                                            checked = appSettings.autoConnectClientEnabled,
+                                            onCheckedChange = { onAppSettingsChange(appSettings.copy(autoConnectClientEnabled = it)) }
+                                        )
+
+                                        AnimatedVisibility(visible = appSettings.autoConnectClientEnabled) {
+                                            Column(
+                                                modifier = Modifier.padding(start = 48.dp, top = 8.dp),
+                                                verticalArrangement = Arrangement.spacedBy(12.dp)
+                                            ) {
+                                                AutoConnectOptions(appSettings, onAppSettingsChange)
+                                                AutoConnectTargetsEditor(appSettings, onAppSettingsChange)
+                                            }
+                                        }
+
+                                    }
+                                    4 -> {
+                                        SwitchSetting(
+                                            title = stringResource("connection_sound_title"),
+                                            description = stringResource("connection_sound_desc"),
+                                            icon = Icons.Outlined.VolumeUp,
+                                            checked = appSettings.connectionSoundEnabled,
+                                            onCheckedChange = { onAppSettingsChange(appSettings.copy(connectionSoundEnabled = it)) }
+                                        )
+
+                                        HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp))
+
+                                        SwitchSetting(
+                                            title = stringResource("disconnection_sound_title"),
+                                            description = stringResource("disconnection_sound_desc"),
+                                            icon = Icons.Outlined.VolumeOff,
+                                            checked = appSettings.disconnectionSoundEnabled,
+                                            onCheckedChange = { onAppSettingsChange(appSettings.copy(disconnectionSoundEnabled = it)) }
+                                        )
+
+                                    }
+                                    5 -> {
+                                        Row(
+                                            modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp),
+                                            verticalAlignment = Alignment.CenterVertically,
+                                            horizontalArrangement = Arrangement.SpaceBetween
+                                        ) {
+                                            Column(modifier = Modifier.weight(1f).padding(end = 16.dp)) {
+                                                Text(
+                                                    text = stringResource("cli_install_title"),
+                                                    style = MaterialTheme.typography.bodyLarge
+                                                )
+                                                Spacer(Modifier.height(2.dp))
+                                                Text(
+                                                    text = if (cliIsInstalled)
+                                                        stringResource("cli_status_installed")
+                                                    else
+                                                        stringResource("cli_status_not_installed"),
+                                                    style = MaterialTheme.typography.bodySmall,
+                                                    color = if (cliIsInstalled)
+                                                        MaterialTheme.colorScheme.primary
+                                                    else
+                                                        MaterialTheme.colorScheme.onSurfaceVariant
+                                                )
+                                                Spacer(Modifier.height(4.dp))
+                                                Text(
+                                                    text = stringResource("cli_install_desc"),
+                                                    style = MaterialTheme.typography.bodySmall,
+                                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                                )
+                                            }
+                                            Button(
+                                                enabled = !cliInstalling,
+                                                onClick = {
+                                                    settingsScope.launch(Dispatchers.IO) {
+                                                        cliInstalling = true
+                                                        val result = CliPathInstaller.install()
+                                                        cliInstallResult = result
+                                                        if (result is CliPathInstaller.InstallResult.Success) {
+                                                            cliIsInstalled = true
+                                                        }
+                                                        cliInstalling = false
+                                                    }
+                                                }
+                                            ) {
+                                                if (cliInstalling) {
+                                                    CircularProgressIndicator(
+                                                        modifier = Modifier.size(18.dp),
+                                                        strokeWidth = 2.dp
+                                                    )
+                                                } else {
+                                                    Icon(
+                                                        if (cliIsInstalled) Icons.Outlined.Refresh else Icons.Outlined.Download,
+                                                        contentDescription = null,
+                                                        modifier = Modifier.size(18.dp)
+                                                    )
+                                                }
+                                                Spacer(Modifier.width(6.dp))
+                                                Text(
+                                                    if (cliIsInstalled) stringResource("cli_btn_update")
+                                                    else stringResource("cli_btn_install")
+                                                )
+                                            }
+                                        }
+                                        if (FirewallHelper.isWindows) {
+                                            HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
+                                            Column(modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp)) {
+                                                Text(
+                                                    text = stringResource("fw_title"),
+                                                    style = MaterialTheme.typography.bodyLarge
+                                                )
+                                                Spacer(Modifier.height(2.dp))
+                                                Text(
+                                                    text = if (fwActive) stringResource("fw_status_active") else stringResource("fw_status_inactive"),
+                                                    style = MaterialTheme.typography.bodySmall,
+                                                    color = if (fwActive) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
+                                                )
+                                                Spacer(Modifier.height(4.dp))
+                                                Text(
+                                                    text = stringResource("fw_desc"),
+                                                    style = MaterialTheme.typography.bodySmall,
+                                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                                )
+                                                Spacer(Modifier.height(12.dp))
+                                                Row(
+                                                    modifier = Modifier.fillMaxWidth(),
+                                                    verticalAlignment = Alignment.CenterVertically,
+                                                    horizontalArrangement = Arrangement.SpaceBetween
+                                                ) {
+                                                    OutlinedTextField(
+                                                        value = fwPorts,
+                                                        onValueChange = { fwPorts = it },
+                                                        label = { Text(stringResource("fw_ports_label")) },
+                                                        singleLine = true,
+                                                        modifier = Modifier.weight(1f).padding(end = 16.dp)
+                                                    )
+                                                    Button(
+                                                        enabled = !fwBusy,
+                                                        onClick = {
+                                                            val ports = fwPorts.split(Regex("[^0-9]+")).mapNotNull { it.toIntOrNull() }
+                                                            settingsScope.launch(Dispatchers.IO) {
+                                                                fwBusy = true
+                                                                val r = FirewallHelper.openInboundPorts(ports, fwTcpPorts)
+                                                                fwResult = r
+                                                                fwActive = FirewallHelper.rulesActive()
+                                                                fwBusy = false
+                                                            }
+                                                        }
+                                                    ) {
+                                                        if (fwBusy) {
+                                                            CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp)
+                                                        } else {
+                                                            Icon(Icons.Outlined.Security, contentDescription = null, modifier = Modifier.size(18.dp))
+                                                        }
+                                                        Spacer(Modifier.width(6.dp))
+                                                        Text(stringResource("fw_btn"))
+                                                    }
+                                                }
+                                            }
+                                        }
+
+                                        if (FirewallHelper.isLinux && linuxFirewall != FirewallHelper.LinuxFirewall.NONE) {
+                                            HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
+                                            Column(modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp)) {
+                                                Text(
+                                                    text = stringResource("fw_title_linux"),
+                                                    style = MaterialTheme.typography.bodyLarge
+                                                )
+                                                Spacer(Modifier.height(2.dp))
+                                                Text(
+                                                    text = stringResource(
+                                                        if (linuxFirewall == FirewallHelper.LinuxFirewall.FIREWALLD)
+                                                            "fw_detected_firewalld" else "fw_detected_ufw"
+                                                    ),
+                                                    style = MaterialTheme.typography.bodySmall,
+                                                    color = MaterialTheme.colorScheme.primary
+                                                )
+                                                Spacer(Modifier.height(4.dp))
+                                                Text(
+                                                    text = stringResource("fw_desc_linux"),
+                                                    style = MaterialTheme.typography.bodySmall,
+                                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                                )
+                                                Spacer(Modifier.height(12.dp))
+                                                OutlinedTextField(
+                                                    value = fwPorts,
+                                                    onValueChange = { fwPorts = it },
+                                                    label = { Text(stringResource("fw_ports_label")) },
+                                                    singleLine = true,
+                                                    modifier = Modifier.fillMaxWidth()
+                                                )
+                                                val linuxCmd = FirewallHelper.linuxAllowCommand(
+                                                    fwPorts.split(Regex("[^0-9]+")).mapNotNull { it.toIntOrNull() },
+                                                    fwTcpPorts
+                                                )
+                                                if (linuxCmd != null) {
+                                                    Spacer(Modifier.height(12.dp))
+                                                    Surface(
+                                                        color = MaterialTheme.colorScheme.surfaceVariant,
+                                                        shape = RoundedCornerShape(8.dp),
+                                                        modifier = Modifier.fillMaxWidth()
+                                                    ) {
+                                                        Text(
+                                                            text = linuxCmd,
+                                                            style = MaterialTheme.typography.bodySmall,
+                                                            fontFamily = FontFamily.Monospace,
+                                                            modifier = Modifier.padding(12.dp)
+                                                        )
+                                                    }
+                                                    Spacer(Modifier.height(8.dp))
+                                                    Button(onClick = {
+                                                        clipboard.setText(AnnotatedString(linuxCmd))
+                                                    }) {
+                                                        Icon(Icons.Outlined.ContentCopy, contentDescription = null, modifier = Modifier.size(18.dp))
+                                                        Spacer(Modifier.width(6.dp))
+                                                        Text(stringResource("fw_copy_btn"))
+                                                    }
+                                                }
+                                            }
+                                        }
+
+                                    }
+                                    6 -> {
+                                        InfoSetting(
+                                            title = stringResource("license_info_title"),
+                                            description = stringResource("license_info_desc"),
+                                            icon = Icons.Outlined.VerifiedUser
+                                        )
+                                        HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
+                                        ClickableSetting(
+                                            title = stringResource("license_read_full"),
+                                            description = stringResource("license_read_full_desc"),
+                                            icon = Icons.Outlined.OpenInBrowser,
+                                            onClick = {
+                                                openUrl("https://eupl.eu/")
+                                            }
+                                        )
+                                        HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
+                                        ClickableSetting(
+                                            title = stringResource("licenses_open_source"),
+                                            description = stringResource("licenses_open_source_desc"),
+                                            icon = Icons.Outlined.Description,
+                                            onClick = { showLicensesDialog = true }
+                                        )
+
+                                        HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
+
+                                        InfoSetting(
+                                            title = stringResource("developed_by"),
+                                            description = "Marco Morosi",
+                                            icon = Icons.Outlined.Person
+                                        )
+                                        HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
+                                        ClickableSetting(
+                                            title = stringResource("support_kofi_title"),
+                                            description = stringResource("support_kofi_desc"),
+                                            icon = Icons.Outlined.LocalCafe,
+                                            onClick = {
+                                                openUrl("https://ko-fi.com/marcomorosi")
+                                            }
+                                        )
+                                        HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
+                                        ClickableSetting(
+                                            title = stringResource("source_code_android"),
+                                            description = stringResource("source_code_github_short"),
+                                            icon = Icons.Outlined.Code,
+                                            onClick = {
+                                                openUrl("https://github.com/marcomorosi06/WiFiAudioStreaming-Android/")
+                                            }
+                                        )
+                                        ClickableSetting(
+                                            title = stringResource("source_code_desktop"),
+                                            description = stringResource("source_code_github_short"),
+                                            icon = Icons.Outlined.Code,
+                                            onClick = {
+                                                openUrl("https://github.com/marcomorosi06/WiFiAudioStreaming-Desktop")
+                                            }
+                                        )
+                                        ClickableSetting(
+                                            title = stringResource("source_code_protocol"),
+                                            description = stringResource("source_code_protocol_desc"),
+                                            icon = Icons.Outlined.Code,
+                                            onClick = {
+                                                openUrl("https://github.com/marcomorosi06/wfas-protocol")
+                                            }
+                                        )
+
+
+                                        SwitchSetting(
+                                            title = stringResource("developer_title"),
+                                            description = stringResource("developer_desc"),
+                                            icon = Icons.Outlined.Code,
+                                            checked = appSettings.developerMode,
+                                            onCheckedChange = { on ->
+                                                // Spegnendo la modalita' sviluppatore non deve restare
+                                                // attivo un DSP che poi non si puo' piu' disattivare.
+                                                onAppSettingsChange(
+                                                    appSettings.copy(
+                                                        developerMode = on,
+                                                        noiseReductionEnabled = if (on) appSettings.noiseReductionEnabled else false
+                                                    )
+                                                )
+                                            }
+                                        )
+
+                                        AnimatedVisibility(visible = appSettings.developerMode) {
+                                            Column {
+                                                SwitchSetting(
+                                                    title = stringResource("nr_title"),
+                                                    description = stringResource("nr_desc"),
+                                                    icon = Icons.Outlined.GraphicEq,
+                                                    checked = appSettings.noiseReductionEnabled,
+                                                    onCheckedChange = {
+                                                        onAppSettingsChange(appSettings.copy(noiseReductionEnabled = it))
+                                                    }
+                                                )
+                                                AnimatedVisibility(visible = appSettings.noiseReductionEnabled) {
+                                                    Column(modifier = Modifier.padding(horizontal = 20.dp)) {
+                                                        Text(
+                                                            text = stringResource("nr_strength", appSettings.noiseReductionStrength),
+                                                            style = MaterialTheme.typography.bodyMedium,
+                                                            color = MaterialTheme.colorScheme.primary
+                                                        )
+                                                        Slider(
+                                                            value = appSettings.noiseReductionStrength.toFloat(),
+                                                            onValueChange = {
+                                                                onAppSettingsChange(appSettings.copy(noiseReductionStrength = it.toInt()))
+                                                            },
+                                                            valueRange = 0f..100f,
+                                                            steps = 19
+                                                        )
+                                                        Text(
+                                                            text = stringResource("nr_hint"),
+                                                            style = MaterialTheme.typography.bodySmall,
+                                                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                                            modifier = Modifier.padding(bottom = 12.dp)
+                                                        )
+                                                    }
+                                                }
+                                            }
+                                        }
+
+                                        SwitchSetting(
+                                            title = stringResource("update_auto_title"),
+                                            description = stringResource("update_auto_desc"),
+                                            icon = Icons.Outlined.Update,
+                                            checked = appSettings.autoUpdateCheckEnabled,
+                                            onCheckedChange = { onAppSettingsChange(appSettings.copy(autoUpdateCheckEnabled = it)) }
+                                        )
+                                        Spacer(Modifier.height(8.dp))
+                                        OutlinedButton(
+                                            onClick = onCheckForUpdates,
+                                            enabled = !checkingForUpdate,
+                                            modifier = Modifier.fillMaxWidth()
+                                        ) {
+                                            if (checkingForUpdate) {
+                                                CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp)
+                                            } else {
+                                                Icon(Icons.Outlined.Update, contentDescription = null, modifier = Modifier.size(18.dp))
+                                            }
+                                            Spacer(Modifier.width(8.dp))
+                                            Text(stringResource("update_check_now"))
+                                        }
+                                        Spacer(Modifier.height(8.dp))
+
+
+                                        OutlinedButton(
+                                            onClick = { onShowWelcome(); onClose() },
+                                            modifier = Modifier.fillMaxWidth()
+                                        ) {
+                                            Icon(Icons.Outlined.Celebration, contentDescription = null, modifier = Modifier.size(18.dp))
+                                            Spacer(Modifier.width(8.dp))
+                                            Text(stringResource("show_welcome_screen"))
+                                        }
+                                        Spacer(Modifier.height(8.dp))
+
+
+                                        OutlinedButton(
+                                            onClick = { showResetConfirmDialog = true },
+                                            modifier = Modifier.fillMaxWidth(),
+                                            colors = ButtonDefaults.outlinedButtonColors(
+                                                contentColor = MaterialTheme.colorScheme.error
+                                            ),
+                                            border = androidx.compose.foundation.BorderStroke(
+                                                1.dp,
+                                                MaterialTheme.colorScheme.error.copy(alpha = 0.5f)
+                                            )
+                                        ) {
+                                            Icon(Icons.Outlined.Restore, contentDescription = null, modifier = Modifier.size(18.dp))
+                                            Spacer(Modifier.width(8.dp))
+                                            Text(stringResource("reset_all_settings"))
+                                        }
+                                        Spacer(Modifier.height(8.dp))
+
+
+                                        Box(
+                                            modifier = Modifier
+                                                .fillMaxWidth()
+                                                .padding(bottom = 20.dp),
+                                            contentAlignment = Alignment.Center
+                                        ) {
+                                            Text(
+                                                text = "${stringResource("app_version_label")} ${Strings.appVersion}",
+                                                style = MaterialTheme.typography.bodySmall,
+                                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                                            )
+                                        }
+
+                                    }
+                                }
+                            }
+                            Spacer(Modifier.height(30.dp))
                         }
                     }
-                    Spacer(Modifier.height(30.dp))
                 }
-            }
-            }
             }
         }
     }
@@ -1918,20 +1879,30 @@ fun StreamingControlCenter(
                                 if (serverVolume == 0f) Icons.Outlined.VolumeOff
                                 else if (serverVolume < 1f) Icons.Outlined.VolumeDown
                                 else Icons.Outlined.VolumeUp,
-                                contentDescription = null,
-                                tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                                modifier = Modifier.size(20.dp)
+                                contentDescription = stringResource("volume_reset"),
+                                tint = if (serverVolume > 1f) MaterialTheme.colorScheme.error
+                                else MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier
+                                    .size(20.dp)
+                                    .clickable(enabled = serverVolume != 1f) { onServerVolumeChange(1f) }
                             )
                             Slider(
                                 value = serverVolume,
-                                onValueChange = onServerVolumeChange,
+                                onValueChange = { onServerVolumeChange(snapVolume(it, VOLUME_MAGNET_WIDE)) },
                                 valueRange = 0f..2f,
+                                colors = if (serverVolume > 1f) SliderDefaults.colors(
+                                    thumbColor = MaterialTheme.colorScheme.error,
+                                    activeTrackColor = MaterialTheme.colorScheme.error
+                                ) else SliderDefaults.colors(),
                                 modifier = Modifier.weight(1f)
                             )
                             Text(
                                 "${(serverVolume * 100).toInt()}%",
                                 style = MaterialTheme.typography.labelMedium,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                color = if (serverVolume > 1f) MaterialTheme.colorScheme.error
+                                else MaterialTheme.colorScheme.onSurfaceVariant,
+                                maxLines = 1,
+                                softWrap = false,
                                 modifier = Modifier.width(40.dp)
                             )
                         }
@@ -2347,182 +2318,251 @@ fun SessionHeaderBar(
     val usbUp = rememberUsbLinkActive(isStreaming)
     ElevatedCard(modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(20.dp)) {
         BoxWithConstraints(modifier = Modifier.fillMaxWidth()) {
-        val modeLabels = maxWidth >= 1180.dp
-        val showIp = maxWidth >= 900.dp
-        Row(
-            modifier = Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 14.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(if (modeLabels) 20.dp else 12.dp)
-        ) {
-            if (isStreaming) LivePulse()
-
-            Column(modifier = Modifier.weight(1f)) {
-                Text(
-                    if (isStreaming) stringResource("streaming_active")
-                    else if (isServer) stringResource("ready_to_stream")
-                    else stringResource("waiting_for_connection"),
-                    style = MaterialTheme.typography.titleMedium,
-                    fontWeight = FontWeight.SemiBold,
-                    maxLines = 1
-                )
-                Text(
-                    connectionStatus,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis
-                )
-                if (isServer && !isServerReady && !isStreaming) {
-                    Text(
-                        stringResource("install_driver_hint"),
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.error
-                    )
-                }
+            val modeLabels = maxWidth >= 1180.dp
+            val showIp = maxWidth >= 900.dp
+            val micLabel = maxWidth >= 820.dp
+            val actionLabel = maxWidth >= 620.dp
+            val showVolume = maxWidth >= 430.dp
+            val showVolumePct = maxWidth >= 620.dp
+            val volumeWidth = when {
+                maxWidth >= 900.dp -> 230.dp
+                maxWidth >= 620.dp -> 185.dp
+                else -> 110.dp
             }
+            val iconOnlyPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp)
+            val volumeTolerance = volumeMagnet(
+                volumeWidth.value - 28f - (if (showVolumePct) 48f else 0f)
+            )
+            Row(
+                modifier = Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 14.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(if (modeLabels) 20.dp else 12.dp)
+            ) {
+                if (isStreaming) LivePulse()
 
-            if (isServer && showIp) {
-                Column {
+                Column(modifier = Modifier.weight(1f)) {
                     Text(
-                        "IP",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                        if (isStreaming) stringResource("streaming_active")
+                        else if (isServer) stringResource("ready_to_stream")
+                        else stringResource("waiting_for_connection"),
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.SemiBold,
+                        maxLines = 1
                     )
                     Text(
-                        NetAddr.hostPort(localIp, streamingPort.toIntOrNull() ?: 9090),
-                        style = MaterialTheme.typography.bodyMedium,
-                        fontFamily = FontFamily.Monospace,
+                        connectionStatus,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                    if (isServer && !isServerReady && !isStreaming) {
+                        Text(
+                            stringResource("install_driver_hint"),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.error
+                        )
+                    }
+                }
+
+                if (isServer && showIp) {
+                    Column {
+                        Text(
+                            "IP",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        Text(
+                            NetAddr.hostPort(localIp, streamingPort.toIntOrNull() ?: 9090),
+                            style = MaterialTheme.typography.bodyMedium,
+                            fontFamily = FontFamily.Monospace,
+                            maxLines = 1
+                        )
+                    }
+                }
+
+                if (isStreaming && showIp) {
+                    Text(
+                        stringResource(if (usbUp) "link_connected_usb" else "link_connected_wireless"),
+                        style = MaterialTheme.typography.labelSmall,
+                        fontWeight = FontWeight.Bold,
+                        color = if (usbUp) MaterialTheme.colorScheme.primary
+                        else MaterialTheme.colorScheme.onSurfaceVariant,
                         maxLines = 1
                     )
                 }
-            }
 
-            if (isStreaming && showIp) {
-                Text(
-                    stringResource(if (usbUp) "link_connected_usb" else "link_connected_wireless"),
-                    style = MaterialTheme.typography.labelSmall,
-                    fontWeight = FontWeight.Bold,
-                    color = if (usbUp) MaterialTheme.colorScheme.primary
-                    else MaterialTheme.colorScheme.onSurfaceVariant,
-                    maxLines = 1
-                )
-            }
-
-            if (isStreaming && showMicMute) {
-                FilledTonalButton(
-                    onClick = onMicMuteToggle,
-                    colors = if (isMicMuted) ButtonDefaults.filledTonalButtonColors(
-                        containerColor = MaterialTheme.colorScheme.errorContainer,
-                        contentColor = MaterialTheme.colorScheme.onErrorContainer
-                    ) else ButtonDefaults.filledTonalButtonColors()
-                ) {
-                    Icon(
-                        if (isMicMuted) Icons.Filled.MicOff else Icons.Filled.Mic,
-                        contentDescription = null,
-                        modifier = Modifier.size(18.dp)
-                    )
-                    Spacer(Modifier.width(8.dp))
-                    Text(stringResource(if (isMicMuted) "mic_muted" else "mic_active"), maxLines = 1)
-                }
-            }
-
-            if (isStreaming && isServer) {
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    modifier = Modifier.width(190.dp)
-                ) {
-                    Icon(
-                        if (serverVolume == 0f) Icons.Outlined.VolumeOff
-                        else if (serverVolume < 1f) Icons.Outlined.VolumeDown
-                        else Icons.Outlined.VolumeUp,
-                        contentDescription = null,
-                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.size(20.dp)
-                    )
-                    Slider(
-                        value = serverVolume,
-                        onValueChange = onServerVolumeChange,
-                        valueRange = 0f..1f,
-                        modifier = Modifier.weight(1f)
-                    )
-                }
-            }
-
-            val receiveLabel = stringResource("receive_client")
-            val sendLabel = stringResource("send_server")
-            if (!isStreaming) {
-            SingleChoiceSegmentedButtonRow(
-                modifier = Modifier.width(if (modeLabels) 360.dp else 136.dp)
-            ) {
-                SegmentedButton(
-                    shape = RoundedCornerShape(topStartPercent = 50, bottomStartPercent = 50),
-                    onClick = { onModeChange(false) },
-                    selected = !isServer,
-                    icon = {}
-                ) {
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.Center
+                if (isStreaming && showMicMute) {
+                    val micText = stringResource(if (isMicMuted) "mic_muted" else "mic_active")
+                    FilledTonalButton(
+                        onClick = onMicMuteToggle,
+                        contentPadding = if (micLabel) ButtonDefaults.ContentPadding else iconOnlyPadding,
+                        colors = if (isMicMuted) ButtonDefaults.filledTonalButtonColors(
+                            containerColor = MaterialTheme.colorScheme.errorContainer,
+                            contentColor = MaterialTheme.colorScheme.onErrorContainer
+                        ) else ButtonDefaults.filledTonalButtonColors()
                     ) {
                         Icon(
-                            if (!isServer) Icons.Filled.Download else Icons.Outlined.Download,
-                            contentDescription = receiveLabel,
-                            modifier = Modifier.size(ButtonDefaults.IconSize)
+                            if (isMicMuted) Icons.Filled.MicOff else Icons.Filled.Mic,
+                            contentDescription = micText,
+                            modifier = Modifier.size(18.dp)
                         )
-                        if (modeLabels) {
+                        if (micLabel) {
                             Spacer(Modifier.width(8.dp))
-                            Text(receiveLabel, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                            Text(micText, maxLines = 1, softWrap = false, overflow = TextOverflow.Ellipsis)
                         }
                     }
                 }
 
-                SegmentedButton(
-                    shape = RoundedCornerShape(topEndPercent = 50, bottomEndPercent = 50),
-                    onClick = { onModeChange(true) },
-                    selected = isServer,
-                    icon = {}
-                ) {
+                if (isStreaming && isServer && showVolume) {
+                    val boosted = serverVolume > 1f
                     Row(
                         verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.Center
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        modifier = Modifier.width(volumeWidth)
                     ) {
                         Icon(
-                            if (isServer) Icons.Filled.Upload else Icons.Outlined.Upload,
-                            contentDescription = sendLabel,
-                            modifier = Modifier.size(ButtonDefaults.IconSize)
+                            if (serverVolume == 0f) Icons.Outlined.VolumeOff
+                            else if (serverVolume < 1f) Icons.Outlined.VolumeDown
+                            else Icons.Outlined.VolumeUp,
+                            contentDescription = stringResource("volume_reset"),
+                            tint = if (boosted) MaterialTheme.colorScheme.error
+                            else MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier
+                                .size(20.dp)
+                                .clickable(enabled = serverVolume != 1f) { onServerVolumeChange(1f) }
                         )
-                        if (modeLabels) {
-                            Spacer(Modifier.width(8.dp))
-                            Text(sendLabel, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        Slider(
+                            value = serverVolume,
+                            onValueChange = { onServerVolumeChange(snapVolume(it, volumeTolerance)) },
+                            valueRange = 0f..2f,
+                            colors = if (boosted) SliderDefaults.colors(
+                                thumbColor = MaterialTheme.colorScheme.error,
+                                activeTrackColor = MaterialTheme.colorScheme.error
+                            ) else SliderDefaults.colors(),
+                            modifier = Modifier.weight(1f)
+                        )
+                        if (showVolumePct) {
+                            Text(
+                                "${(serverVolume * 100).toInt()}%",
+                                style = MaterialTheme.typography.labelMedium,
+                                color = if (boosted) MaterialTheme.colorScheme.error
+                                else MaterialTheme.colorScheme.onSurfaceVariant,
+                                maxLines = 1,
+                                softWrap = false,
+                                modifier = Modifier.width(40.dp)
+                            )
+                        }
+                    }
+                }
+
+                val receiveLabel = stringResource("receive_client")
+                val sendLabel = stringResource("send_server")
+                if (!isStreaming) {
+                    SingleChoiceSegmentedButtonRow(
+                        modifier = Modifier.width(if (modeLabels) 360.dp else 136.dp)
+                    ) {
+                        SegmentedButton(
+                            shape = RoundedCornerShape(topStartPercent = 50, bottomStartPercent = 50),
+                            onClick = { onModeChange(false) },
+                            selected = !isServer,
+                            icon = {}
+                        ) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.Center
+                            ) {
+                                Icon(
+                                    if (!isServer) Icons.Filled.Download else Icons.Outlined.Download,
+                                    contentDescription = receiveLabel,
+                                    modifier = Modifier.size(ButtonDefaults.IconSize)
+                                )
+                                if (modeLabels) {
+                                    Spacer(Modifier.width(8.dp))
+                                    Text(receiveLabel, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                }
+                            }
+                        }
+
+                        SegmentedButton(
+                            shape = RoundedCornerShape(topEndPercent = 50, bottomEndPercent = 50),
+                            onClick = { onModeChange(true) },
+                            selected = isServer,
+                            icon = {}
+                        ) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.Center
+                            ) {
+                                Icon(
+                                    if (isServer) Icons.Filled.Upload else Icons.Outlined.Upload,
+                                    contentDescription = sendLabel,
+                                    modifier = Modifier.size(ButtonDefaults.IconSize)
+                                )
+                                if (modeLabels) {
+                                    Spacer(Modifier.width(8.dp))
+                                    Text(sendLabel, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                }
+                            }
+                        }
+                    }
+                }
+
+                if (isStreaming) {
+                    val stopText = stringResource("stop")
+                    FilledTonalButton(
+                        onClick = onStop,
+                        contentPadding = if (actionLabel) ButtonDefaults.ContentPadding else iconOnlyPadding,
+                        colors = ButtonDefaults.filledTonalButtonColors(
+                            containerColor = MaterialTheme.colorScheme.errorContainer,
+                            contentColor = MaterialTheme.colorScheme.onErrorContainer
+                        )
+                    ) {
+                        Icon(Icons.Filled.Stop, contentDescription = stopText, modifier = Modifier.size(18.dp))
+                        if (actionLabel) {
+                            Spacer(Modifier.width(6.dp))
+                            Text(stopText, maxLines = 1, softWrap = false, overflow = TextOverflow.Ellipsis)
+                        }
+                    }
+                } else if (isServer) {
+                    val startText = stringResource("start_server")
+                    Button(
+                        onClick = onStart,
+                        enabled = isServerReady && canStartServer,
+                        contentPadding = if (actionLabel) ButtonDefaults.ContentPadding else iconOnlyPadding
+                    ) {
+                        Icon(Icons.Default.PlayArrow, contentDescription = startText, modifier = Modifier.size(18.dp))
+                        if (actionLabel) {
+                            Spacer(Modifier.width(6.dp))
+                            Text(startText, maxLines = 1, softWrap = false, overflow = TextOverflow.Ellipsis)
                         }
                     }
                 }
             }
-            }
-
-            if (isStreaming) {
-                FilledTonalButton(
-                    onClick = onStop,
-                    colors = ButtonDefaults.filledTonalButtonColors(
-                        containerColor = MaterialTheme.colorScheme.errorContainer,
-                        contentColor = MaterialTheme.colorScheme.onErrorContainer
-                    )
-                ) {
-                    Icon(Icons.Filled.Stop, contentDescription = null, modifier = Modifier.size(18.dp))
-                    Spacer(Modifier.width(6.dp))
-                    Text(stringResource("stop"), maxLines = 1)
-                }
-            } else if (isServer) {
-                Button(onClick = onStart, enabled = isServerReady && canStartServer) {
-                    Icon(Icons.Default.PlayArrow, contentDescription = null, modifier = Modifier.size(18.dp))
-                    Spacer(Modifier.width(6.dp))
-                    Text(stringResource("start_server"), maxLines = 1)
-                }
-            }
-        }
         }
     }
+}
+
+private val VOLUME_STOPS = floatArrayOf(0f, 0.25f, 0.5f, 1f, 1.5f, 2f)
+
+private const val VOLUME_MAGNET_DP = 5f
+private const val VOLUME_RANGE_SPAN = 2f
+private const val VOLUME_MAGNET_WIDE = 0.035f
+
+private fun volumeMagnet(trackDp: Float): Float =
+    (VOLUME_MAGNET_DP / trackDp.coerceAtLeast(48f)) * VOLUME_RANGE_SPAN
+
+private fun snapVolume(raw: Float, tolerance: Float): Float {
+    var best = VOLUME_STOPS[0]
+    var bestDistance = kotlin.math.abs(raw - best)
+    for (stop in VOLUME_STOPS) {
+        val distance = kotlin.math.abs(raw - stop)
+        if (distance < bestDistance) {
+            best = stop
+            bestDistance = distance
+        }
+    }
+    return if (bestDistance <= tolerance) best else raw.coerceIn(0f, VOLUME_RANGE_SPAN)
 }
 
 // Indicatore rosso pulsante "Live"
@@ -4141,15 +4181,15 @@ fun NetworkSettingsContent(
 
         val usbOptions = remember(usbState) {
             listOf(Strings.get("usb_interface_auto") to "Auto") +
-                UsbLink.candidates().map { iface ->
-                    val name = iface.displayName ?: iface.name
-                    val hasIp = runCatching {
-                        iface.inetAddresses.toList().any {
-                            it is java.net.Inet4Address && !it.isLoopbackAddress
-                        }
-                    }.getOrDefault(false)
-                    (if (hasIp) name else Strings.get("usb_interface_no_ip", name)) to name
-                }
+                    UsbLink.candidates().map { iface ->
+                        val name = iface.displayName ?: iface.name
+                        val hasIp = runCatching {
+                            iface.inetAddresses.toList().any {
+                                it is java.net.Inet4Address && !it.isLoopbackAddress
+                            }
+                        }.getOrDefault(false)
+                        (if (hasIp) name else Strings.get("usb_interface_no_ip", name)) to name
+                    }
         }
 
         ExposedDropdown(
@@ -4847,6 +4887,376 @@ fun RtpSdpBanner(
         LaunchedEffect(Unit) {
             kotlinx.coroutines.delay(2000)
             copied = false
+        }
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Avvio automatico e connessione automatica
+//
+// Le due procedure hanno in comune un vincolo: girano senza nessuno davanti.
+// Ogni opzione qui sotto esiste per togliere un caso in cui prima si fermavano
+// in silenzio — la rete non ancora pronta, la porta diversa dal default, la
+// chiave che il server pretende e che nessuno poteva fornire.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** Campo numerico compatto per le impostazioni. Vuoto = [fallback]. */
+@Composable
+private fun NumberField(
+    label: String,
+    value: Int,
+    onValue: (Int) -> Unit,
+    range: IntRange,
+    fallback: Int,
+    modifier: Modifier = Modifier,
+    suffix: String? = null
+) {
+    var text by remember(value) { mutableStateOf(if (value < 0) "" else value.toString()) }
+    OutlinedTextField(
+        value = text,
+        onValueChange = { raw ->
+            val digits = raw.filter { it.isDigit() }.take(6)
+            text = digits
+            val parsed = digits.toIntOrNull()
+            onValue(if (parsed == null) fallback else parsed.coerceIn(range.first, range.last))
+        },
+        label = { Text(label) },
+        suffix = suffix?.let { { Text(it) } },
+        singleLine = true,
+        keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(keyboardType = KeyboardType.Number),
+        modifier = modifier
+    )
+}
+
+@Composable
+fun AutoStartOptions(
+    appSettings: AppSettings,
+    onAppSettingsChange: (AppSettings) -> Unit
+) {
+    // Con INHERIT la modalita' vera e' quella generale: va risolta qui, perche'
+    // da lei dipende sia l'avviso sulla chiave mancante sia la comparsa della
+    // scelta sulla cifratura.
+    val effectiveMode = AutoStartSecurity.resolve(
+        appSettings.autoStartSecurityMode, appSettings.securityMode
+    )
+
+    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            NumberField(
+                label = stringResource("auto_start_delay_title"),
+                value = appSettings.autoStartDelaySec,
+                onValue = { onAppSettingsChange(appSettings.copy(autoStartDelaySec = it)) },
+                range = 0..600,
+                fallback = 0,
+                suffix = "s",
+                modifier = Modifier.weight(1f)
+            )
+            // -1 significa "non toccare il volume": si esprime con l'interruttore
+            // qui accanto, cosi' il campo resta un numero e basta.
+            NumberField(
+                label = stringResource("auto_start_volume_title"),
+                value = appSettings.autoStartVolume,
+                onValue = { onAppSettingsChange(appSettings.copy(autoStartVolume = it)) },
+                range = 0..200,
+                fallback = -1,
+                suffix = "%",
+                modifier = Modifier.weight(1f)
+            )
+        }
+        Text(
+            stringResource("auto_start_delay_desc"),
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+
+        SwitchSetting(
+            title = stringResource("auto_start_network_title"),
+            description = stringResource("auto_start_network_desc"),
+            icon = Icons.Outlined.Wifi,
+            checked = appSettings.autoStartRequireNetwork,
+            onCheckedChange = { onAppSettingsChange(appSettings.copy(autoStartRequireNetwork = it)) }
+        )
+
+        Column {
+            Text(stringResource("auto_start_security_title"), style = MaterialTheme.typography.labelLarge)
+            Spacer(Modifier.height(6.dp))
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                AutoStartSecurity.MODES.forEach { mode ->
+                    FilterChip(
+                        selected = appSettings.autoStartSecurityMode.equals(mode, true),
+                        onClick = { onAppSettingsChange(appSettings.copy(autoStartSecurityMode = mode)) },
+                        label = {
+                            Text(
+                                if (mode == AutoStartSecurity.INHERIT)
+                                    stringResource("auto_start_security_inherit")
+                                else mode.lowercase().replaceFirstChar { it.uppercase() }
+                            )
+                        }
+                    )
+                }
+            }
+            Spacer(Modifier.height(6.dp))
+            Text(
+                stringResource("auto_start_security_desc"),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            // Dirlo prima, non al momento del fallimento: la modalita' chiave
+            // senza una chiave salvata non avvierebbe proprio niente.
+            if (SecurityMode.requiresKey(effectiveMode) && appSettings.authKey.isBlank()) {
+                Spacer(Modifier.height(6.dp))
+                Text(
+                    stringResource("auto_start_key_missing"),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.error
+                )
+            }
+        }
+
+        // La cifratura poggia sulla chiave: senza, non c'e' niente da scegliere,
+        // e mostrare un interruttore che non puo' avere effetto sarebbe peggio
+        // che non mostrarlo.
+        if (SecurityMode.requiresKey(effectiveMode)) {
+            Column {
+                Text(stringResource("auto_start_encryption_title"), style = MaterialTheme.typography.labelLarge)
+                Spacer(Modifier.height(6.dp))
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    AutoStartSecurity.ENCRYPTION.forEach { choice ->
+                        FilterChip(
+                            selected = appSettings.autoStartEncryption.equals(choice, true),
+                            onClick = { onAppSettingsChange(appSettings.copy(autoStartEncryption = choice)) },
+                            label = {
+                                Text(
+                                    when (choice) {
+                                        AutoStartSecurity.INHERIT -> stringResource("auto_start_security_inherit")
+                                        AutoStartSecurity.ON      -> stringResource("auto_start_encryption_on")
+                                        else                      -> stringResource("auto_start_encryption_off")
+                                    }
+                                )
+                            }
+                        )
+                    }
+                }
+                Spacer(Modifier.height(6.dp))
+                Text(
+                    stringResource("auto_start_encryption_desc"),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                // Con INHERIT il risultato dipende da un'impostazione che sta in
+                // un'altra schermata: dire qui come va a finire evita di doverla
+                // andare a guardare.
+                if (appSettings.autoStartEncryption.equals(AutoStartSecurity.INHERIT, true)) {
+                    Spacer(Modifier.height(4.dp))
+                    Text(
+                        stringResource(
+                            if (appSettings.encryptionEnabled) "auto_start_encryption_inherit_on"
+                            else "auto_start_encryption_inherit_off"
+                        ),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+fun AutoConnectOptions(
+    appSettings: AppSettings,
+    onAppSettingsChange: (AppSettings) -> Unit
+) {
+    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            NumberField(
+                label = stringResource("auto_connect_interval_title"),
+                value = appSettings.autoConnectIntervalSec,
+                onValue = { onAppSettingsChange(appSettings.copy(autoConnectIntervalSec = it)) },
+                range = 1..3600,
+                fallback = 5,
+                suffix = "s",
+                modifier = Modifier.weight(1f)
+            )
+            NumberField(
+                label = stringResource("auto_connect_retry_title"),
+                value = appSettings.autoConnectRetryDelaySec,
+                onValue = { onAppSettingsChange(appSettings.copy(autoConnectRetryDelaySec = it)) },
+                range = 0..3600,
+                fallback = 10,
+                suffix = "s",
+                modifier = Modifier.weight(1f)
+            )
+        }
+
+        SwitchSetting(
+            title = stringResource("auto_connect_prompt_key_title"),
+            description = stringResource("auto_connect_prompt_key_desc"),
+            icon = Icons.Outlined.Key,
+            checked = appSettings.autoConnectPromptForKey,
+            onCheckedChange = { onAppSettingsChange(appSettings.copy(autoConnectPromptForKey = it)) }
+        )
+    }
+}
+
+@Composable
+fun AutoConnectTargetsEditor(
+    appSettings: AppSettings,
+    onAppSettingsChange: (AppSettings) -> Unit
+) {
+    val targets = remember(appSettings.autoConnectIps) { appSettings.autoConnectTargets() }
+
+    fun commit(list: List<AutoConnectTarget>) =
+        onAppSettingsChange(appSettings.withAutoConnectTargets(list))
+
+    fun replace(index: Int, target: AutoConnectTarget) =
+        commit(targets.toMutableList().also { it[index] = target })
+
+    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        Text(stringResource("auto_connect_targets"), style = MaterialTheme.typography.labelLarge)
+
+        targets.forEachIndexed { index, target ->
+            var keyInput by remember(target.keyRef, index) { mutableStateOf("") }
+            var keyVisible by remember { mutableStateOf(false) }
+
+            OutlinedCard(modifier = Modifier.fillMaxWidth()) {
+                Column(
+                    modifier = Modifier.padding(12.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        OutlinedTextField(
+                            value = target.ip,
+                            onValueChange = { replace(index, target.copy(ip = it.trim())) },
+                            label = { Text(stringResource("auto_connect_ip")) },
+                            singleLine = true,
+                            modifier = Modifier.weight(2f)
+                        )
+                        OutlinedTextField(
+                            value = target.port?.toString().orEmpty(),
+                            onValueChange = { raw ->
+                                val digits = raw.filter { it.isDigit() }.take(5)
+                                replace(index, target.copy(port = digits.toIntOrNull()?.takeIf { it in 1..65535 }))
+                            },
+                            label = { Text(stringResource("auto_connect_port")) },
+                            placeholder = { Text(stringResource("auto_connect_port_hint")) },
+                            singleLine = true,
+                            keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(keyboardType = KeyboardType.Number),
+                            modifier = Modifier.weight(1f)
+                        )
+                    }
+
+                    OutlinedTextField(
+                        value = target.label,
+                        onValueChange = { replace(index, target.copy(label = it)) },
+                        label = { Text(stringResource("auto_connect_label")) },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+
+                    // La chiave si scrive qui e finisce nella custodia di sistema.
+                    // Il campo torna vuoto subito dopo: quello che resta in questa
+                    // schermata e' solo l'indicazione che una chiave esiste.
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        OutlinedTextField(
+                            value = keyInput,
+                            onValueChange = { keyInput = it },
+                            label = { Text(stringResource("auto_connect_key")) },
+                            placeholder = {
+                                Text(
+                                    if (target.hasKey) stringResource("auto_connect_key_saved")
+                                    else stringResource("auto_connect_key_none")
+                                )
+                            },
+                            singleLine = true,
+                            visualTransformation =
+                                if (keyVisible) VisualTransformation.None else PasswordVisualTransformation(),
+                            trailingIcon = {
+                                IconButton(onClick = { keyVisible = !keyVisible }) {
+                                    Icon(
+                                        if (keyVisible) Icons.Outlined.VisibilityOff else Icons.Outlined.Visibility,
+                                        contentDescription = null
+                                    )
+                                }
+                            },
+                            modifier = Modifier.weight(1f)
+                        )
+                        Button(
+                            onClick = {
+                                replace(index, AutoConnectTarget.withKey(target, keyInput))
+                                keyInput = ""
+                            },
+                            enabled = keyInput.isNotBlank()
+                        ) { Text(stringResource("auto_connect_key_save")) }
+                        if (target.hasKey) {
+                            IconButton(onClick = {
+                                replace(index, AutoConnectTarget.withKey(target, ""))
+                                keyInput = ""
+                            }) {
+                                Icon(
+                                    Icons.Outlined.Clear,
+                                    contentDescription = stringResource("auto_connect_key_clear"),
+                                    tint = MaterialTheme.colorScheme.error
+                                )
+                            }
+                        }
+                    }
+                    Text(
+                        stringResource("auto_connect_key_hint"),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(4.dp)
+                    ) {
+                        Switch(
+                            checked = target.enabled,
+                            onCheckedChange = { replace(index, target.copy(enabled = it)) }
+                        )
+                        Text(
+                            stringResource("auto_connect_entry_enabled"),
+                            style = MaterialTheme.typography.bodySmall,
+                            modifier = Modifier.weight(1f)
+                        )
+                        IconButton(
+                            onClick = {
+                                if (index > 0) commit(
+                                    targets.toMutableList().also { it.add(index - 1, it.removeAt(index)) }
+                                )
+                            },
+                            enabled = index > 0
+                        ) { Icon(Icons.Default.KeyboardArrowUp, null) }
+                        IconButton(
+                            onClick = {
+                                if (index < targets.size - 1) commit(
+                                    targets.toMutableList().also { it.add(index + 1, it.removeAt(index)) }
+                                )
+                            },
+                            enabled = index < targets.size - 1
+                        ) { Icon(Icons.Default.KeyboardArrowDown, null) }
+                        IconButton(onClick = {
+                            // La chiave nella custodia se ne va con la voce:
+                            // lasciarla la' significherebbe accumulare segreti
+                            // che non appartengono piu' a niente.
+                            AutoConnectTarget.forget(target)
+                            commit(targets.toMutableList().also { it.removeAt(index) })
+                        }) { Icon(Icons.Default.Delete, null, tint = MaterialTheme.colorScheme.error) }
+                    }
+                }
+            }
+        }
+
+        OutlinedButton(onClick = { commit(targets + AutoConnectTarget(ip = "")) }) {
+            Text(stringResource("auto_connect_add"))
         }
     }
 }

@@ -109,9 +109,9 @@ fun main() {
     check("garbage rejected", DlnaProtocolInfo.parse("nonsense") == null)
 
     val sink = "rtsp-rtp-udp:*:audio/L16:*," +
-        "http-get:*:audio/mpeg:DLNA.ORG_PN=MP3," +
-        "http-get:*:audio/L16;rate=44100;channels=2:DLNA.ORG_PN=LPCM," +
-        "http-get:*:audio/x-flac:*"
+            "http-get:*:audio/mpeg:DLNA.ORG_PN=MP3," +
+            "http-get:*:audio/L16;rate=44100;channels=2:DLNA.ORG_PN=LPCM," +
+            "http-get:*:audio/x-flac:*"
     val parsed = DlnaProtocolInfo.parseList(sink)
     eq("only http-get entries kept", parsed.size, 3)
 
@@ -197,7 +197,7 @@ fun main() {
 
     println("== SSDP ==")
     val response = "HTTP/1.1 200 OK\r\nCACHE-CONTROL: max-age=1800\r\nLOCATION: http://192.168.1.50:8080/desc.xml\r\n" +
-        "ST: urn:schemas-upnp-org:device:MediaRenderer:1\r\nUSN: uuid:abc::urn:x\r\nSERVER: Linux UPnP/1.0 Denon\r\n\r\n"
+            "ST: urn:schemas-upnp-org:device:MediaRenderer:1\r\nUSN: uuid:abc::urn:x\r\nSERVER: Linux UPnP/1.0 Denon\r\n\r\n"
     val headers = DlnaSsdp.parseHeaders(response)
     eq("location lowercased key", headers["location"], "http://192.168.1.50:8080/desc.xml")
     eq("st parsed", headers["st"], "urn:schemas-upnp-org:device:MediaRenderer:1")
@@ -216,6 +216,7 @@ fun main() {
     protocolStatusChecks()
     wfasPairingUriChecks()
     snapcastProtocolChecks()
+    controlChannelChecks()
 
     println()
     if (failures == 0) println("ALL CHECKS PASSED") else println("$failures CHECK(S) FAILED")

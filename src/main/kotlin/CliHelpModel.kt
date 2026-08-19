@@ -85,7 +85,7 @@ object CliHelpModel {
                         brief = "Open the desktop app.",
                         tokens = listOf("--gui"),
                         detail = "Can be combined with a mode to open the window and start straight " +
-                                 "away, as in 'wfas --gui --mode server --multicast'."
+                                "away, as in 'wfas --gui --mode server --multicast'."
                     ),
                     HelpEntry(
                         syntax = "--cli",
@@ -97,8 +97,20 @@ object CliHelpModel {
                         brief = "Start the GUI without the Linux tray icon.",
                         tokens = listOf("--no-tray"),
                         detail = "Use this if the app segfaults inside libgtk-3 on launch; the tray is " +
-                                 "the only part that touches GTK. Same as WFAS_NO_TRAY=1, or " +
-                                 "'wfas config set ui.linuxTray OFF' to make it permanent."
+                                "the only part that touches GTK. Same as WFAS_NO_TRAY=1, or " +
+                                "'wfas config set ui.linuxTray OFF' to make it permanent."
+                    ),
+                    HelpEntry(
+                        syntax = "--tray <auto|on|off>",
+                        brief = "Override the tray decision for this run.",
+                        default = "auto",
+                        tokens = listOf("--tray"),
+                        detail = "auto looks for a StatusNotifierItem host on the session bus, which " +
+                                "is what KDE Plasma provides on both X11 and Wayland, and falls back " +
+                                "to the GTK status icon on X11. Use on to try anyway when the probe " +
+                                "cannot reach the bus. If the icon never appears on Wayland the usual " +
+                                "cause is a missing AppIndicator library: install libappindicator-gtk3 " +
+                                "on Fedora, libayatana-appindicator3-1 on Debian and Ubuntu."
                     )
                 )
             ),
@@ -120,8 +132,8 @@ object CliHelpModel {
                         brief = "server | client | discover",
                         tokens = listOf("--mode"),
                         detail = "server    capture this machine's audio and serve it\n" +
-                                 "client    receive audio from a server and play it\n" +
-                                 "discover  scan the network for active servers, then exit"
+                                "client    receive audio from a server and play it\n" +
+                                "discover  scan the network for active servers, then exit"
                     )
                 )
             ),
@@ -134,7 +146,11 @@ object CliHelpModel {
                     HelpEntry(
                         syntax = "--watch",
                         brief = "Keep scanning and update the list live instead of exiting after one pass.",
-                        tokens = listOf("--watch")
+                        tokens = listOf("--watch"),
+                        detail = "It applies to discovery and to 'wfas pair invite', the two views " +
+                                "that would otherwise print once and exit. Anywhere else there is " +
+                                "nothing to keep open, so wfas refuses the flag rather than " +
+                                "ignoring it and falling back to starting a server."
                     )
                 )
             )
@@ -179,7 +195,7 @@ object CliHelpModel {
                         brief = "Serve to every listener on the group instead of one unicast peer.",
                         tokens = listOf("--multicast"),
                         detail = "Implied by --rtp, --http, --dlna and --snapcast. Note that " +
-                                 "--auth-mode applies to unicast only."
+                                "--auth-mode applies to unicast only."
                     ),
                     HelpEntry(
                         syntax = "--interface <name>",
@@ -198,17 +214,17 @@ object CliHelpModel {
                         default = "off: a unicast server exits with its client",
                         tokens = listOf("--persist"),
                         detail = "A unicast server normally serves one session and exits when that " +
-                                 "client leaves. With --persist the disconnect ends the session only: " +
-                                 "the port stays bound, discovery starts announcing again and the next " +
-                                 "client is served without restarting anything. Made for headless and " +
-                                 "systemd use, where Restart=always would otherwise bounce the whole " +
-                                 "process after every normal disconnect. The server then ends only " +
-                                 "when you end it: q on the terminal, Ctrl-C, or systemctl stop. " +
-                                 "Multicast has no per-client session and already behaves this way, " +
-                                 "so there the flag changes nothing.\n" +
-                                 "To make it the default: 'wfas config set server.persist true', or " +
-                                 "the switch in Settings > Startup & window. The flag then only " +
-                                 "matters for a run where the setting is off."
+                                "client leaves. With --persist the disconnect ends the session only: " +
+                                "the port stays bound, discovery starts announcing again and the next " +
+                                "client is served without restarting anything. Made for headless and " +
+                                "systemd use, where Restart=always would otherwise bounce the whole " +
+                                "process after every normal disconnect. The server then ends only " +
+                                "when you end it: q on the terminal, Ctrl-C, or systemctl stop. " +
+                                "Multicast has no per-client session and already behaves this way, " +
+                                "so there the flag changes nothing.\n" +
+                                "To make it the default: 'wfas config set server.persist true', or " +
+                                "the switch in Settings > Startup & window. The flag then only " +
+                                "matters for a run where the setting is off."
                     )
                 )
             ),
@@ -221,29 +237,29 @@ object CliHelpModel {
                         default = "off: local playback is muted for the session",
                         tokens = listOf("--no-mute-render"),
                         detail = "While capturing, the server mutes local playback so the same audio " +
-                                 "is not heard twice, once from the speakers here and once from the " +
-                                 "client. What it mutes is the render side, not the capture: the " +
-                                 "WASAPI render endpoint on Windows, the default PulseAudio/PipeWire " +
-                                 "sink on Linux, the system volume on macOS. The previous state is " +
-                                 "restored when the server stops. Pass --no-mute-render to leave it " +
-                                 "alone and hear the audio in both places, e.g. headphones on this " +
-                                 "machine and earbuds on the phone. Native engine only: with " +
-                                 "--legacy-engine capture goes through a virtual cable, which takes " +
-                                 "the audio off the speakers by itself.\n" +
-                                 "To make it the default: 'wfas config set server.muteRender false', " +
-                                 "or the switch in Settings > Audio Quality. The flag then only " +
-                                 "matters for a run where the setting is on."
+                                "is not heard twice, once from the speakers here and once from the " +
+                                "client. What it mutes is the render side, not the capture: the " +
+                                "WASAPI render endpoint on Windows, the default PulseAudio/PipeWire " +
+                                "sink on Linux, the system volume on macOS. The previous state is " +
+                                "restored when the server stops. Pass --no-mute-render to leave it " +
+                                "alone and hear the audio in both places, e.g. headphones on this " +
+                                "machine and earbuds on the phone. Native engine only: with " +
+                                "--legacy-engine capture goes through a virtual cable, which takes " +
+                                "the audio off the speakers by itself.\n" +
+                                "To make it the default: 'wfas config set server.muteRender false', " +
+                                "or the switch in Settings > Audio Quality. The flag then only " +
+                                "matters for a run where the setting is on."
                     ),
                     HelpEntry(
                         syntax = "--legacy-engine",
                         brief = "Use the legacy FFmpeg grabber instead of the native C audio engine.",
                         tokens = listOf("--legacy-engine", "--no-native-engine"),
                         detail = "The native engine is the default on all platforms:\n" +
-                                 "  Windows  WASAPI loopback (no virtual driver needed)\n" +
-                                 "  macOS    ScreenCaptureKit\n" +
-                                 "  Linux    PulseAudio/PipeWire via dlopen\n" +
-                                 "Use --legacy-engine on Linux if PulseAudio is unavailable, or for " +
-                                 "compatibility with older setups. Alias: --no-native-engine."
+                                "  Windows  WASAPI loopback (no virtual driver needed)\n" +
+                                "  macOS    ScreenCaptureKit\n" +
+                                "  Linux    PulseAudio/PipeWire via dlopen\n" +
+                                "Use --legacy-engine on Linux if PulseAudio is unavailable, or for " +
+                                "compatibility with older setups. Alias: --no-native-engine."
                     )
                 )
             ),
@@ -300,8 +316,8 @@ object CliHelpModel {
                         default = "system default",
                         tokens = listOf("--output"),
                         detail = "Matching is partial and case-insensitive, so a fragment such as " +
-                                 "'Loopback' is enough. Run 'wfas devices' to see the exact names " +
-                                 "this system reports."
+                                "'Loopback' is enough. Run 'wfas devices' to see the exact names " +
+                                "this system reports."
                     )
                 )
             ),
@@ -325,8 +341,8 @@ object CliHelpModel {
                         default = "120, range 0-5000",
                         tokens = listOf("--latency"),
                         detail = "Larger values survive a noisier network, smaller ones cut the delay. " +
-                                 "The USB buffer is separate and is set by --usb-latency. Persists as " +
-                                 "audio.latencyMs when saved with 'wfas config set'."
+                                "The USB buffer is separate and is set by --usb-latency. Persists as " +
+                                "audio.latencyMs when saved with 'wfas config set'."
                     )
                 )
             ),
@@ -351,8 +367,8 @@ object CliHelpModel {
                         default = "mix when --mic is given",
                         tokens = listOf("--mic-routing"),
                         detail = "mix      blend the mic into the server's captured audio\n" +
-                                 "virtual  expose the mic on the server as a virtual device\n" +
-                                 "off      disable"
+                                "virtual  expose the mic on the server as a virtual device\n" +
+                                "off      disable"
                     )
                 )
             ),
@@ -541,11 +557,11 @@ object CliHelpModel {
                         brief = "Stream over the USB cable instead of Wi-Fi.",
                         tokens = listOf("--usb"),
                         detail = "Enable USB tethering on the Android phone: the phone becomes the " +
-                                 "gateway and the app finds the link on its own. Lower and far " +
-                                 "steadier jitter than Wi-Fi, which is what lets the buffer shrink. " +
-                                 "Not available on macOS: there is no built-in RNDIS driver, so " +
-                                 "Android USB tethering does not come up. Overrides the saved " +
-                                 "net.usbMode for this run."
+                                "gateway and the app finds the link on its own. Lower and far " +
+                                "steadier jitter than Wi-Fi, which is what lets the buffer shrink. " +
+                                "Not available on macOS: there is no built-in RNDIS driver, so " +
+                                "Android USB tethering does not come up. Overrides the saved " +
+                                "net.usbMode for this run."
                     ),
                     HelpEntry(
                         syntax = "--no-usb",
@@ -564,7 +580,7 @@ object CliHelpModel {
                         brief = "Force a specific tethering interface. Implies --usb.",
                         tokens = listOf("--usb-iface"),
                         detail = "Accepts the interface name or its display name as listed by " +
-                                 "--debug, or 'Auto' to restore automatic detection."
+                                "--debug, or 'Auto' to restore automatic detection."
                     ),
                     HelpEntry(
                         syntax = "--wfas-mode <m>",
@@ -572,13 +588,13 @@ object CliHelpModel {
                         default = "not-on-usb",
                         tokens = listOf("--wfas-mode"),
                         detail = "When this device serves the native WFAS protocol:\n" +
-                                 "  always      always, over Wi-Fi and over the cable\n" +
-                                 "  not-on-usb  over Wi-Fi, but suppressed as soon as the USB link\n" +
-                                 "              comes up\n" +
-                                 "  off         never over Wi-Fi; only the cable and the other\n" +
-                                 "              protocols remain\n" +
-                                 "With 'off' and no --rtp/--http and no USB link there is nothing " +
-                                 "left to serve, and the server refuses to start."
+                                "  always      always, over Wi-Fi and over the cable\n" +
+                                "  not-on-usb  over Wi-Fi, but suppressed as soon as the USB link\n" +
+                                "              comes up\n" +
+                                "  off         never over Wi-Fi; only the cable and the other\n" +
+                                "              protocols remain\n" +
+                                "With 'off' and no --rtp/--http and no USB link there is nothing " +
+                                "left to serve, and the server refuses to start."
                     )
                 )
             ),
@@ -637,30 +653,40 @@ object CliHelpModel {
                         default = "off, unicast only",
                         tokens = listOf("--auth-mode"),
                         detail = "off  accept anyone\n" +
-                                 "ask  prompt on the terminal for each client that connects\n" +
-                                 "key  require the pre-shared key"
+                                "ask  prompt on the terminal for each client that connects\n" +
+                                "key  require the pre-shared key"
+                    ),
+                    HelpEntry(
+                        syntax = "--ask-timeout <sec>",
+                        brief = "Only with --auth-mode ask: seconds before an unanswered client is refused.",
+                        default = "60, 0 waits forever",
+                        tokens = listOf("--ask-timeout"),
+                        detail = "The prompt appears on the terminal, or inside the visualizer panel " +
+                                "when --viz owns the screen. No terminal at all, or --json, means " +
+                                "nobody can answer: the client is refused and the reason is logged, " +
+                                "because a silent yes is not a decision anyone made."
                     ),
                     HelpEntry(
                         syntax = "--auth-key <key>",
                         brief = "Pre-shared key. Implies --auth-mode key.",
                         tokens = listOf("--auth-key"),
                         detail = "The key is never sent on the wire: both sides prove they hold it " +
-                                 "through a mutual HMAC challenge-response."
+                                "through a mutual HMAC challenge-response."
                     ),
                     HelpEntry(
                         syntax = "--encrypt",
                         brief = "Encrypt the audio with ChaCha20-Poly1305.",
                         tokens = listOf("--encrypt"),
                         detail = "Requires a key, so pair it with --auth-key, or use --qr to have " +
-                                 "one generated. See 'wfas --protocol' for the wire details."
+                                "one generated. See 'wfas --protocol' for the wire details."
                     ),
                     HelpEntry(
                         syntax = "--qr",
                         brief = "Generate a key, start encrypted, and print the pairing QR.",
                         tokens = listOf("--qr"),
                         detail = "Server mode. Implies --auth-mode key and --encrypt, so it needs no " +
-                                 "--auth-key: the code carries the key it just made. While the " +
-                                 "server runs, p prints a new invite and r rotates the key."
+                                "--auth-key: the code carries the key it just made. While the " +
+                                "server runs, p prints a new invite and r rotates the key."
                     )
                 )
             ),
@@ -676,33 +702,33 @@ object CliHelpModel {
                         brief = "Generate an invite and draw it as a QR code on the terminal.",
                         tokens = listOf("pair", "qr", "invite"),
                         detail = "With a server already running, the invite is generated by that " +
-                                 "instance so it matches the live session; otherwise it is " +
-                                 "generated offline and saved to the config, ready for the next " +
-                                 "'wfas --server'. Add --watch for a live countdown that renews " +
-                                 "the code on expiry: press n for a new invite, r for a new key, " +
-                                 "k to reveal the key, q to quit."
+                                "instance so it matches the live session; otherwise it is " +
+                                "generated offline and saved to the config, ready for the next " +
+                                "'wfas --server'. Add --watch for a live countdown that renews " +
+                                "the code on expiry: press n for a new invite, r for a new key, " +
+                                "k to reveal the key, q to quit."
                     ),
                     HelpEntry(
                         syntax = "pair regenerate",
                         brief = "Same, but always with a brand new key. Aliases: rekey, new-key.",
                         tokens = listOf("regenerate", "rekey", "new-key"),
                         detail = "In multicast this evicts every listener still using the old key, " +
-                                 "which is exactly what you want after handing the code to the " +
-                                 "wrong person."
+                                "which is exactly what you want after handing the code to the " +
+                                "wrong person."
                     ),
                     HelpEntry(
                         syntax = "pair connect <link>",
                         brief = "Join using an invite link. Alias: join.",
                         tokens = listOf("connect", "join"),
                         detail = "Accepts the wifiaudio://pair?... form or the https one. Starts " +
-                                 "the client with the key already applied."
+                                "the client with the key already applied."
                     ),
                     HelpEntry(
                         syntax = "pair inspect <link>",
                         brief = "Decode a link and show what it contains, without connecting.",
                         tokens = listOf("inspect", "check", "parse"),
                         detail = "Exits non-zero if the invite has expired. Aliases: check, parse. " +
-                                 "Also available as 'wfas inspect <link>'."
+                                "Also available as 'wfas inspect <link>'."
                     ),
                     HelpEntry(
                         syntax = "pair encode <text>",
@@ -725,9 +751,9 @@ object CliHelpModel {
                         brief = "Force-register the wifiaudio:// handler with this OS.",
                         tokens = listOf("register"),
                         detail = "Per-user, no administrator rights. Every run already does this in " +
-                                 "the background, rewriting the entry when it points at a different " +
-                                 "executable, so moving or reinstalling the app repairs itself. Use " +
-                                 "this only to see the repair fail loudly."
+                                "the background, rewriting the entry when it points at a different " +
+                                "executable, so moving or reinstalling the app repairs itself. Use " +
+                                "this only to see the repair fail loudly."
                     ),
                     HelpEntry(
                         syntax = "pair unregister",
@@ -851,8 +877,8 @@ object CliHelpModel {
                         brief = "Allow inbound UDP.",
                         tokens = listOf("firewall", "fw", "allow"),
                         detail = "With no ports, opens the configured streaming, discovery (9091) " +
-                                 "and mic ports. Or pass a list, as in " +
-                                 "'wfas firewall allow 9090,9091'."
+                                "and mic ports. Or pass a list, as in " +
+                                "'wfas firewall allow 9090,9091'."
                     ),
                     HelpEntry(
                         syntax = "firewall status",
@@ -907,7 +933,7 @@ object CliHelpModel {
                         brief = "Show the current streaming status.",
                         tokens = listOf("status"),
                         detail = "Includes the RTP, HTTP, DLNA and Snapcast side-protocols and " +
-                                 "their connected clients."
+                                "their connected clients."
                     )
                 )
             ),
@@ -919,20 +945,20 @@ object CliHelpModel {
                         brief = "Animated ASCII spectrum histogram of the audio stream.",
                         tokens = listOf("--viz"),
                         detail = "Optional theme: a hex color such as #1e88e5 recolors the whole " +
-                                 "view via the Material You palette, or 'rainbow' for an animated " +
-                                 "dynamic rainbow."
+                                "view via the Material You palette, or 'rainbow' for an animated " +
+                                "dynamic rainbow."
                     ),
                     HelpEntry(
                         syntax = "--groove [amount]",
                         brief = "Only with --viz: adaptive spectrum that follows the melody.",
                         tokens = listOf("--groove"),
                         detail = "Instead of drawing raw levels, where bass pins the low bars at " +
-                                 "full scale and everything else flattens into one blob, each band " +
-                                 "is compared with its frequency neighbours, so a note that pokes " +
-                                 "out of its region is lifted, and a slow per-band envelope is " +
-                                 "subtracted, so the constant part of the mix stops dominating. " +
-                                 "Optional amount: soft | normal | hard, or 0-160. Press g in the " +
-                                 "visualizer to toggle it live."
+                                "full scale and everything else flattens into one blob, each band " +
+                                "is compared with its frequency neighbours, so a note that pokes " +
+                                "out of its region is lifted, and a slow per-band envelope is " +
+                                "subtracted, so the constant part of the mix stops dominating. " +
+                                "Optional amount: soft | normal | hard, or 0-160. Press g in the " +
+                                "visualizer to toggle it live."
                     ),
                     HelpEntry(
                         syntax = "--monitor",
@@ -950,8 +976,8 @@ object CliHelpModel {
                         brief = "Live debug HUD, then internal logs.",
                         tokens = listOf("--debug"),
                         detail = "Audio packet table plus, with --mic, the microphone send/receive " +
-                                 "table. Also lists the network interfaces by name and display name, " +
-                                 "which is what --usb-iface expects."
+                                "table. Also lists the network interfaces by name and display name, " +
+                                "which is what --usb-iface expects."
                     ),
                     HelpEntry(
                         syntax = "--json",
@@ -963,10 +989,16 @@ object CliHelpModel {
                         brief = "Print secret config values instead of masking them.",
                         tokens = listOf("--reveal"),
                         detail = "Secrets such as security.authKey are shown as ******** by " +
-                                 "'config list', 'config get' and 'config export', so they do not " +
-                                 "end up in terminal scrollback, shell history or a shared export " +
-                                 "by accident. Pass --reveal when you actually need the value, and " +
-                                 "treat whatever it lands in as a secret."
+                                "'config list', 'config get' and 'config export', so they do not " +
+                                "end up in terminal scrollback, shell history or a shared export " +
+                                "by accident. Pass --reveal when you actually need the value, and " +
+                                "treat whatever it lands in as a secret. It prints only to an " +
+                                "interactive terminal: redirected output and --json are refused, " +
+                                "and 'config export --reveal' asks for confirmation before writing " +
+                                "secrets in plain text. For unattended use pass the key through " +
+                                "WFAS_AUTH_KEY instead. Note that this guards against accidents, " +
+                                "not against a hostile program: anything running as your user can " +
+                                "read the same secret straight from the credential store."
                     ),
                     HelpEntry(
                         syntax = "--quiet",
@@ -1044,9 +1076,9 @@ object CliHelpModel {
                         brief = "Open the interactive help browser.",
                         tokens = listOf("--help", "-h"),
                         detail = "Falls back to the complete text whenever the output is not an " +
-                                 "interactive terminal, so 'wfas --help > help.txt' and " +
-                                 "'wfas --help | grep snapcast' both give you everything. Set " +
-                                 "WFAS_NO_INTERACTIVE=1 to force that fallback."
+                                "interactive terminal, so 'wfas --help > help.txt' and " +
+                                "'wfas --help | grep snapcast' both give you everything. Set " +
+                                "WFAS_NO_INTERACTIVE=1 to force that fallback."
                     ),
                     HelpEntry(
                         syntax = "--help all",

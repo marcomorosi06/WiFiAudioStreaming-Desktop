@@ -15,66 +15,184 @@
  * limitations under the Licence.
  */
 
-import java.io.File
 import java.net.ConnectException
 import java.net.Socket
 
-// ─────────────────────────────────────────────────────────────────────────────
-// IpcClient — sends a single control command to a running wfas instance
-//
-// Discovery: scans $TMPDIR for wfas-<pid>.port files, picks the most recent.
-// If --pid <n> is ever added to CliArgs, we can target a specific instance.
-// ─────────────────────────────────────────────────────────────────────────────
-
 object IpcClient {
 
+    private const val MAX_KEY_ATTEMPTS = 3
+
     fun send(cmd: ControlCommand, args: CliArgs) {
-        val tmpDir = File(System.getProperty("java.io.tmpdir"))
-        val portFiles = tmpDir.listFiles { f ->
-            f.name.startsWith("wfas-") && f.name.endsWith(".port")
-        }?.sortedByDescending { it.lastModified() } ?: emptyList()
-
-        if (portFiles.isEmpty()) {
+        val sessions = IpcAuth.listSessions()
+        if (sessions.isEmpty()) {
             printError("No running wfas instance found.", args)
-            kotlin.system.exitProcess(1)
+            kotlin.system.exitProcess(ExitCode.NOT_FOUND)
         }
 
-        val portFile = portFiles.first()
-        val port = portFile.readText().trim().toIntOrNull()
-        if (port == null) {
-            printError("Corrupt IPC port file: ${portFile.name}", args)
-            kotlin.system.exitProcess(1)
+        val session = sessions.firstOrNull { it.authenticated }
+        if (session == null) {
+            val stale = sessions.first()
+            printError(
+                "The running instance (PID ${stale.pid}) predates the authenticated control channel. " +
+                        "Restart it to use 'wfas control'.",
+                args
+            )
+            kotlin.system.exitProcess(ExitCode.AUTH_FAILED)
         }
 
-        val pid = portFile.name.removePrefix("wfas-").removeSuffix(".port")
+        val payload = buildRequest(cmd)
+        var key = resolveKey(args)
+        var attempt = 0
+        var promptedOnce = false
 
-        try {
-            Socket(java.net.InetAddress.getLoopbackAddress(), port).use { socket ->
-                socket.soTimeout = 3000
+        while (true) {
+            val outcome = tryOnce(session, payload, key)
+
+            when (outcome) {
+                is Outcome.Answered -> {
+                    if (args.json) println(outcome.response)
+                    else prettyPrint(cmd, outcome.response, session.pid.toString(), args)
+                    return
+                }
+
+                is Outcome.Unauthorized -> {
+                    if (!outcome.keyRequired) {
+                        // Token rifiutato: non e' un problema di chiave, e
+                        // riprovare non cambia nulla.
+                        printError("Refused by the running instance: ${outcome.message}", args)
+                        kotlin.system.exitProcess(ExitCode.AUTH_FAILED)
+                    }
+                    attempt++
+                    if (attempt >= MAX_KEY_ATTEMPTS) {
+                        printError("Wrong key. Refusing after $MAX_KEY_ATTEMPTS attempts.", args)
+                        kotlin.system.exitProcess(ExitCode.AUTH_FAILED)
+                    }
+                    val next = promptForKey(wrong = true, args = args)
+                    if (next == null) {
+                        printError("Wrong key.", args)
+                        kotlin.system.exitProcess(ExitCode.AUTH_FAILED)
+                    }
+                    key = next
+                    promptedOnce = true
+                }
+
+                is Outcome.KeyNeeded -> {
+                    if (promptedOnce) {
+                        printError("This instance requires the pre-shared key.", args)
+                        kotlin.system.exitProcess(ExitCode.AUTH_FAILED)
+                    }
+                    val next = promptForKey(wrong = false, args = args)
+                    if (next == null) {
+                        printError(
+                            "This instance runs in KEY mode. Set ${SettingsRepository.ENV_AUTH_KEY} " +
+                                    "or pass --auth-key to control it.",
+                            args
+                        )
+                        kotlin.system.exitProcess(ExitCode.AUTH_FAILED)
+                    }
+                    key = next
+                    promptedOnce = true
+                }
+
+                is Outcome.Unreachable -> {
+                    printError(outcome.message, args)
+                    session.file.runCatching { delete() }
+                    kotlin.system.exitProcess(ExitCode.NOT_FOUND)
+                }
+
+                is Outcome.Failed -> {
+                    printError(outcome.message, args)
+                    kotlin.system.exitProcess(ExitCode.RESOURCE_ERROR)
+                }
+            }
+        }
+    }
+
+    // ── Un singolo tentativo completo di handshake ───────────────────────────
+
+    private sealed class Outcome {
+        data class Answered(val response: String) : Outcome()
+        data class Unauthorized(val message: String, val keyRequired: Boolean) : Outcome()
+        object KeyNeeded : Outcome()
+        data class Unreachable(val message: String) : Outcome()
+        data class Failed(val message: String) : Outcome()
+    }
+
+    private fun tryOnce(session: IpcAuth.Session, payload: String, key: String?): Outcome {
+        return try {
+            Socket(java.net.InetAddress.getLoopbackAddress(), session.port).use { socket ->
+                socket.soTimeout = 5000
                 val writer = socket.getOutputStream().bufferedWriter()
                 val reader = socket.getInputStream().bufferedReader()
 
-                writer.write(buildRequest(cmd))
+                val challenge = reader.readLine()
+                    ?: return Outcome.Failed("The running instance closed the control channel.")
+
+                if (challenge.contains("\"status\": \"unauthorized\"")) {
+                    return Outcome.Unauthorized(field(challenge, "message") ?: "refused", false)
+                }
+
+                val nonce = field(challenge, "nonce")
+                    ?: return Outcome.Failed("Malformed control handshake.")
+                val keyRequired = challenge.contains("\"key_required\": true")
+
+                if (keyRequired && key.isNullOrBlank()) return Outcome.KeyNeeded
+
+                val proof = if (keyRequired) IpcAuth.proof(key!!, nonce, payload) else ""
+
+                writer.write("AUTH ${session.token} $proof")
+                writer.newLine()
+                writer.write(payload)
                 writer.newLine()
                 writer.flush()
 
                 val response = reader.readLine() ?: ""
-
-                if (args.json) {
-                    println(response)
+                if (response.contains("\"status\": \"unauthorized\"")) {
+                    Outcome.Unauthorized(
+                        field(response, "message") ?: "unauthorized",
+                        keyRequired || response.contains("\"key_required\": true")
+                    )
                 } else {
-                    prettyPrint(cmd, response, pid, args)
+                    Outcome.Answered(response)
                 }
             }
         } catch (e: ConnectException) {
-            printError("Could not connect to wfas instance (PID $pid). Is it still running?", args)
-            portFile.runCatching { delete() }
-            kotlin.system.exitProcess(1)
+            Outcome.Unreachable("Could not connect to wfas instance (PID ${session.pid}). Is it still running?")
         } catch (e: Exception) {
-            printError("IPC error: ${e.message}", args)
-            kotlin.system.exitProcess(1)
+            Outcome.Failed("IPC error: ${e.message}")
         }
     }
+
+    // ── Chiave ──────────────────────────────────────────────────────────────
+
+    /**
+     * L'ordine e' quello dell'esplicito prima dell'implicito: il flag batte
+     * l'ambiente, l'ambiente batte la custodia di sistema. Nessuno di questi
+     * chiede niente all'utente: il prompt arriva solo se il server risponde che
+     * la chiave serve davvero.
+     */
+    private fun resolveKey(args: CliArgs): String? {
+        if (args.authKey.isNotBlank()) return args.authKey
+        System.getenv(SettingsRepository.ENV_AUTH_KEY)?.takeIf { it.isNotBlank() }?.let { return it }
+        return runCatching { SettingsRepository.loadSettings().app.authKey }
+            .getOrNull()?.takeIf { it.isNotBlank() }
+    }
+
+    private fun promptForKey(wrong: Boolean, args: CliArgs): String? {
+        if (args.json) return null            // in JSON non si interrompe il flusso per chiedere
+        val console = System.console() ?: return null
+        if (wrong) System.err.println("  ✗  Wrong key.")
+        else System.err.println("  This instance requires the pre-shared key.")
+        val chars = runCatching { console.readPassword("  Key: ") }.getOrNull() ?: return null
+        val value = String(chars).trim()
+        java.util.Arrays.fill(chars, '\u0000')
+        return value.ifEmpty { null }
+    }
+
+    private fun field(json: String, key: String): String? =
+        Regex("\"$key\"\\s*:\\s*\"([^\"]*)\"").find(json)?.groupValues?.getOrNull(1)
+
+    // ── Richieste e stampa ──────────────────────────────────────────────────
 
     private fun buildRequest(cmd: ControlCommand): String = when (cmd) {
         is ControlCommand.Volume -> "{\"cmd\": \"volume\", \"value\": ${cmd.value}}"
@@ -128,7 +246,7 @@ object IpcClient {
         val snapcast = bool("snapcast") == "true"
         val uptime  = num("uptime")?.toLong()?.let { formatUptime(it) } ?: "?"
 
-        val labelWidth = 8
+        val labelWidth = 10
         fun row(label: String, value: String) =
             println("  ${dim(label.padEnd(labelWidth))}$value")
 
@@ -141,6 +259,8 @@ object IpcClient {
             "off_on_usb" -> "not on USB"
             else         -> str("wfas") ?: "always"
         }
+        val auth = str("auth")?.lowercase() ?: "off"
+        val encrypted = bool("encrypted") == "true"
 
         println()
         println("  ${bold("wfas")}  PID $pid")
@@ -181,6 +301,11 @@ object IpcClient {
         row("Link", if (usbUp) green("USB") + (if (usbIf.isNotEmpty()) dim(" ($usbIf)") else "") else dim("Wi-Fi"))
         row("IP", if (family == "auto") dim("auto") else yellow(family))
         row("WFAS", wfas)
+        row("Auth", when (auth) {
+            "key" -> green("key") + (if (encrypted) dim("  (session encrypted)") else "")
+            "ask" -> yellow("ask")
+            else  -> dim("off")
+        })
         row("Uptime", uptime)
         println()
     }
@@ -197,7 +322,7 @@ object IpcClient {
     }
 
     private fun printError(msg: String, args: CliArgs) {
-        if (args.json) println("{\"status\": \"error\", \"message\": \"$msg\"}")
+        if (args.json) println("{\"status\": \"error\", \"message\": \"${msg.replace("\"", "\\\"")}\"}")
         else System.err.println("  ✗  $msg")
     }
 

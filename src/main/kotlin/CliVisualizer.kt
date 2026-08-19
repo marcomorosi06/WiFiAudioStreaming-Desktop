@@ -35,12 +35,12 @@ private val VIZ_MODE = (System.getenv("WFAS_VIZ") ?: System.getProperty("wfas.vi
 
 private val VIZ_TERMINAL_HINT: Boolean =
     System.getenv("WT_SESSION") != null ||
-    System.getenv("WT_PROFILE_ID") != null ||
-    System.getenv("ANSICON") != null ||
-    System.getenv("ConEmuANSI")?.equals("ON", ignoreCase = true) == true ||
-    System.getenv("TERM_PROGRAM") != null ||
-    (System.getenv("COLORTERM") ?: "").isNotEmpty() ||
-    (System.getenv("TERM") ?: "").let { it.isNotEmpty() && it != "dumb" }
+            System.getenv("WT_PROFILE_ID") != null ||
+            System.getenv("ANSICON") != null ||
+            System.getenv("ConEmuANSI")?.equals("ON", ignoreCase = true) == true ||
+            System.getenv("TERM_PROGRAM") != null ||
+            (System.getenv("COLORTERM") ?: "").isNotEmpty() ||
+            (System.getenv("TERM") ?: "").let { it.isNotEmpty() && it != "dumb" }
 
 private val VIZ_ANSI: Boolean = when (VIZ_MODE) {
     "plain", "ascii", "simple", "off", "none" -> false
@@ -58,10 +58,10 @@ private val VIZ_COLORTERM = (System.getenv("COLORTERM") ?: "").lowercase()
 private val VIZ_TERM = (System.getenv("TERM") ?: "").lowercase()
 private val VIZ_IS_WINDOWS = System.getProperty("os.name", "").lowercase().contains("win")
 private val VIZ_TRUECOLOR = VIZ_COLORTERM.contains("truecolor") || VIZ_COLORTERM.contains("24bit") ||
-    System.getenv("WT_SESSION") != null ||
-    System.getenv("ConEmuANSI")?.equals("ON", ignoreCase = true) == true ||
-    System.getenv("TERM_PROGRAM") != null ||
-    (VIZ_IS_WINDOWS && VIZ_ANSI)
+        System.getenv("WT_SESSION") != null ||
+        System.getenv("ConEmuANSI")?.equals("ON", ignoreCase = true) == true ||
+        System.getenv("TERM_PROGRAM") != null ||
+        (VIZ_IS_WINDOWS && VIZ_ANSI)
 private val VIZ_256 = VIZ_TRUECOLOR || VIZ_TERM.contains("256")
 
 private val BASIC16 = arrayOf(
@@ -272,8 +272,14 @@ class AudioVisualizer(
     private var inputThread: Thread? = null
     private var keyProc: Process? = null
 
-    enum class Mode { NORMAL, CONFIRM_QUIT, VOLUME }
+    enum class Mode { NORMAL, CONFIRM_QUIT, VOLUME, AUTH_ASK }
     @Volatile private var mode = Mode.NORMAL
+
+    // Modalita' ASK con il visualizzatore attivo: il terminale e' in raw mode e
+    // appartiene a questa classe, quindi la domanda va posta qui invece che su
+    // stdin, dove nessuno la leggerebbe.
+    @Volatile private var authPeer: String = ""
+    @Volatile private var authDecision: ((Boolean) -> Unit)? = null
     @Volatile private var volPct = 100
     var onQuit: (() -> Unit)? = null
     var onVolume: ((Float) -> Unit)? = null
@@ -851,6 +857,7 @@ class AudioVisualizer(
     }
 
     private fun statusRow(): String {
+        if (mode == Mode.AUTH_ASK) return controlLine("Allow $authPeer?   y = yes    n = no")
         if (mode == Mode.CONFIRM_QUIT) return controlLine("Quit?   y = yes    n = no")
         if (mode == Mode.VOLUME) {
             val bw = (totalW - 22).coerceIn(6, 30)
@@ -921,8 +928,35 @@ class AudioVisualizer(
         hudDirty = true
     }
 
+    /**
+     * Chiede l'autorizzazione per un client sul pannello del visualizzatore.
+     * La risposta arriva su [onDecision] dal thread della tastiera; il chiamante
+     * non deve bloccare qui dentro.
+     */
+    fun askAuth(peer: String, onDecision: (Boolean) -> Unit) {
+        // Una richiesta che arriva mentre un'altra e' aperta non puo' restare in
+        // sospeso: la precedente viene negata, che e' la risposta prudente.
+        authDecision?.invoke(false)
+        authPeer = peer
+        authDecision = onDecision
+        mode = Mode.AUTH_ASK
+    }
+
+    private fun answerAuth(allow: Boolean) {
+        val cb = authDecision
+        authDecision = null
+        authPeer = ""
+        mode = Mode.NORMAL
+        cb?.invoke(allow)
+    }
+
     private fun handleKey(k: String) {
         when (mode) {
+            Mode.AUTH_ASK -> when (k) {
+                "Y" -> answerAuth(true)
+                "N", "ESCAPE" -> answerAuth(false)
+                else -> {}
+            }
             Mode.NORMAL -> when (k) {
                 "Q" -> mode = Mode.CONFIRM_QUIT
                 "V" -> if (volumeEnabled) mode = Mode.VOLUME

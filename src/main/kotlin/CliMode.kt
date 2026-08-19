@@ -30,6 +30,8 @@ object ExitCode {
     const val NOT_FOUND      = 2
     const val DISCONNECTED   = 3
     const val RESOURCE_ERROR = 4
+    /** Il canale di controllo ha rifiutato: token o chiave non validi. */
+    const val AUTH_FAILED    = 5
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -272,10 +274,8 @@ private fun inheritSecurity(args: CliArgs, settings: AllSettings): CliArgs {
     val mode = SecurityMode.fromStringSafe(app.securityMode)
     if (mode == SecurityMode.OFF) return args
 
-    // La chiave non sta piu' nel file di configurazione. Se la custodia dell'OS
-    // non ce l'ha (nessun keyring, oppure "non memorizzare"), la si chiede qui,
-    // ma solo se c'e' davvero un terminale: senza, restare senza chiave e' un
-    // caso che deve fermare l'avvio piu' avanti, non partire in chiaro.
+    if (args.controlCmd != null) return args
+
     var key = app.authKey
     if (mode.requiresKey && key.isBlank()) {
         key = promptForAuthKey().orEmpty()
@@ -293,14 +293,14 @@ private fun promptForAuthKey(): String? {
     System.err.println("Security mode is KEY and no key is stored on this system.")
     val chars = runCatching { console.readPassword("Key: ") }.getOrNull() ?: return null
     val value = String(chars).trim()
-    java.util.Arrays.fill(chars, ' ')
+    java.util.Arrays.fill(chars, '\u0000')
     return value.ifEmpty { null }
 }
 
 /**
- * Fail-closed. Prima la chiave stava nel file, quindi c'era sempre; ora puo'
- * mancare, e partire lo stesso significherebbe servire audio senza la
- * protezione che l'utente ha configurato.
+ * Fail-closed. Previously, the key was stored in the file, so it was always
+ * present; now it may be missing, and starting anyway would mean streaming
+ * audio without the protection configured by the user.
  */
 private fun requireAuthKey(args: CliArgs, settings: AllSettings) {
     if (args.authExplicit) return
@@ -309,8 +309,8 @@ private fun requireAuthKey(args: CliArgs, settings: AllSettings) {
     if (args.authKey.isNotBlank()) return
     System.err.println(
         "Refusing to start: security mode is KEY but no key is available. " +
-        "It is not in the ${SecretVault.label} credential store and this session has no terminal to ask. " +
-        "Set ${SettingsRepository.ENV_AUTH_KEY}, or pass --auth-key."
+                "It is not in the ${SecretVault.label} credential store and this session has no terminal to ask. " +
+                "Set ${SettingsRepository.ENV_AUTH_KEY}, or pass --auth-key."
     )
     kotlin.system.exitProcess(ExitCode.USAGE_ERROR)
 }
@@ -320,8 +320,8 @@ private fun prepareQrKey(args: CliArgs): CliArgs {
     val all = SettingsRepository.loadSettings()
     val app = all.app
     val reusable = app.qrPairingEnabled &&
-        app.authKey.isNotBlank() &&
-        app.authKey != app.manualAuthKey
+            app.authKey.isNotBlank() &&
+            app.authKey != app.manualAuthKey
     val key = if (reusable) app.authKey else WfasAuth.randomPairingKey()
     val next = app.copy(
         securityMode = SecurityMode.KEY.name,
@@ -364,8 +364,17 @@ fun printUpdateCheck() {
     }
 }
 
+/**
+ * Automatic update checker.
+ *
+ * It never runs on the first launch: the welcome screen must first inform the
+ * user of its existence and how to disable it. Contacting GitHub while the user
+ * is still reading that screen would make any subsequent choice meaningless,
+ * because the request would have already been sent.
+ */
 private fun maybeNotifyUpdate(args: CliArgs) {
     if (args.quiet || args.json || args.controlCmd != null) return
+    if (!SettingsRepository.hasSeenCliWelcome()) return
     if (!SettingsRepository.isAutoUpdateCheckEnabled()) return
     val r = UpdateChecker.check(timeoutMs = 2500)
     if (r is UpdateChecker.Result.Available) {
@@ -392,12 +401,13 @@ fun runCli(rawArgs: CliArgs) {
     )
     WfasPolicy.configure(args.wfasMode ?: settings.app.wfasMode, override = args.wfasMode != null)
 
-    if (!SettingsRepository.hasSeenCliWelcome() && args.controlCmd == null && !args.json) {
+    val firstCliRun = !SettingsRepository.hasSeenCliWelcome()
+    if (firstCliRun && args.controlCmd == null && !args.json) {
         printCliWelcome()
         SettingsRepository.markCliWelcomeSeen()
     }
 
-    maybeNotifyUpdate(args)
+    if (!firstCliRun) maybeNotifyUpdate(args)
 
     if (args.controlCmd != null) {
         IpcClient.send(args.controlCmd, args)
@@ -429,10 +439,6 @@ fun runCli(rawArgs: CliArgs) {
         }
     }
 }
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Monitor mode (visualize system audio, no server, no volume change)
-// ─────────────────────────────────────────────────────────────────────────────
 
 private suspend fun runCliMonitor(args: CliArgs, settings: AllSettings) {
     val audio = settings.audio
@@ -504,7 +510,7 @@ private fun printSnapcastClients(args: CliArgs) {
     }
     out("", args)
     out("  ${bold("Snapcast")} ${dim("codec")} ${session.codec} ${dim("format")} ${session.sampleFormat} " +
-        "${dim("drift")} ${session.driftMicros / 1000}ms", args)
+            "${dim("drift")} ${session.driftMicros / 1000}ms", args)
     if (session.clients.isEmpty()) {
         out(dim("  no clients known yet"), args)
     } else {
@@ -512,10 +518,44 @@ private fun printSnapcastClients(args: CliArgs) {
             val marker = if (client.connected) green("+") else dim("-")
             val mute = if (client.muted) yellow(" muted") else ""
             out("  $marker  ${client.name} ${dim(client.ip)}  vol ${client.volumePercent}%$mute " +
-                "${dim("latency")} ${client.latency}ms", args)
+                    "${dim("latency")} ${client.latency}ms", args)
         }
     }
     out("", args)
+}
+
+/**
+ * I comandi da tastiera del server CLI. Vive fuori dal ciclo di lettura perche'
+ * ora le righe arrivano da [ConsoleInput], che le consegna solo quando nessun
+ * prompt le sta aspettando.
+ */
+private fun handleServerConsoleCommand(
+    raw: String,
+    args: CliArgs,
+    done: kotlinx.coroutines.CompletableDeferred<Unit>
+) {
+    val line = raw.trim()
+    if (line.isEmpty()) return
+    when {
+        line.equals("q", ignoreCase = true) ||
+                line.equals("quit", ignoreCase = true) ||
+                line.equals("stop", ignoreCase = true) -> {
+            kotlinx.coroutines.runBlocking { NetworkHandler_v1.stopCurrentStream() }
+            if (!done.isCompleted) done.complete(Unit)
+        }
+        line.matches(Regex("(?i)v(?:ol(?:ume)?)?\\s+(\\d+(?:\\.\\d+)?)")) -> {
+            val pct = line.split("\\s+".toRegex()).last().toFloatOrNull() ?: return
+            NetworkHandler_v1.setServerVolume((pct / 100f).coerceIn(0f, 2f))
+            if (!args.quiet && !args.json) println("  volume: ${pct.toInt()}%")
+        }
+        line.equals("p", ignoreCase = true) ||
+                line.equals("pair", ignoreCase = true) ||
+                line.equals("qr", ignoreCase = true) -> PairCli.serverInvite(args)
+        line.equals("r", ignoreCase = true) ||
+                line.equals("rekey", ignoreCase = true) -> PairCli.serverInvite(args, forceNewKey = true)
+        line.equals("s", ignoreCase = true) ||
+                line.equals("snapcast", ignoreCase = true) -> printSnapcastClients(args)
+    }
 }
 
 private suspend fun runCliServer(rawArgs: CliArgs, settings: AllSettings) {
@@ -592,8 +632,8 @@ private suspend fun runCliServer(rawArgs: CliArgs, settings: AllSettings) {
         out(
             dim(
                 "  Commands: q=stop, v <0-100>=volume" +
-                    (if (args.snapcast) ", s=snapcast clients" else "") +
-                    (if (args.qr) ", p=new invite, r=new key" else "")
+                        (if (args.snapcast) ", s=snapcast clients" else "") +
+                        (if (args.qr) ", p=new invite, r=new key" else "")
             ),
             args
         )
@@ -620,11 +660,20 @@ private suspend fun runCliServer(rawArgs: CliArgs, settings: AllSettings) {
 
     NetworkHandler_v1.configureSecurity(args.authMode, args.authKey, args.encrypt)
     if (args.authMode == "ASK") {
-        NetworkHandler_v1.onAuthRequest = { peer ->
-            out("  Client $peer wants to connect. Allow? [y/N]", args)
-            val line = runCatching { readLine()?.trim()?.lowercase() }.getOrNull()
-            line == "y" || line == "yes"
+        if (!ConsoleInput.hasTty && viz == null && !args.json) {
+            err(yellow("!") + " Security mode is ASK but this session has no terminal:")
+            err(dim("    every client will be refused. Use --auth-mode key for unattended servers."))
         }
+        val prompt = CliAuthPrompt(
+            timeoutMs = args.askTimeoutSec * 1000L,
+            jsonMode = args.json,
+            visualizer = viz,
+            log = { msg ->
+                if (args.json) jsonLine("event" to "auth_request", "message" to msg)
+                else err(dim("  .  $msg"))
+            }
+        )
+        NetworkHandler_v1.onAuthRequest = { peer -> prompt.decide(peer) }
     }
 
     NetworkHandler_v1.launchServerInstance(
@@ -726,39 +775,11 @@ private suspend fun runCliServer(rawArgs: CliArgs, settings: AllSettings) {
     if (viz != null) {
         done.await()
     } else {
-    val stdinThread = Thread {
-        try {
-            val reader = java.io.BufferedReader(java.io.InputStreamReader(System.`in`))
-            while (!done.isCompleted) {
-                val line = reader.readLine()?.trim() ?: break
-                when {
-                    line.equals("q", ignoreCase = true) ||
-                    line.equals("quit", ignoreCase = true) ||
-                    line.equals("stop", ignoreCase = true) -> {
-                        kotlinx.coroutines.runBlocking { NetworkHandler_v1.stopCurrentStream() }
-                        done.complete(Unit)
-                    }
-                    line.matches(Regex("(?i)v(?:ol(?:ume)?)?\\s+(\\d+(?:\\.\\d+)?)")) -> {
-                        val pct = line.trim().split("\\s+".toRegex()).last().toFloatOrNull() ?: return@Thread
-                        NetworkHandler_v1.setServerVolume((pct / 100f).coerceIn(0f, 2f))
-                        if (!args.quiet && !args.json) out("  volume: ${pct.toInt()}%", args)
-                    }
-                    line.equals("p", ignoreCase = true) ||
-                    line.equals("pair", ignoreCase = true) ||
-                    line.equals("qr", ignoreCase = true) -> PairCli.serverInvite(args)
-                    line.equals("r", ignoreCase = true) ||
-                    line.equals("rekey", ignoreCase = true) -> PairCli.serverInvite(args, forceNewKey = true)
-                    line.equals("s", ignoreCase = true) ||
-                    line.equals("snapcast", ignoreCase = true) -> printSnapcastClients(args)
-                }
-            }
-        } catch (_: Exception) {}
-    }
-    stdinThread.isDaemon = true
-    stdinThread.start()
-
-    done.await()
-    stdinThread.interrupt()
+        // Un solo lettore su stdin per tutto il processo: quando un prompt di
+        // autorizzazione e' aperto le righe vanno li', altrimenti qui.
+        ConsoleInput.start { line -> handleServerConsoleCommand(line, args, done) }
+        done.await()
+        ConsoleInput.stop()
     }
     DebugHud.stop()
     viz?.stop()
@@ -880,40 +901,40 @@ private suspend fun runCliClient(args: CliArgs, settings: AllSettings) {
     if (viz != null) {
         done.await()
     } else {
-    val stdinThread = Thread {
-        try {
-            val reader = java.io.BufferedReader(java.io.InputStreamReader(System.`in`))
-            while (!done.isCompleted) {
-                val line = reader.readLine() ?: break
-                val pendingKey = keySlot.getAndSet(null)
-                if (pendingKey != null) {
-                    pendingKey.complete(line)
-                    continue
-                }
-                val cmd = line.trim()
-                when {
-                    cmd.equals("q", ignoreCase = true) ||
-                    cmd.equals("quit", ignoreCase = true) ||
-                    cmd.equals("stop", ignoreCase = true) ||
-                    cmd.equals("disconnect", ignoreCase = true) -> {
-                        userStopped = true
-                        kotlinx.coroutines.runBlocking { NetworkHandler_v1.stopCurrentStream() }
-                        done.complete(Unit)
+        val stdinThread = Thread {
+            try {
+                val reader = java.io.BufferedReader(java.io.InputStreamReader(System.`in`))
+                while (!done.isCompleted) {
+                    val line = reader.readLine() ?: break
+                    val pendingKey = keySlot.getAndSet(null)
+                    if (pendingKey != null) {
+                        pendingKey.complete(line)
+                        continue
                     }
-                    cmd.matches(Regex("(?i)v(?:ol(?:ume)?)?\\s+(\\d+(?:\\.\\d+)?)")) -> {
-                        val pct = cmd.split("\\s+".toRegex()).last().toFloatOrNull() ?: continue
-                        NetworkHandler_v1.setClientVolume((pct / 100f).coerceIn(0f, 2f))
-                        if (!args.quiet && !args.json) out("  volume: ${pct.toInt()}%", args)
+                    val cmd = line.trim()
+                    when {
+                        cmd.equals("q", ignoreCase = true) ||
+                                cmd.equals("quit", ignoreCase = true) ||
+                                cmd.equals("stop", ignoreCase = true) ||
+                                cmd.equals("disconnect", ignoreCase = true) -> {
+                            userStopped = true
+                            kotlinx.coroutines.runBlocking { NetworkHandler_v1.stopCurrentStream() }
+                            done.complete(Unit)
+                        }
+                        cmd.matches(Regex("(?i)v(?:ol(?:ume)?)?\\s+(\\d+(?:\\.\\d+)?)")) -> {
+                            val pct = cmd.split("\\s+".toRegex()).last().toFloatOrNull() ?: continue
+                            NetworkHandler_v1.setClientVolume((pct / 100f).coerceIn(0f, 2f))
+                            if (!args.quiet && !args.json) out("  volume: ${pct.toInt()}%", args)
+                        }
                     }
                 }
-            }
-        } catch (_: Exception) {}
-    }
-    stdinThread.isDaemon = true
-    stdinThread.start()
+            } catch (_: Exception) {}
+        }
+        stdinThread.isDaemon = true
+        stdinThread.start()
 
-    done.await()
-    stdinThread.interrupt()
+        done.await()
+        stdinThread.interrupt()
     }
     DebugHud.stop()
     viz?.stop()
@@ -957,7 +978,7 @@ private suspend fun connectDirect(args: CliArgs, settings: AllSettings): ServerI
     if (!args.json && !args.quiet) {
         if (advertised != null) {
             out("  ${dim("Stream format")} ${advertised.sampleRate.toInt()} Hz, " +
-                "${advertised.channels} ch, ${advertised.bitDepth}-bit", args)
+                    "${advertised.channels} ch, ${advertised.bitDepth}-bit", args)
         } else {
             err(yellow("!") + " The server did not announce its audio format; assuming this machine's settings.")
             err(dim("    If they differ from the server's, playback speed and pitch will be wrong."))
@@ -1045,7 +1066,7 @@ private fun discoverLink(info: ServerInfo): String =
 
 private fun printDiscoverHeader(args: CliArgs) {
     out("  " + bold("HOST".padEnd(18)) + " " + bold("ADDRESS".padEnd(28)) + " " +
-        bold("MODE".padEnd(6)) + " " + bold("LINK".padEnd(8)) + " " + bold("SECURITY"), args)
+            bold("MODE".padEnd(6)) + " " + bold("LINK".padEnd(8)) + " " + bold("SECURITY"), args)
 }
 
 private fun emitDiscover(args: CliArgs, host: String, info: ServerInfo) {
@@ -1070,7 +1091,7 @@ private fun emitDiscover(args: CliArgs, host: String, info: ServerInfo) {
     } else {
         val addr = NetAddr.hostPort(info.ip, info.port)
         out("  " + cyan(host.padEnd(18)) + " " + addr.padEnd(28) + " " +
-            mode.padEnd(6) + " " + discoverLink(info).padEnd(8) + " " + security, args)
+                mode.padEnd(6) + " " + discoverLink(info).padEnd(8) + " " + security, args)
     }
 }
 

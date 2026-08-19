@@ -50,11 +50,44 @@ data class AppSettings(
     val launchAtStartup: Boolean = false,
     val autoStartServer: Boolean = false,
     val autoStartMulticast: Boolean = true,
+    /** Ritardo prima dell'avvio automatico: la rete non e' sempre pronta al login. */
+    val autoStartDelaySec: Int = 0,
+    /** Attende un indirizzo locale utilizzabile invece di partire e fallire. */
+    val autoStartRequireNetwork: Boolean = true,
+    /** Volume da applicare all'avvio automatico. -1 = lascia com'e'. */
+    val autoStartVolume: Int = -1,
+    /** Sicurezza del server avviato in automatico. INHERIT = quella generale. */
+    val autoStartSecurityMode: String = AutoStartSecurity.INHERIT,
+    /**
+     * Cifratura del server avviato in automatico: INHERIT, ON oppure OFF.
+     * E' una scelta separata da quella generale perche' le due cose servono a
+     * momenti diversi: la sessione presidiata puo' restare in chiaro per farsi
+     * ispezionare con Wireshark, mentre quella che parte da sola e resta su per
+     * ore conviene cifrarla. Vale solo con una chiave: senza, non c'e' niente
+     * con cui cifrare.
+     */
+    val autoStartEncryption: String = AutoStartSecurity.INHERIT,
     val muteRender: Boolean = true,
     val serverPersist: Boolean = false,
     val lastMulticastMode: Boolean = false,
     val autoConnectClientEnabled: Boolean = false,
+    /**
+     * Voci di connessione automatica in forma testuale (vedi [AutoConnectTarget]).
+     * Il nome resta quello storico perche' una voce che era solo un indirizzo
+     * continua a leggersi senza migrazioni.
+     */
     val autoConnectIps: List<String> = emptyList(),
+    /** Ogni quanto ricontrollare la lista, in secondi. */
+    val autoConnectIntervalSec: Int = 5,
+    /** Quanto aspettare dopo una disconnessione prima di riprovare, in secondi. */
+    val autoConnectRetryDelaySec: Int = 10,
+    /**
+     * Se il server chiede la chiave e la voce non ne ha una salvata: chiedere
+     * all'utente (true) o saltare quel server (false). Il default e' saltare,
+     * perche' una procedura automatica che si ferma su una finestra modale non
+     * e' piu' automatica.
+     */
+    val autoConnectPromptForKey: Boolean = false,
     val connectionSoundEnabled: Boolean = true,
     val disconnectionSoundEnabled: Boolean = true,
     val useNativeEngine: Boolean = true,
@@ -78,6 +111,52 @@ data class AppSettings(
     val vizEnabled: Boolean = true,
     val vizGroove: Int = 160
 )
+
+/** Modalita' di sicurezza applicabili al server avviato automaticamente. */
+object AutoStartSecurity {
+    const val INHERIT = "INHERIT"
+    const val ON = "ON"
+    const val OFF = "OFF"
+
+    val MODES = listOf(INHERIT, "OFF", "ASK", "KEY")
+    val ENCRYPTION = listOf(INHERIT, ON, OFF)
+
+    /** Risolve la modalita' effettiva: INHERIT ricade su quella generale. */
+    fun resolve(autoStart: String?, general: String?): String =
+        if (autoStart.isNullOrBlank() || autoStart.equals(INHERIT, true))
+            SecurityMode.fromStringSafe(general).name
+        else
+            SecurityMode.fromStringSafe(autoStart).name
+
+    /**
+     * Risolve la cifratura del server avviato automaticamente.
+     *
+     * [effectiveMode] e' la modalita' gia' risolta da [resolve]. La cifratura
+     * poggia sulla chiave precondivisa: in OFF e in ASK la risposta e' no
+     * qualunque cosa dica l'impostazione, altrimenti si prometterebbe una
+     * protezione che non puo' esistere.
+     */
+    fun resolveEncryption(choice: String?, general: Boolean, effectiveMode: String): Boolean {
+        if (!SecurityMode.requiresKey(effectiveMode)) return false
+        return when {
+            choice.isNullOrBlank() || choice.equals(INHERIT, true) -> general
+            choice.equals(ON, true)  -> true
+            choice.equals(OFF, true) -> false
+            else -> general
+        }
+    }
+}
+
+/** Le voci di auto-connessione gia' decodificate. */
+fun AppSettings.autoConnectTargets(): List<AutoConnectTarget> =
+    AutoConnectTarget.parseList(autoConnectIps)
+
+/** Solo quelle attive e con un indirizzo scritto. */
+fun AppSettings.activeAutoConnectTargets(): List<AutoConnectTarget> =
+    autoConnectTargets().filter { it.enabled && it.ip.isNotBlank() }
+
+fun AppSettings.withAutoConnectTargets(list: List<AutoConnectTarget>): AppSettings =
+    copy(autoConnectIps = AutoConnectTarget.serializeList(list))
 
 fun AppSettings.toSnapcastConfig(): SnapcastServerConfig = SnapcastServerConfig(
     enabled = snapcastEnabled,
@@ -245,8 +324,8 @@ object SettingsRepository {
 
     private fun hasLegacyPreferences(): Boolean = try {
         prefs.get(STREAMING_PORT_KEY, null) != null ||
-            prefs.get(THEME_KEY, null) != null ||
-            prefs.get(SECURITY_MODE_KEY, null) != null
+                prefs.get(THEME_KEY, null) != null ||
+                prefs.get(SECURITY_MODE_KEY, null) != null
     } catch (_: Exception) { false }
 
     private fun loadFromPreferencesLegacy(): AllSettings {
