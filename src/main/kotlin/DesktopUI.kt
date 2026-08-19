@@ -2980,15 +2980,14 @@ private fun AuthKeyStorageRow(
     rememberKey: Boolean,
     onRememberKeyChange: (Boolean) -> Unit
 ) {
-    val vaultAvailable = remember { SecretVault.available }
     val vaultLabel = remember { SecretVault.label }
+    val vaultHealth = rememberVaultHealth()
 
-    if (!vaultAvailable) {
-        Text(
-            stringResource("auth_key_no_vault"),
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.error
-        )
+    // Any problem with the store — missing, or present but failing a probe —
+    // hides the "remember" switch and explains why, instead of offering to save
+    // a key that would silently vanish.
+    if (vaultHealth != null && vaultHealth !is SecretVault.Health.Ok) {
+        SecretVaultBanner(vaultHealth)
         return
     }
 
@@ -3010,6 +3009,70 @@ private fun AuthKeyStorageRow(
     }
 }
 
+/**
+ * Runs the credential-store probe once, off the UI thread, and exposes the
+ * result as state. Null while the probe is still running; the probe itself is
+ * cached in [SecretVault], so many callers cost one real check.
+ */
+@Composable
+fun rememberVaultHealth(): SecretVault.Health? {
+    var health by remember { mutableStateOf<SecretVault.Health?>(null) }
+    LaunchedEffect(Unit) {
+        health = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+            SecretVault.health()
+        }
+    }
+    return health
+}
+
+/**
+ * Warning card shown whenever the credential store cannot be used — no store on
+ * the system, or a store that answers but fails a write/read-back probe. Renders
+ * nothing while the health is unknown or fine, so callers can drop it in
+ * unconditionally.
+ */
+@Composable
+fun SecretVaultBanner(health: SecretVault.Health?) {
+    val message = when (health) {
+        is SecretVault.Health.NoStore -> when (ConfigPaths.os) {
+            HostOs.WINDOWS -> stringResource("secret_vault_no_store_windows")
+            HostOs.MACOS   -> stringResource("secret_vault_no_store_macos")
+            HostOs.LINUX   -> stringResource("secret_vault_no_store_linux")
+            HostOs.OTHER   -> stringResource("secret_vault_no_store_other")
+        }
+        is SecretVault.Health.Failing -> stringResource("secret_vault_failing", health.detail)
+        else -> return
+    }
+    val onErrorColor = MaterialTheme.colorScheme.onErrorContainer
+    ElevatedCard(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(16.dp),
+        colors = CardDefaults.elevatedCardColors(containerColor = MaterialTheme.colorScheme.errorContainer)
+    ) {
+        Row(
+            modifier = Modifier.padding(16.dp),
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Icon(Icons.Filled.Warning, contentDescription = null, tint = onErrorColor, modifier = Modifier.size(28.dp))
+            Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                Text(
+                    stringResource("secret_vault_title"),
+                    style = MaterialTheme.typography.titleSmall,
+                    fontWeight = FontWeight.Bold,
+                    color = onErrorColor
+                )
+                Text(message, style = MaterialTheme.typography.bodySmall, color = onErrorColor)
+                Text(
+                    stringResource("secret_vault_consequence"),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = onErrorColor
+                )
+            }
+        }
+    }
+}
+
 @Composable
 fun AuthKeyField(
     value: String,
@@ -3018,27 +3081,74 @@ fun AuthKeyField(
     leadingIcon: (@Composable () -> Unit)? = null
 ) {
     var revealed by remember { mutableStateOf(false) }
-    OutlinedTextField(
-        value = value,
-        onValueChange = onValueChange,
-        label = { Text(stringResource("auth_key_label")) },
-        leadingIcon = leadingIcon,
-        singleLine = true,
-        shape = RoundedCornerShape(16.dp),
-        visualTransformation =
-            if (revealed) VisualTransformation.None else PasswordVisualTransformation(),
-        trailingIcon = {
-            IconButton(onClick = { revealed = !revealed }) {
-                Icon(
-                    imageVector =
-                        if (revealed) Icons.Outlined.VisibilityOff else Icons.Outlined.Visibility,
-                    contentDescription =
-                        stringResource(if (revealed) "auth_key_hide" else "auth_key_show")
-                )
-            }
-        },
-        modifier = modifier
-    )
+    Column(modifier = modifier) {
+        OutlinedTextField(
+            value = value,
+            onValueChange = onValueChange,
+            label = { Text(stringResource("auth_key_label")) },
+            leadingIcon = leadingIcon,
+            singleLine = true,
+            shape = RoundedCornerShape(16.dp),
+            visualTransformation =
+                if (revealed) VisualTransformation.None else PasswordVisualTransformation(),
+            trailingIcon = {
+                IconButton(onClick = { revealed = !revealed }) {
+                    Icon(
+                        imageVector =
+                            if (revealed) Icons.Outlined.VisibilityOff else Icons.Outlined.Visibility,
+                        contentDescription =
+                            stringResource(if (revealed) "auth_key_hide" else "auth_key_show")
+                    )
+                }
+            },
+            modifier = Modifier.fillMaxWidth()
+        )
+        KeyStrengthMeter(value)
+    }
+}
+
+/**
+ * Live strength readout for a hand-typed key. Shown only once something is typed;
+ * the QR/random path never reaches this field. Advisory, not a gate — see
+ * [KeyStrength] for why a hard minimum was not the answer.
+ */
+@Composable
+private fun KeyStrengthMeter(key: String) {
+    val level = KeyStrength.level(key)
+    if (level == KeyStrengthLevel.EMPTY) return
+    val (barColor, labelKey) = when (level) {
+        KeyStrengthLevel.WEAK   -> Color(0xFFE5484D) to "key_strength_weak"
+        KeyStrengthLevel.FAIR   -> Color(0xFFE9A23B) to "key_strength_fair"
+        else                    -> Color(0xFF30A46C) to "key_strength_strong"
+    }
+    val fraction = KeyStrength.fraction(key)
+    Spacer(Modifier.height(8.dp))
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(10.dp),
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Box(
+            modifier = Modifier
+                .weight(1f)
+                .height(6.dp)
+                .clip(RoundedCornerShape(3.dp))
+                .background(MaterialTheme.colorScheme.surfaceVariant)
+        ) {
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth(fraction)
+                    .height(6.dp)
+                    .clip(RoundedCornerShape(3.dp))
+                    .background(barColor)
+            )
+        }
+        Text(
+            stringResource(labelKey),
+            color = barColor,
+            style = MaterialTheme.typography.bodySmall
+        )
+    }
 }
 
 @Composable
@@ -4805,7 +4915,7 @@ fun RtpSdpBanner(
     val sdpContent = """
         v=0
         o=- 0 0 IN IP4 $localIp
-        s=WiFiAudioStreamer RTP
+        s=WiFiAudioStreaming RTP
         c=IN IP4 $targetIp
         t=0 0
         m=audio $port RTP/AVP 96
@@ -5105,16 +5215,25 @@ fun AutoConnectTargetsEditor(
     appSettings: AppSettings,
     onAppSettingsChange: (AppSettings) -> Unit
 ) {
-    val targets = remember(appSettings.autoConnectIps) { appSettings.autoConnectTargets() }
+    // Local editing list, owned here rather than re-derived from settings on
+    // every change. A newly added row is empty, and an empty target serialises to
+    // "" which parse() drops as a blank line — so re-deriving would make
+    // "Add server" vanish before it could be filled in. Each change is still
+    // persisted (empty rows serialise away harmlessly, and activeAutoConnectTargets
+    // ignores address-less entries), but the row you are typing into stays put.
+    var targets by remember { mutableStateOf(appSettings.autoConnectTargets()) }
 
-    fun commit(list: List<AutoConnectTarget>) =
+    fun commit(list: List<AutoConnectTarget>) {
+        targets = list
         onAppSettingsChange(appSettings.withAutoConnectTargets(list))
+    }
 
     fun replace(index: Int, target: AutoConnectTarget) =
         commit(targets.toMutableList().also { it[index] = target })
 
     Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
         Text(stringResource("auto_connect_targets"), style = MaterialTheme.typography.labelLarge)
+        SecretVaultBanner(rememberVaultHealth())
 
         targets.forEachIndexed { index, target ->
             var keyInput by remember(target.keyRef, index) { mutableStateOf("") }
@@ -5190,10 +5309,17 @@ fun AutoConnectTargetsEditor(
                         )
                         Button(
                             onClick = {
-                                replace(index, AutoConnectTarget.withKey(target, keyInput))
-                                keyInput = ""
+                                val updated = AutoConnectTarget.withKey(target, keyInput)
+                                // Only clear the field when the key actually reached
+                                // the keyring. If the vault refused it, keep what was
+                                // typed and let the warning below explain why, rather
+                                // than discarding it silently.
+                                if (updated.hasKey) {
+                                    replace(index, updated)
+                                    keyInput = ""
+                                }
                             },
-                            enabled = keyInput.isNotBlank()
+                            enabled = keyInput.isNotBlank() && SecretVault.available
                         ) { Text(stringResource("auto_connect_key_save")) }
                         if (target.hasKey) {
                             IconButton(onClick = {

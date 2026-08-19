@@ -298,19 +298,27 @@ object SettingsRepository {
     }
 
     /**
-     * I segreti non stanno piu' nel file di configurazione: arrivano dalla
-     * custodia dell'OS, o da [ENV_AUTH_KEY] per chi fa girare il server senza
-     * sessione desktop. Un valore ancora presente nel file viene da una versione
-     * precedente: si trasferisce nella custodia e il file viene riscritto senza.
+     * Secrets no longer live in the configuration file: they come from the OS
+     * vault, or from [ENV_AUTH_KEY] for a server running without a desktop
+     * session. A value still present in the file comes from an earlier version
+     * and is moved into the vault, after which the file is rewritten without it.
      */
     private fun hydrateSecrets(stored: AllSettings): AllSettings {
         val legacyAuth   = stored.app.authKey.takeIf { it.isNotEmpty() }
         val legacyManual = stored.app.manualAuthKey.takeIf { it.isNotEmpty() }
         val migrating    = legacyAuth != null || legacyManual != null
 
-        if (migrating && stored.app.rememberAuthKey && SecretVault.available) {
-            legacyAuth?.let { SecretVault.store(VAULT_AUTH_KEY, it) }
-            legacyManual?.let { SecretVault.store(VAULT_MANUAL_KEY, it) }
+        // A secret is only removed from its old home once it is provably in the
+        // new one: `store` reports whether the vault took it. Without a desktop
+        // session there is no vault at all, and there the plaintext has to stay
+        // where it is - losing the user's key is worse than leaving a copy in a
+        // place we would rather it was not.
+        val secured = when {
+            !migrating                  -> false
+            !stored.app.rememberAuthKey -> true   // asked not to keep it: dropping it is the point
+            !SecretVault.available      -> false
+            else -> (legacyAuth?.let { SecretVault.store(VAULT_AUTH_KEY, it) } ?: true) &&
+                    (legacyManual?.let { SecretVault.store(VAULT_MANUAL_KEY, it) } ?: true)
         }
 
         val env = System.getenv(ENV_AUTH_KEY)?.takeIf { it.isNotBlank() }
@@ -318,8 +326,46 @@ object SettingsRepository {
         val manual = legacyManual ?: SecretVault.load(VAULT_MANUAL_KEY).orEmpty()
 
         val hydrated = stored.copy(app = stored.app.copy(authKey = auth, manualAuthKey = manual))
-        if (migrating) runCatching { ConfigManager.save(hydrated) }
+
+        if (secured) {
+            // ConfigManager.save redacts the secret fields, so this is what drops
+            // the plaintext from the file.
+            runCatching { ConfigManager.save(hydrated) }
+        } else if (migrating) {
+            System.err.println(
+                "Warning: the key could not be moved into the ${SecretVault.label} credential store, " +
+                    "so it is still in ${ConfigPaths.configFile().path} in cleartext."
+            )
+        }
+
+        // Independent of any migration. Builds before the vault kept the key in
+        // java.util.prefs, and nothing has ever removed it since: on a machine
+        // that migrated long ago there is still a readable copy sitting there.
+        if (!stored.app.rememberAuthKey || (SecretVault.available && (secured || !migrating))) {
+            clearLegacyPreferenceSecrets()
+        }
         return hydrated
+    }
+
+    /**
+     * Drops the pre-vault copy of the key from java.util.prefs - the registry on
+     * Windows, an XML file under the home directory elsewhere. Nothing reads it
+     * any more: [loadFromPreferencesLegacy] only runs when no configuration file
+     * exists, and by the time this is reached one always does.
+     *
+     * Best effort by nature: the value is overwritten and flushed before being
+     * removed so the backing store is asked to write over it, but neither the
+     * registry nor the preferences XML guarantees the old bytes are gone. What is
+     * guaranteed is that the key can no longer be read back through the API.
+     */
+    private fun clearLegacyPreferenceSecrets() {
+        runCatching {
+            if (prefs.get(AUTH_KEY_KEY, null) == null) return@runCatching
+            prefs.put(AUTH_KEY_KEY, "")
+            runCatching { prefs.flush() }
+            prefs.remove(AUTH_KEY_KEY)
+            prefs.flush()
+        }
     }
 
     private fun hasLegacyPreferences(): Boolean = try {

@@ -667,11 +667,22 @@ object CliHelpModel {
                                 "because a silent yes is not a decision anyone made."
                     ),
                     HelpEntry(
-                        syntax = "--auth-key <key>",
+                        syntax = "--auth-key <key|->",
                         brief = "Pre-shared key. Implies --auth-mode key.",
                         tokens = listOf("--auth-key"),
                         detail = "The key is never sent on the wire: both sides prove they hold it " +
-                                "through a mutual HMAC challenge-response."
+                                "through a mutual HMAC challenge-response. A key written inline is " +
+                                "readable in the process list for as long as wfas runs, and stays in " +
+                                "your shell history: pass - to read it from standard input instead, " +
+                                "or use --auth-key-file."
+                    ),
+                    HelpEntry(
+                        syntax = "--auth-key-file <path>",
+                        brief = "Read the pre-shared key from a file. Implies --auth-mode key.",
+                        tokens = listOf("--auth-key-file"),
+                        detail = "The first non-empty line of the file is the key. Keeps it off the " +
+                                "command line and out of your shell history; set the file readable " +
+                                "only by you. WFAS_AUTH_KEY does the same through the environment."
                     ),
                     HelpEntry(
                         syntax = "--encrypt",

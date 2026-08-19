@@ -388,20 +388,40 @@ object AutostartManager {
         val exePath = getExecutablePath()
         if (exePath.isEmpty()) return "Error: Executable path not found."
 
-        val appName = "WiFiAudioStreamer"
+        val appName = "WiFiAudioStreaming"
+        // Older builds registered the Run value as "WiFiAudioStreamer". Disabling
+        // autostart deletes that name too, otherwise a machine set up before the
+        // rename would keep launching on boot from a value the new code never
+        // touches. reg delete returns non-zero when the value is absent, which is
+        // the normal case, so its failure is not reported.
+        val legacyAppName = "WiFiAudioStreamer"
 
         return try {
             if (os.contains("win")) {
                 val regKey = "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run"
-                val command = if (enable) {
-                    arrayOf("reg", "add", regKey, "/v", appName, "/t", "REG_SZ", "/d", "\"$exePath\"", "/f")
+                if (enable) {
+                    val process = ProcessBuilder(
+                        "reg", "add", regKey, "/v", appName, "/t", "REG_SZ", "/d", "\"$exePath\"", "/f"
+                    ).redirectErrorStream(true).start()
+                    val output = process.inputStream.bufferedReader().readText()
+                    runCatching {
+                        ProcessBuilder("reg", "delete", regKey, "/v", legacyAppName, "/f")
+                            .redirectErrorStream(true).start().waitFor()
+                    }
+                    if (process.waitFor() != 0) "Registry Error: $output" else null
                 } else {
-                    arrayOf("reg", "delete", regKey, "/v", appName, "/f")
+                    val process = ProcessBuilder("reg", "delete", regKey, "/v", appName, "/f")
+                        .redirectErrorStream(true).start()
+                    val output = process.inputStream.bufferedReader().readText()
+                    process.waitFor()
+                    runCatching {
+                        ProcessBuilder("reg", "delete", regKey, "/v", legacyAppName, "/f")
+                            .redirectErrorStream(true).start().waitFor()
+                    }
+                    if (output.contains("ERROR", ignoreCase = true) &&
+                        !output.contains("unable to find", ignoreCase = true)
+                    ) "Registry Error: $output" else null
                 }
-
-                val process = ProcessBuilder(*command).redirectErrorStream(true).start()
-                val output = process.inputStream.bufferedReader().readText()
-                if (process.waitFor() != 0) "Registry Error: $output" else null
             } else if (os.contains("mac")) {
                 val plist = "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">\n<plist version=\"1.0\">\n<dict>\n<key>Label</key>\n<string>com.wifiaudiostreaming</string>\n<key>ProgramArguments</key>\n<array><string>$exePath</string></array>\n<key>RunAtLoad</key>\n<true/>\n</dict>\n</plist>"
                 val dir = File(System.getProperty("user.home"), "Library/LaunchAgents")
@@ -414,7 +434,7 @@ object AutostartManager {
                 }
                 null
             } else {
-                val desktopContent = "[Desktop Entry]\nType=Application\nExec=\"$exePath\"\nHidden=false\nNoDisplay=false\nTerminal=false\nX-GNOME-Autostart-enabled=true\nName=WiFi Audio Streamer\nComment=Start WiFi Audio Streamer on login"
+                val desktopContent = "[Desktop Entry]\nType=Application\nExec=\"$exePath\"\nHidden=false\nNoDisplay=false\nTerminal=false\nX-GNOME-Autostart-enabled=true\nName=WiFi Audio Streaming\nComment=Start WiFi Audio Streaming on login"
                 val dir = File(System.getProperty("user.home"), ".config/autostart")
                 val file = File(dir, "wifiaudiostreaming.desktop")
                 if (enable) {
@@ -469,6 +489,10 @@ object NetworkHandler_v1 {
 
     const val WFAS_PROTOCOL_VERSION = 2
     private const val MULTICAST_SILENCE_TIMEOUT_MS = 6000L
+    // How long an issued auth challenge stays answerable. Long enough for a
+    // round trip on a bad link, short enough that an unanswered one does not
+    // linger as something to answer later.
+    private const val CHALLENGE_TTL_MS = 15_000L
     private const val INCOMPATIBLE_PREFIX = "WFAS_INCOMPATIBLE"
     private const val HELLO_ACK_PREFIX    = "HELLO_ACK"
     private const val PENDING_MESSAGE       = "WFAS_PENDING"
@@ -2826,6 +2850,20 @@ object NetworkHandler_v1 {
                     val localAddress = InetSocketAddress(NetAddr.wildcardHost(), port)
                     AppDebug.log("[SERVER][UNICAST] binding $localAddress")
                     aSocket(selectorManager).udp().bind(localAddress) { reuseAddress = true }.use { socket ->
+                        // A challenge belongs to the peer it was issued to, and expires
+                        // on its own. A single shared slot meant the newest HELLO on the
+                        // socket overwrote whatever the previous caller was still
+                        // answering - and the session keys were then derived from
+                        // whichever pair of nonces happened to be left in it.
+                        class PendingChallenge(val cnonce: String, val snonce: String, val at: Long)
+                        val challenges = HashMap<String, PendingChallenge>()
+                        fun challengeFor(peer: String): PendingChallenge? {
+                            val now = System.currentTimeMillis()
+                            challenges.entries.removeAll { now - it.value.at > CHALLENGE_TTL_MS }
+                            return challenges[peer]
+                        }
+                        // The nonces of the session that authenticated, kept for the key
+                        // derivation below. Only ever written after a proof verified.
                         var pendCnonce = ""
                         var pendSnonce = ""
                         while (isActive) {
@@ -2848,6 +2886,11 @@ object NetworkHandler_v1 {
 
                             val peerHost = peerHostOf(clientAddress)
                             activePeerIp = peerHost
+                            // Challenges are filed under the peer. When the address does
+                            // not resolve to a literal host we still want a stable key, so
+                            // the raw socket address stands in rather than one shared
+                            // bucket that every unresolved peer would land in.
+                            val challengeKey = peerHost ?: clientAddress.toString()
                             AppDebug.log("[SERVER][TIMING] peer=$peerHost usbPeer=${UsbLink.isUsbPeer(peerHost)} " +
                                     "mode=${WfasPolicy.mode} allowed=${WfasPolicy.enabledForPeer(peerHost)} at +${System.currentTimeMillis() - rxAt}ms")
                             if (!WfasPolicy.enabledForPeer(peerHost)) {
@@ -2871,18 +2914,33 @@ object NetworkHandler_v1 {
                                     val cproof = WfasAuth.getToken(msg, "cproof")
                                     val cnonce = WfasAuth.getToken(msg, "cnonce") ?: ""
                                     if (cproof == null) {
-                                        pendCnonce = cnonce
-                                        pendSnonce = WfasAuth.nonceHex()
-                                        val sproof = WfasAuth.proof(authKey, 'S', pendCnonce, pendSnonce)
-                                        socket.send(Datagram(buildPacket { writeText("$AUTH_REQUIRED_PREFIX;snonce=$pendSnonce;sproof=$sproof") }, clientAddress))
+                                        val snonce = WfasAuth.nonceHex()
+                                        challenges[challengeKey] = PendingChallenge(cnonce, snonce, System.currentTimeMillis())
+                                        val sproof = WfasAuth.proof(authKey, 'S', cnonce, snonce)
+                                        socket.send(Datagram(buildPacket { writeText("$AUTH_REQUIRED_PREFIX;snonce=$snonce;sproof=$sproof") }, clientAddress))
                                         continue
                                     }
-                                    val expected = WfasAuth.proof(authKey, 'C', pendCnonce.ifEmpty { cnonce }, pendSnonce)
+                                    // A proof is only an answer to a challenge we issued to
+                                    // this peer and have not seen answered yet. Without one
+                                    // there is nothing to check it against, and falling back
+                                    // to nonces the caller supplied would check it against
+                                    // its own input.
+                                    val pending = challengeFor(challengeKey)
+                                    if (pending == null) {
+                                        AppDebug.log("[SERVER][UNICAST] proof with no pending challenge from $clientAddress")
+                                        socket.send(Datagram(buildPacket { writeText(UNAUTHORIZED_MESSAGE) }, clientAddress))
+                                        continue
+                                    }
+                                    val expected = WfasAuth.proof(authKey, 'C', pending.cnonce, pending.snonce)
                                     if (!WfasAuth.constantTimeEquals(cproof, expected)) {
                                         AppDebug.log("[SERVER][UNICAST] auth failed for $clientAddress")
                                         socket.send(Datagram(buildPacket { writeText(UNAUTHORIZED_MESSAGE) }, clientAddress))
                                         continue
                                     }
+                                    // Single use: a replayed proof finds nothing waiting.
+                                    challenges.remove(challengeKey)
+                                    pendCnonce = pending.cnonce
+                                    pendSnonce = pending.snonce
                                     AppDebug.log("[SERVER][UNICAST] auth OK for $clientAddress")
                                 }
                                 SecurityMode.ASK -> {
@@ -3116,6 +3174,7 @@ object NetworkHandler_v1 {
                                 // prossimo client sullo stesso socket.
                                 pendCnonce   = ""
                                 pendSnonce   = ""
+                                challenges.clear()
                                 micRecvDir   = null
                                 micRecvWin   = WfasCrypto.ReplayWindow()
                                 activePeerIp = null
@@ -3531,6 +3590,15 @@ object NetworkHandler_v1 {
                         var mcWrong = false
                         val mcExpectedEpoch = expectedMcastEpoch
                         val mcFromInvite = clientKeyFromInvite
+                        // Whether the group is encrypted is settled here, from our
+                        // own configuration (key set, invite, expected epoch) or from
+                        // a beacon whose MAC verified - neither of which can be
+                        // forged. Once settled, audio without FLAG_ENCRYPTED is not
+                        // from the server and is dropped: the flag rides in the
+                        // cleartext header, so it is never evidence on its own, and
+                        // the sender does not get a per-packet vote on whether the
+                        // AEAD applies.
+                        var mcEncRequired = mcKey.isNotEmpty() || mcFromInvite || mcExpectedEpoch != null
                         var mcLastEpoch = when {
                             mcExpectedEpoch != null -> mcExpectedEpoch - 1
                             mcFromInvite -> 0L
@@ -3568,6 +3636,7 @@ object NetworkHandler_v1 {
                                         mcAsked = true
                                         mcKey = onKeyRequest?.invoke(mcWrong)?.takeIf { it.isNotBlank() } ?: ""
                                         if (mcKey.isEmpty()) { onStatusUpdate("status_key_required", emptyArray()); continue }
+                                        mcEncRequired = true
                                     }
                                     val info = WfasCrypto.parseMcastBeacon(mcKey, beaconStr, -1L)
                                     if (info != null) {
@@ -3580,6 +3649,7 @@ object NetworkHandler_v1 {
                                         if (info.epoch >= mcLastEpoch) {
                                             mcDir = WfasCrypto.deriveMulticast(mcKey, info.salt)
                                             mcWin = WfasCrypto.ReplayWindow()
+                                            mcEncRequired = true
                                             sessionEncryptedLive.value = true
                                             if (info.epoch > mcLastEpoch) {
                                                 mcLastEpoch = info.epoch
@@ -3611,6 +3681,7 @@ object NetworkHandler_v1 {
                                         if (info.epoch > mcLastEpoch) {
                                             mcDir = WfasCrypto.deriveMulticast(mcKey, info.salt)
                                             mcWin = WfasCrypto.ReplayWindow()
+                                            mcEncRequired = true
                                             mcLastEpoch = info.epoch
                                             SettingsRepository.setMcastClientEpoch(serverInfo.ip, info.epoch)
                                         }
@@ -3645,7 +3716,7 @@ object NetworkHandler_v1 {
                                         }
                                     }
                                     // no key yet -> drop until a valid beacon arrives
-                                } else {
+                                } else if (!mcEncRequired) {
                                     val pcmLen = packet.length - AUDIO_HEADER_SIZE
                                     val aligned = pcmLen - (pcmLen % frameSize)
                                     mcTotalBytes += aligned
@@ -3653,6 +3724,7 @@ object NetworkHandler_v1 {
                                         player?.let { handleAudioPacket(it, packet.data, packet.length, effectiveAudioSettings.channels, playbackState, onAudioFrame) }
                                     }
                                 }
+                                // cleartext inside an encrypted group -> dropped
                             } else if (packet.length >= 3 && String(packet.data, 0, minOf(packet.length, 3), Charsets.UTF_8) == "BYE") {
                                 WfasStats.add(WfasStats.Cat.BYE, packet.length)
                                 AppDebug.log("---Received BYE from multicast server ---")
@@ -4763,7 +4835,7 @@ fun startGuiApplication(cliArgs: CliArgs) = application {
             runCatching {
                 trayState.sendNotification(
                     Notification(
-                        title = "WiFi Audio Streamer",
+                        title = "WiFi Audio Streaming",
                         message = Strings.get("tray_running_in_background"),
                         type = Notification.Type.Info
                     )
@@ -4793,8 +4865,8 @@ fun startGuiApplication(cliArgs: CliArgs) = application {
         Tray(
             icon = trayIconLive,
             state = trayState,
-            tooltip = if (capturing) "WiFi Audio Streamer - ${CaptureMonitor.summary()}"
-            else "WiFi Audio Streamer",
+            tooltip = if (capturing) "WiFi Audio Streaming - ${CaptureMonitor.summary()}"
+            else "WiFi Audio Streaming",
             onAction = showAndRaise,
             menu = {
                 if (capturing) {
@@ -4825,7 +4897,7 @@ fun startGuiApplication(cliArgs: CliArgs) = application {
             val trayMode = cliArgs.trayMode ?: appSettings.linuxTray
             AppDebug.log("[TRAY] ${LinuxTray.describe(trayMode)}")
 
-            val created = LinuxTray.install(trayMode, iconUrl, "WiFi Audio Streamer") { linuxTray ->
+            val created = LinuxTray.install(trayMode, iconUrl, "WiFi Audio Streaming") { linuxTray ->
                 val toggleItem = dorkbox.systemTray.MenuItem(Strings.get("tray_show_window"))
 
                 toggleItem.setCallback {
@@ -5455,6 +5527,17 @@ fun startGuiApplication(cliArgs: CliArgs) = application {
 
                                 isMulticastMode = isMulticastMode || appSettings.rtpEnabled ||
                                         appSettings.httpEnabled || appSettings.dlnaEnabled || appSettings.snapcastEnabled
+
+                                // A previous auto-start may have left its own (auto-start)
+                                // security on the shared handler. A manual start uses the
+                                // current standard settings, so re-apply them here rather
+                                // than inheriting whatever the last start left behind. The
+                                // settings-change effect above only fires when the settings
+                                // themselves change, which is not the case here.
+                                NetworkHandler_v1.configureSecurity(
+                                    appSettings.securityMode, appSettings.authKey, appSettings.encryptionEnabled
+                                )
+                                IpcServer.applySecurity(appSettings.securityMode, appSettings.authKey)
 
                                 NetworkHandler_v1.launchServerInstance(
                                     audioSettings, port, isMulticastMode, serverCapabilities,

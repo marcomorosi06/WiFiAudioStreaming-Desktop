@@ -21,6 +21,30 @@ object NetAddr {
         return bare.contains(':')
     }
 
+    /**
+     * True for a literal IPv4 or IPv6 address, brackets and zone id allowed.
+     * Never resolves: validating an address must not touch the network, and a
+     * name that would need a DNS lookup is not something to hand to a socket on
+     * the strength of an incoming command.
+     *
+     * A shape check, not a range check. Which addresses are reachable is the
+     * user's topology to decide - VPN and CGNAT ranges are legitimate here - so
+     * this only rejects what is not an address at all.
+     */
+    fun isLiteralAddress(value: String?): Boolean {
+        val raw = value?.trim()?.removeSurrounding("[", "]")?.substringBefore('%') ?: return false
+        if (raw.isEmpty()) return false
+        if (raw.contains(':')) {
+            if (raw.count { it == ':' } !in 2..8) return false
+            return raw.all { it == ':' || it == '.' || it.isDigit() || it.lowercaseChar() in 'a'..'f' }
+        }
+        val parts = raw.split('.')
+        if (parts.size != 4) return false
+        return parts.all { p ->
+            p.isNotEmpty() && p.length <= 3 && p.all(Char::isDigit) && p.toInt() in 0..255
+        }
+    }
+
     fun display(host: String?): String {
         val h = host?.trim().orEmpty()
         if (h.isEmpty()) return h

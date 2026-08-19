@@ -48,7 +48,7 @@ object LinuxTray {
 
     @Volatile private var instance: dorkbox.systemTray.SystemTray? = null
     @Volatile private var baseIcon: java.awt.image.BufferedImage? = null
-    @Volatile private var baseTooltip: String = "WiFi Audio Streamer"
+    @Volatile private var baseTooltip: String = "WiFi Audio Streaming"
 
     fun reflectCapture(kinds: Set<CaptureMonitor.Kind>) {
         val tray = instance ?: return

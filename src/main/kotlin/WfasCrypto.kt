@@ -93,13 +93,26 @@ object WfasCrypto {
         for (x in b) { val v = x.toInt() and 0xFF; sb.append(h[v ushr 4]); sb.append(h[v and 15]) }
         return sb.toString()
     }
-    private fun fromHex(s: String): ByteArray {
-        val out = ByteArray(s.length / 2)
-        for (i in out.indices) out[i] = ((hexv(s[i * 2]) shl 4) or hexv(s[i * 2 + 1])).toByte()
+    /**
+     * Null unless the string is exactly [bytes] bytes of hex. The salt has a fixed
+     * size in the spec and the C reference enforces it by construction; accepting
+     * any other length would derive a group key from a value whose shape the
+     * sender chose. Invalid characters are rejected rather than folded to zero, so
+     * two different strings can never produce the same salt.
+     */
+    private fun fromHexExact(s: String, bytes: Int): ByteArray? {
+        if (s.length != bytes * 2) return null
+        val out = ByteArray(bytes)
+        for (i in 0 until bytes) {
+            val hi = hexv(s[i * 2])
+            val lo = hexv(s[i * 2 + 1])
+            if (hi < 0 || lo < 0) return null
+            out[i] = ((hi shl 4) or lo).toByte()
+        }
         return out
     }
     private fun hexv(c: Char): Int = when (c) {
-        in '0'..'9' -> c - '0'; in 'a'..'f' -> c - 'a' + 10; in 'A'..'F' -> c - 'A' + 10; else -> 0
+        in '0'..'9' -> c - '0'; in 'a'..'f' -> c - 'a' + 10; in 'A'..'F' -> c - 'A' + 10; else -> -1
     }
 
     // ── Key derivation (labels identical to the C reference) ─────────────────
@@ -188,8 +201,8 @@ object WfasCrypto {
         if (!constantTimeEquals(mac, mv)) return null
         val epoch = ev.toLongOrNull() ?: return null
         if (epoch <= lastEpoch) return null            // stale / replayed session
-        if (sh.length % 2 != 0) return null
-        return BeaconInfo(epoch, tv.toLongOrNull() ?: 0L, fromHex(sh))
+        val salt = fromHexExact(sh, SALT_BYTES) ?: return null
+        return BeaconInfo(epoch, tv.toLongOrNull() ?: 0L, salt)
     }
 
     private fun token(msg: String, name: String): String? {

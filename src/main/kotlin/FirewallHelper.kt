@@ -15,7 +15,7 @@
  * limitations under the Licence.
  */
 
-import java.io.File
+import java.util.Base64
 
 object FirewallHelper {
 
@@ -107,16 +107,19 @@ object FirewallHelper {
                 appendLine("netsh advfirewall firewall add rule name=$RULE_PORT_TCP dir=in action=allow protocol=TCP localport=${tcpPorts.joinToString(",")} profile=any enable=yes | Out-Null")
             }
         }
-        val tmp = File.createTempFile("wfas-fw", ".ps1")
-        try {
-            tmp.writeText(script)
-            val tmpEsc = tmp.absolutePath.replace("'", "''")
-            val launch = "Start-Process -FilePath powershell -Verb RunAs -WindowStyle Hidden -Wait " +
-                "-ArgumentList @('-NoProfile','-ExecutionPolicy','Bypass','-File','$tmpEsc')"
-            ProcessBuilder("powershell", "-NoProfile", "-NonInteractive", "-Command", launch)
-                .redirectErrorStream(true).start().waitFor()
-        } finally {
-            runCatching { tmp.delete() }
-        }
+        // The script never touches the disk. What runs elevated has to be fixed at
+        // the moment we hand it over, and a file on disk is not: it can change
+        // between being written and being read, and the process reading it here is
+        // the one the user just granted Administrator to. -EncodedCommand carries
+        // the script in the elevated process's command line instead, so there is
+        // nothing in between. The Base64 alphabet contains no quotes, so the value
+        // cannot escape the PowerShell string it is interpolated into.
+        val encoded = Base64.getEncoder().encodeToString(script.toByteArray(Charsets.UTF_16LE))
+        // With no file on disk the execution policy is not in play, so there is no
+        // longer anything to ask Bypass for.
+        val launch = "Start-Process -FilePath powershell -Verb RunAs -WindowStyle Hidden -Wait " +
+            "-ArgumentList @('-NoProfile','-NonInteractive','-EncodedCommand','$encoded')"
+        ProcessBuilder("powershell", "-NoProfile", "-NonInteractive", "-Command", launch)
+            .redirectErrorStream(true).start().waitFor()
     }
 }

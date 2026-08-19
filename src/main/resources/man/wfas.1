@@ -443,11 +443,18 @@ Default: 60, 0 waits forever.
 The prompt appears on the terminal, or inside the visualizer panel when \-\-viz owns the screen. No terminal at all, or \-\-json, means nobody can answer: the client is refused and the reason is logged, because a silent yes is not a decision anyone made.
 .RE
 .TP
-.B \-\-auth\-key <key>
+.B \-\-auth\-key <key|\->
 Pre\-shared key. Implies \-\-auth\-mode key.
 .RS
 .PP
-The key is never sent on the wire: both sides prove they hold it through a mutual HMAC challenge\-response.
+The key is never sent on the wire: both sides prove they hold it through a mutual HMAC challenge\-response. A key written inline is readable in the process list for as long as wfas runs, and stays in your shell history: pass \- to read it from standard input instead, or use \-\-auth\-key\-file.
+.RE
+.TP
+.B \-\-auth\-key\-file <path>
+Read the pre\-shared key from a file. Implies \-\-auth\-mode key.
+.RS
+.PP
+The first non\-empty line of the file is the key. Keeps it off the command line and out of your shell history; set the file readable only by you. WFAS_AUTH_KEY does the same through the environment.
 .RE
 .TP
 .B \-\-encrypt

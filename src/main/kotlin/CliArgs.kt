@@ -616,7 +616,14 @@ data class CliArgs(
                     "--auth-key" -> {
                         val v = nextArg(args, i, "--auth-key") ?: parseError("--auth-key requires a value")
                         i++
-                        authKey = v
+                        authKey = authKeyFromArg(v)
+                        authExplicit = true
+                        if (authMode == "OFF") authMode = "KEY"
+                    }
+                    "--auth-key-file" -> {
+                        val v = nextArg(args, i, "--auth-key-file") ?: parseError("--auth-key-file requires a path")
+                        i++
+                        authKey = authKeyFromFile(v)
                         authExplicit = true
                         if (authMode == "OFF") authMode = "KEY"
                     }
@@ -1016,6 +1023,35 @@ ENCRYPTION  (optional, requires a key)
         private fun looksLikeHex(s: String): Boolean {
             val h = s.removePrefix("#")
             return (h.length == 3 || h.length == 6) && h.all { it.isDigit() || it.lowercaseChar() in 'a'..'f' }
+        }
+
+        /**
+         * A key written straight onto the command line is readable for as long as
+         * the process runs: on Linux every local account can read /proc/<pid>/cmdline,
+         * and on every platform it lands in the shell history. `-` takes it from
+         * standard input instead. Passing it inline still works and still warns,
+         * because for an interactive one-off it is a reasonable trade the user
+         * should simply be aware of.
+         */
+        private fun authKeyFromArg(raw: String): String {
+            if (raw == "-") {
+                val line = readLine()?.trim()?.takeIf { it.isNotEmpty() }
+                    ?: parseError("--auth-key -: no key on standard input")
+                return line
+            }
+            System.err.println(
+                "Warning: this key is visible in the process list while wfas runs, and is now in " +
+                    "your shell history. Prefer --auth-key - (reads standard input), " +
+                    "--auth-key-file <path>, or ${SettingsRepository.ENV_AUTH_KEY}."
+            )
+            return raw
+        }
+
+        private fun authKeyFromFile(path: String): String {
+            val f = java.io.File(path)
+            if (!f.isFile) parseError("--auth-key-file: cannot read $path")
+            val line = runCatching { f.readLines().firstOrNull { it.isNotBlank() } }.getOrNull()?.trim()
+            return line?.takeIf { it.isNotEmpty() } ?: parseError("--auth-key-file: $path holds no key")
         }
 
         private fun nextArg(args: Array<String>, i: Int, flag: String): String? =

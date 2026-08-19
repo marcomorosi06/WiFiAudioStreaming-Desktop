@@ -29,7 +29,7 @@ object IpcServer {
     @Volatile private var scope: CoroutineScope? = null
     @Volatile private var sessionFile: java.io.File? = null
 
-    /** Il token vive solo in memoria e nel file 0600: non finisce nella config. */
+    /** The token lives only in memory and in the 0600 file: never in the config. */
     @Volatile private var token: String = ""
 
     private var currentArgs: CliArgs = CliArgs()
@@ -45,6 +45,15 @@ object IpcServer {
     private const val MAX_FAILED_ATTEMPTS = 5
     private const val LOCKOUT_MS = 30_000L
     private const val HANDSHAKE_TIMEOUT_MS = 5_000
+
+    // Everything the socket accepts before the caller has proved anything is part
+    // of the authentication boundary, so both the size of a request and the number
+    // of them in flight are bounded. Real control commands are a few hundred bytes
+    // and arrive one at a time.
+    private const val MAX_LINE_CHARS = 8 * 1024
+    private const val MAX_LIVE_CLIENTS = 8
+
+    private val liveClients = AtomicInteger(0)
 
     fun start(args: CliArgs) {
         currentArgs = args
@@ -64,7 +73,15 @@ object IpcServer {
 
                 while (isActive) {
                     val client: Socket = try { ss.accept() } catch (_: SocketException) { break }
-                    launch { handleClient(client) }
+                    if (liveClients.get() >= MAX_LIVE_CLIENTS) {
+                        AppDebug.log("[IPC] refused: too many connections in flight")
+                        runCatching { client.close() }
+                        continue
+                    }
+                    liveClients.incrementAndGet()
+                    launch {
+                        try { handleClient(client) } finally { liveClients.decrementAndGet() }
+                    }
                 }
             } catch (e: Exception) {
                 if (e !is CancellationException)
@@ -81,6 +98,9 @@ object IpcServer {
         sessionFile = null
         token = ""
         scope = null
+        // Cancelled handlers run their finally, but a restart must not inherit a
+        // count that never came back down for any reason.
+        liveClients.set(0)
     }
 
     fun applySecurity(mode: String?, key: String?) {
@@ -114,7 +134,26 @@ object IpcServer {
         return SecurityMode.requiresKey(mode) && key.isNotBlank()
     }
 
-    private fun handleClient(socket: Socket) {
+    /**
+     * Reads one line and refuses anything longer than [MAX_LINE_CHARS]. A plain
+     * readLine() buffers whatever keeps arriving, and this runs before the caller
+     * has presented a token, so an unbounded read would be work the socket does on
+     * behalf of someone it has not authenticated yet. Returns null on overflow,
+     * which the caller treats as a malformed request.
+     */
+    private fun readLimitedLine(reader: java.io.BufferedReader): String? {
+        val sb = StringBuilder()
+        while (true) {
+            val c = reader.read()
+            if (c < 0) return if (sb.isEmpty()) null else sb.toString()
+            if (c == '\n'.code) return sb.toString()
+            if (c == '\r'.code) continue
+            if (sb.length >= MAX_LINE_CHARS) return null
+            sb.append(c.toChar())
+        }
+    }
+
+    private suspend fun handleClient(socket: Socket) {
         socket.use {
             socket.soTimeout = HANDSHAKE_TIMEOUT_MS
             val reader = socket.getInputStream().bufferedReader()
@@ -139,7 +178,7 @@ object IpcServer {
                         "\"nonce\": \"$nonce\", \"key_required\": $needKey}"
             )
 
-            val authLine = runCatching { reader.readLine() }.getOrNull()?.trim().orEmpty()
+            val authLine = runCatching { readLimitedLine(reader) }.getOrNull()?.trim().orEmpty()
             if (!authLine.startsWith("AUTH ")) {
                 registerFailure("malformed handshake")
                 reply(buildResponse("unauthorized", mapOf("message" to "handshake required")))
@@ -149,16 +188,15 @@ object IpcServer {
             val sentToken = parts.getOrNull(0).orEmpty()
             val sentProof = parts.getOrNull(1).orEmpty()
 
-            val payload = runCatching { reader.readLine() }.getOrNull()?.trim().orEmpty()
+            val payload = runCatching { readLimitedLine(reader) }.getOrNull()?.trim().orEmpty()
             if (payload.isEmpty()) {
                 registerFailure("empty command")
                 reply(buildResponse("error", mapOf("message" to "empty command")))
                 return
             }
 
-            // Il confronto e' a tempo costante e il token e' controllato per
-            // primo: un chiamante senza token non arriva nemmeno a sapere se la
-            // chiave che ha provato era giusta.
+            // Constant-time comparison, and the token is checked first: a caller
+            // without one learns nothing about the key it may have tried.
             if (token.isEmpty() || !IpcAuth.constantTimeEquals(sentToken, token)) {
                 registerFailure("bad session token")
                 reply(buildResponse("unauthorized", mapOf("message" to "invalid session token")))
@@ -185,12 +223,14 @@ object IpcServer {
         }
     }
 
-    private fun registerFailure(reason: String) {
+    private suspend fun registerFailure(reason: String) {
         val n = failedAttempts.incrementAndGet()
         AppDebug.log("[IPC] refused: $reason (attempt $n)")
-        // Un ritardo fisso toglie ogni utilita' a un ciclo di tentativi, e dopo
-        // qualche errore il canale si chiude del tutto per un po'.
-        runCatching { Thread.sleep(250) }
+        // A fixed delay takes the value out of looping on attempts, and after a
+        // few failures the channel closes entirely for a while. It suspends rather
+        // than sleeps: a blocked dispatcher thread per refused connection is the
+        // kind of cost a caller should not be able to impose before authenticating.
+        runCatching { delay(250) }
         if (n >= MAX_FAILED_ATTEMPTS) {
             lockedUntilMs = System.currentTimeMillis() + LOCKOUT_MS
             failedAttempts.set(0)

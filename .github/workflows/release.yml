@@ -111,33 +111,6 @@ jobs:
           chmod +x appimagetool
           ARCH=$AITARCH ./appimagetool "$APPDIR" "$OUT/WiFi-Audio-Streaming-${APP_VER}-linux-${AITARCH}.AppImage"
 
-      - name: Build standalone .exe (Windows)
-        if: runner.os == 'Windows'
-        shell: bash
-        run: |
-          set -e
-          APP_VER="$(cat build/display-version.txt 2>/dev/null || true)"
-          if [ -z "$APP_VER" ]; then APP_VER="${GITHUB_REF_NAME#v}"; fi
-          if [ -z "$APP_VER" ]; then APP_VER="dev"; fi
-          OUT="build/packages"; mkdir -p "$OUT"
-
-          APP_SRC="$(find build/compose/binaries/main-release/app -maxdepth 1 -mindepth 1 -type d | head -n1)"
-          echo "app-image: $APP_SRC"
-          LAUNCHER="$(ls "$APP_SRC"/*.exe 2>/dev/null | head -n1 | xargs -I{} basename {})"
-          echo "launcher: $LAUNCHER"
-
-          curl -fL -o 7zextra.7z "https://www.7-zip.org/a/7z2301-extra.7z"
-          7z x 7zextra.7z -o7zextra -y > /dev/null
-
-          ( cd "$APP_SRC" && 7z a -t7z -mx=7 "$GITHUB_WORKSPACE/payload.7z" . > /dev/null )
-
-          printf ';!@Install@!UTF-8!\r\nRunProgram="\\"%%%%T\\\\bin\\\\%s\\""\r\nGUIMode="2"\r\n;!@InstallEnd@!\r\n' "$LAUNCHER" > sfx_config.txt
-          cat sfx_config.txt
-
-          SFX_MODULE="$(find 7zextra -iname '7zSD.sfx' | grep 'x64' || find 7zextra -iname '7zSD.sfx' | head -n1)"
-          cat "$SFX_MODULE" sfx_config.txt payload.7z > "$OUT/WiFi-Audio-Streaming-${APP_VER}-windows-x64.exe"
-          ls -la "$OUT"
-
       - name: Rename dmg per architecture (macOS)
         if: runner.os == 'macOS'
         shell: bash
@@ -169,7 +142,6 @@ jobs:
             build/packages/*.zip
             build/packages/*.tar.gz
             build/packages/*.AppImage
-            build/packages/*.exe
           retention-days: 30
           if-no-files-found: ignore # Matrix platforms only compile their relative target outputs
 
@@ -203,7 +175,6 @@ jobs:
         uses: actions/attest-build-provenance@v3
         with:
           subject-path: |
-            ./release-assets/**/*.exe
             ./release-assets/**/*.deb
             ./release-assets/**/*.rpm
             ./release-assets/**/*.dmg

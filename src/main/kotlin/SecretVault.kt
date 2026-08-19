@@ -16,21 +16,23 @@
  */
 
 import java.io.File
+import java.nio.file.Files
+import java.nio.file.StandardCopyOption
 import java.util.Base64
 import java.util.concurrent.TimeUnit
 
 /**
- * Custodia per i segreti, delegata all'OS.
+ * Secret storage, delegated to the OS.
  *
- * Su desktop non c'e' sandbox: il file di configurazione lo legge qualunque
- * programma giri col tuo utente, quindi la chiave precondivisa non puo' starci
- * in chiaro. Ogni piattaforma ha gia' il posto giusto dove metterla, e questo
- * oggetto si limita a scegliere quello disponibile.
+ * There is no sandbox on the desktop: the configuration file is readable by
+ * anything running as your user, so the pre-shared key cannot sit in it in
+ * cleartext. Every platform already has the right place to keep it, and this
+ * object does no more than pick whichever one is available.
  *
- * Va detto cosa NON protegge: un processo che gira come te puo' comunque
- * chiedere all'OS di decifrare, esattamente come root su Android. Serve contro
- * le copie a riposo — export del registro, backup, dotfile sincronizzati, dischi
- * portati altrove — e contro l'esposizione accidentale.
+ * Worth stating what this does not protect: a process running as you can still
+ * ask the OS to decrypt, exactly as root can on Android. It is there for copies
+ * at rest - registry exports, backups, synced dotfiles, disks read elsewhere -
+ * and for accidental exposure.
  */
 object SecretVault {
 
@@ -59,6 +61,39 @@ object SecretVault {
         backend?.let { runCatching { it.clear(name) } }
     }
 
+    /**
+     * Health of the credential store, distinguishing "there is nothing to talk to"
+     * from "there is, but it does not work". [NoStore] is decided cheaply from the
+     * detected backend; [Failing] comes from actually writing, reading back, and
+     * clearing a probe value, which catches a locked keyring, a broken DPAPI, or a
+     * Secret Service that answers but refuses to store. The result is cached: the
+     * probe touches the real store (and may prompt to unlock it) exactly once.
+     */
+    sealed class Health {
+        object Ok : Health()
+        /** No usable backend at all. */
+        object NoStore : Health()
+        /** A backend exists but a store/read-back probe failed. */
+        data class Failing(val detail: String) : Health()
+    }
+
+    @Volatile private var cachedHealth: Health? = null
+
+    fun health(force: Boolean = false): Health {
+        if (!force) cachedHealth?.let { return it }
+        val b = backend ?: return Health.NoStore.also { cachedHealth = it }
+        val probe = "wfas-selftest"
+        val value = "ok-" + java.lang.Long.toHexString(System.nanoTime())
+        val result = runCatching {
+            if (!b.store(probe, value)) return@runCatching Health.Failing("write was rejected")
+            val readBack = b.load(probe)
+            runCatching { b.clear(probe) }
+            if (readBack == value) Health.Ok else Health.Failing("value could not be read back")
+        }.getOrElse { Health.Failing(it.message ?: it.javaClass.simpleName) }
+        cachedHealth = result
+        return result
+    }
+
     private fun detect(): Backend? = when (ConfigPaths.os) {
         HostOs.WINDOWS -> DpapiBackend.takeIf { it.usable() }
         HostOs.MACOS   -> MacKeychainBackend.takeIf { it.usable() }
@@ -67,10 +102,10 @@ object SecretVault {
     }
 
     // ── Windows ──────────────────────────────────────────────────────────────
-    // DPAPI cifra con una chiave derivata dalle credenziali di login: il blob
-    // non si apre su un'altra macchina ne' sotto un altro account. Lo teniamo in
-    // un file accanto alla configurazione, cosi' il modello resta "per nome"
-    // come sugli altri sistemi.
+    // DPAPI encrypts with a key derived from the login credentials, so the blob
+    // does not open on another machine or under another account. We keep it in a
+    // file next to the configuration, which keeps the "by name" model the other
+    // platforms use.
     private object DpapiBackend : Backend {
         override val label = "Windows DPAPI"
 
@@ -103,10 +138,48 @@ object SecretVault {
             return out
         }
 
+        // Written through a temporary file and moved into place. A direct write
+        // that dies halfway leaves the store truncated, and everything in it is
+        // gone: this file holds every secret, not one. Permissions are narrowed
+        // while the temporary file is still empty, so no content is ever briefly
+        // readable at the default.
         private fun writeAll(entries: Map<String, String>) {
             val f = file
             f.parentFile?.let { if (!it.exists()) it.mkdirs() }
-            f.writeText(entries.entries.joinToString("\n") { "${it.key}=${it.value}" } + "\n")
+            val text = entries.entries.joinToString("\n") { "${it.key}=${it.value}" } + "\n"
+            val tmp = File(f.parentFile ?: File("."), f.name + ".tmp")
+            runCatching { if (!tmp.exists()) tmp.createNewFile() }
+            ownerOnly(tmp)
+            tmp.writeText(text)
+            val moved = runCatching {
+                Files.move(
+                    tmp.toPath(), f.toPath(),
+                    StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE
+                )
+                true
+            }.getOrElse {
+                runCatching {
+                    Files.move(tmp.toPath(), f.toPath(), StandardCopyOption.REPLACE_EXISTING)
+                    true
+                }.getOrDefault(false)
+            }
+            if (!moved) {
+                f.writeText(text)
+                runCatching { tmp.delete() }
+            }
+            ownerOnly(f)
+        }
+
+        // DPAPI already ties the blob to this account, so this is defence in depth
+        // rather than the control that matters. Windows has no POSIX bits: clearing
+        // "everyone" and granting the owner back is what there is.
+        private fun ownerOnly(f: File) {
+            runCatching {
+                f.setReadable(false, false)
+                f.setWritable(false, false)
+                f.setReadable(true, true)
+                f.setWritable(true, true)
+            }
         }
 
         override fun store(name: String, value: String): Boolean {
@@ -118,8 +191,8 @@ object SecretVault {
 
         override fun load(name: String): String? {
             val blob = readAll()[name] ?: return null
-            // Un blob che non si apre viene da un altro account o da un'altra
-            // macchina: e' rumore, non un errore da propagare.
+            // A blob that will not open came from another account or another
+            // machine: that is noise, not an error worth propagating.
             return runCatching { unprotect(blob) }.getOrNull()
         }
 
@@ -136,9 +209,10 @@ object SecretVault {
         fun usable(): Boolean = File("/usr/bin/security").canExecute()
 
         override fun store(name: String, value: String): Boolean {
-            // -U aggiorna se esiste. Il valore passa come argomento: su macOS
-            // 'ps' mostra gli argomenti solo allo stesso utente, che e' gia'
-            // fuori dal modello di minaccia, ma resta la parte meno elegante.
+            // -U updates in place if the entry exists. The value goes on the
+            // argv, which is the least elegant part of this backend: it is only
+            // visible to the same user, already outside the threat model, but
+            // stdin would still be preferable if the tool took it here.
             val code = exec(
                 listOf(
                     "/usr/bin/security", "add-generic-password",
@@ -161,9 +235,9 @@ object SecretVault {
     }
 
     // ── Linux ────────────────────────────────────────────────────────────────
-    // secret-tool parla con il Secret Service (GNOME Keyring, KWallet). Su una
-    // macchina headless non c'e', e li' il vault semplicemente non esiste: la
-    // chiave verra' chiesta o passata da WFAS_AUTH_KEY.
+    // secret-tool talks to the Secret Service (GNOME Keyring, KWallet). On a
+    // headless machine there is none, and there the vault simply does not exist:
+    // the key is prompted for, or supplied through WFAS_AUTH_KEY.
     private object SecretToolBackend : Backend {
         override val label = "libsecret (secret-tool)"
 
@@ -177,7 +251,7 @@ object SecretVault {
 
         override fun store(name: String, value: String): Boolean {
             val bin = binary ?: return false
-            // Il segreto arriva da stdin, quindi non compare in 'ps'.
+            // The secret arrives on stdin, so it never reaches the argv.
             val code = exec(
                 listOf(bin, "store", "--label=$SERVICE", "service", SERVICE, "account", name),
                 stdin = value
@@ -198,14 +272,18 @@ object SecretVault {
     }
 
     private fun exec(cmd: List<String>, stdin: String? = null): Pair<Int, String> {
-        val proc = ProcessBuilder(cmd).redirectErrorStream(false).start()
+        // stderr is discarded by the OS rather than left on a pipe nobody reads: a
+        // child that fills an unread pipe blocks there until the timeout kills it,
+        // and closing the read end instead would hand it an error mid-write.
+        val proc = ProcessBuilder(cmd)
+            .redirectError(ProcessBuilder.Redirect.DISCARD)
+            .start()
         if (stdin != null) {
             proc.outputStream.use { it.write(stdin.toByteArray(Charsets.UTF_8)) }
         } else {
             runCatching { proc.outputStream.close() }
         }
         val out = proc.inputStream.bufferedReader().readText()
-        runCatching { proc.errorStream.close() }
         val finished = proc.waitFor(10, TimeUnit.SECONDS)
         if (!finished) {
             proc.destroyForcibly()

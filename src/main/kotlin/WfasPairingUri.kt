@@ -112,7 +112,7 @@ object WfasPairingUri {
         if (mode != MODE_UNICAST && mode != MODE_MULTICAST) return null
 
         val ip = q["ip"]?.trim().orEmpty()
-        if (ip.isBlank()) return null
+        if (!NetAddr.isLiteralAddress(ip)) return null
 
         val port = q["port"]?.toIntOrNull() ?: return null
         if (port !in 1..65535) return null

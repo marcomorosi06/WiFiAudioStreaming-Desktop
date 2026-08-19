@@ -26,10 +26,9 @@ import javax.crypto.spec.SecretKeySpec
  * Local control channel authentication.
  *
  * `wfas control ...` communicates with the already-running instance over a
- * loopback socket. Up to version 5.2, that socket answered anyone who managed
- * to connect: simply reading the port from a file in /tmp was enough to query
- * the status or terminate another user's stream on the machine. From now on,
- * two distinct proofs are required, and both are necessary:
+ * loopback socket. Loopback is not an identity: on a shared machine every local
+ * account can reach it, so being able to connect proves nothing on its own. Two
+ * distinct proofs are required, and both are necessary:
  *
  *  1. **Session token.** Generated at startup, written to a file readable
  *     only by the owner inside a 0700 directory. This proves "I am a
@@ -88,8 +87,9 @@ object IpcAuth {
      * On Linux, $XDG_RUNTIME_DIR is already a per-user 0700 directory on tmpfs,
      * cleaned up on logout: it is exactly the right place. Elsewhere, we fall back
      * to a user-owned subdirectory in the temp folder, created manually with 0700 permissions.
-     * Under no circumstances do files remain in the shared temp directory, where
-     * the name was predictable and permissions were left to default.
+     * These files never stay in the shared temp directory: the name there is
+     * derived from data anyone can read, and the permissions would be left to
+     * the default.
      */
     fun runtimeDir(): File {
         val xdg = System.getenv("XDG_RUNTIME_DIR")?.trim().orEmpty()
@@ -198,10 +198,10 @@ object IpcAuth {
         runCatching { ProcessHandle.of(pid).map { it.isAlive }.orElse(false) }.getOrDefault(true)
 
     /**
-     * File creator check. In a shared temp directory, another user could place
-     * a `wfas-<pid>.port` file pointing to their own socket, causing the client
-     * to hand over commands and proofs to them: without this check, the control
-     * channel could be hijacked with a simple three-line file.
+     * File creator check. A session file only counts if the account running this
+     * process created it: in a shared temp directory the filename alone says
+     * nothing about who wrote it, and the client is about to send commands and
+     * proofs to whatever socket that file names.
      */
     private fun ownedByCurrentUser(f: File): Boolean = runCatching {
         val owner = Files.getOwner(f.toPath())?.name ?: return@runCatching false
@@ -218,8 +218,8 @@ object IpcAuth {
             true
         }.getOrDefault(false)
         if (!posix) {
-            // Windows: niente POSIX, ma togliere il bit "tutti" e rimetterlo solo
-            // per il proprietario e' comunque un salto di qualita' rispetto al default.
+            // Windows has no POSIX bits, but clearing "everyone" and granting the
+            // owner back is still a clear improvement on the default.
             runCatching {
                 f.setReadable(false, false)
                 f.setWritable(false, false)
