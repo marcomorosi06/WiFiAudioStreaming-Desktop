@@ -268,29 +268,51 @@ private fun resolveInputDevice(name: String?): Mixer.Info? {
 // Main entry point
 // ─────────────────────────────────────────────────────────────────────────────
 
-private fun inheritSecurity(args: CliArgs, settings: AllSettings): CliArgs {
-    if (args.authExplicit) return args
-    val app = settings.app
-    val mode = SecurityMode.fromStringSafe(app.securityMode)
-    if (mode == SecurityMode.OFF) return args
+/**
+ * La sicurezza di una sessione CLI viene solo dalla riga di comando.
+ *
+ * Le impostazioni salvate descrivono la finestra: modo, cifratura e chiave sono
+ * quelle che l'utente ha scelto li'. Ereditarle qui voleva dire che 'wfas
+ * --server' partiva in modo chiave solo perche' una chiave era stata scritta
+ * nelle impostazioni dell'app, senza che niente nel comando lo dicesse - e la
+ * stessa riga si comportava in due modi diversi su due macchine. Senza flag di
+ * autorizzazione la CLI parte in chiaro, punto.
+ *
+ * Resta il percorso opposto, che e' esplicito: se il comando chiede il modo
+ * chiave e non dice quale, la chiave si cerca dove puo' essere stata messa
+ * apposta - prima l'ambiente, poi la custodia di sistema, infine il terminale.
+ * E' lo stesso ordine di [IpcClient]: l'esplicito batte l'implicito.
+ */
+private fun resolveAuthKey(args: CliArgs, settings: AllSettings): CliArgs {
+    if (!SecurityMode.requiresKey(args.authMode)) return args
+    if (args.authKey.isNotBlank()) return args
+    // --qr la chiave se la fabbrica da solo, e 'control' la risolve per conto suo.
+    if (args.qr || args.controlCmd != null) return args
 
-    if (args.controlCmd != null) return args
+    val key = System.getenv(SettingsRepository.ENV_AUTH_KEY)?.takeIf { it.isNotBlank() }
+        ?: settings.app.authKey.takeIf { it.isNotBlank() }
+        ?: promptForAuthKey()
 
-    var key = app.authKey
-    if (mode.requiresKey && key.isBlank()) {
-        key = promptForAuthKey().orEmpty()
-        if (key.isBlank()) return args
+    // Fail-closed: partire comunque vorrebbe dire calcolare la prova su una
+    // stringa vuota, cioe' su un segreto che chiunque puo' indovinare.
+    if (key.isNullOrBlank()) {
+        System.err.println(
+            "Refusing to start: --auth-mode key needs a key and none is available. " +
+                    "Pass --auth-key <key|->, --auth-key-file <path>, or set " +
+                    "${SettingsRepository.ENV_AUTH_KEY}." +
+                    if (SecretVault.available)
+                        " A key kept in the ${SecretVault.label} credential store " +
+                                "('wfas config set security.authKey') is used too."
+                    else ""
+        )
+        kotlin.system.exitProcess(ExitCode.USAGE_ERROR)
     }
-    return args.copy(
-        authMode = mode.name,
-        authKey = key,
-        encrypt = app.encryptionEnabled && mode.requiresKey
-    )
+    return args.copy(authKey = key)
 }
 
 private fun promptForAuthKey(): String? {
     val console = System.console() ?: return null
-    System.err.println("Security mode is KEY and no key is stored on this system.")
+    System.err.println("Key authentication was requested and no key was given on the command line.")
     val chars = runCatching { console.readPassword("Key: ") }.getOrNull() ?: return null
     val value = String(chars).trim()
     java.util.Arrays.fill(chars, '\u0000')
@@ -298,38 +320,13 @@ private fun promptForAuthKey(): String? {
 }
 
 /**
- * Fail-closed. Previously, the key was stored in the file, so it was always
- * present; now it may be missing, and starting anyway would mean streaming
- * audio without the protection configured by the user.
+ * La chiave di un invito vive solo in memoria, per questo processo: non tocca
+ * il file di configurazione ne' la custodia dell'OS. Chiuso il server che
+ * l'ha emessa, l'invito non vale piu' e i dispositivi vanno riappaiati.
  */
-private fun requireAuthKey(args: CliArgs, settings: AllSettings) {
-    if (args.authExplicit) return
-    val mode = SecurityMode.fromStringSafe(settings.app.securityMode)
-    if (!mode.requiresKey) return
-    if (args.authKey.isNotBlank()) return
-    System.err.println(
-        "Refusing to start: security mode is KEY but no key is available. " +
-                "It is not in the ${SecretVault.label} credential store and this session has no terminal to ask. " +
-                "Set ${SettingsRepository.ENV_AUTH_KEY}, or pass --auth-key."
-    )
-    kotlin.system.exitProcess(ExitCode.USAGE_ERROR)
-}
-
 private fun prepareQrKey(args: CliArgs): CliArgs {
-    if (args.authKey.isNotBlank()) return args
-    val all = SettingsRepository.loadSettings()
-    val app = all.app
-    val reusable = app.qrPairingEnabled &&
-            app.authKey.isNotBlank() &&
-            app.authKey != app.manualAuthKey
-    val key = if (reusable) app.authKey else WfasAuth.randomPairingKey()
-    val next = app.copy(
-        securityMode = SecurityMode.KEY.name,
-        authKey = key,
-        qrPairingEnabled = true,
-        encryptionEnabled = true
-    )
-    if (next != app) SettingsRepository.saveSettings(all.copy(app = next))
+    val key = args.authKey.takeIf { it.isNotBlank() }?.also { QrPairingState.adoptSessionKey(it) }
+        ?: QrPairingState.newSessionKey()
     return args.copy(authMode = SecurityMode.KEY.name, authKey = key, encrypt = true)
 }
 
@@ -386,7 +383,7 @@ private fun maybeNotifyUpdate(args: CliArgs) {
 fun runCli(rawArgs: CliArgs) {
     AppDebug.enabled = rawArgs.debug
     val stored = SettingsRepository.loadSettings()
-    val args = inheritSecurity(rawArgs, stored)
+    val args = resolveAuthKey(rawArgs, stored)
     val settings = args.latency
         ?.let { stored.copy(audio = stored.audio.copy(latencyMs = it)) }
         ?: stored
@@ -560,7 +557,6 @@ private fun handleServerConsoleCommand(
 
 private suspend fun runCliServer(rawArgs: CliArgs, settings: AllSettings) {
     val args = if (rawArgs.qr) prepareQrKey(rawArgs) else rawArgs
-    requireAuthKey(args, settings)
     assertPortFree(args.port,    "streaming", args)
     assertPortFree(args.micPort, "mic",       args)
     if (args.rtp)  assertPortFree(args.rtpPort,  "RTP",  args)
@@ -659,6 +655,11 @@ private suspend fun runCliServer(rawArgs: CliArgs, settings: AllSettings) {
     viz?.start()
 
     NetworkHandler_v1.configureSecurity(args.authMode, args.authKey, args.encrypt)
+    // 'wfas pair invite' da un altro terminale chiede l'invito a questo
+    // processo, perche' e' qui che vive la chiave. Solo con --qr: su un server
+    // partito con una chiave scelta dall'utente, emettere un invito vorrebbe
+    // dire sostituirgliela sotto i piedi.
+    if (args.qr) PairRuntime.issuer = PairRuntime.cliIssuer(args)
     if (args.authMode == "ASK") {
         if (!ConsoleInput.hasTty && viz == null && !args.json) {
             err(yellow("!") + " Security mode is ASK but this session has no terminal:")
@@ -790,7 +791,6 @@ private suspend fun runCliServer(rawArgs: CliArgs, settings: AllSettings) {
 // ─────────────────────────────────────────────────────────────────────────────
 
 private suspend fun runCliClient(args: CliArgs, settings: AllSettings) {
-    requireAuthKey(args, settings)
     val outputDevice = resolveOutputDevice(args.outputDevice)
     if (outputDevice == null) {
         err(red("!") + " No audio output device found.")

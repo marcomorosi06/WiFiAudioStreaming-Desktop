@@ -36,6 +36,15 @@ enum class SecurityMode {
 
         fun isQrUiMode(uiMode: String): Boolean = uiMode.equals(UI_MODE_QR, ignoreCase = true)
 
+        /**
+         * Il pairing QR e' attivo davvero: il flag da solo non basta, resta
+         * acceso anche dopo essere passati a OFF. Serve a distinguere la chiave
+         * di sessione - generata da un invito, mai salvata - dalla passphrase
+         * scritta a mano, che invece si conserva.
+         */
+        fun isQrPairing(storedMode: String?, qrPairing: Boolean): Boolean =
+            qrPairing && requiresKey(storedMode)
+
         fun encryptionForced(uiMode: String, multicast: Boolean): Boolean =
             multicast && isQrUiMode(uiMode)
 

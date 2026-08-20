@@ -297,9 +297,12 @@ object IpcServer {
                 buildResponse(if (ok) "ok" else "error", mapOf("handled" to ok))
             }
             is ControlCommand.PairInvite -> {
-                val invite = PairRuntime.generate(args.port, args.multicast, cmd.forceNewKey)
+                val invite = PairRuntime.generate(cmd.forceNewKey)
                 if (invite == null) {
-                    buildResponse("error", mapOf("message" to "no local address"))
+                    buildResponse("error", mapOf(
+                        "message" to "this instance is not issuing pairing invites: " +
+                                "start the server with --qr, or use the app"
+                    ))
                 } else {
                     buildResponse("ok", mapOf(
                         "uri"       to invite.uri,

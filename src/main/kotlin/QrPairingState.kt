@@ -29,6 +29,42 @@ object QrPairingState {
     @Volatile
     private var encryptionForcedByInvite = false
 
+    /**
+     * La chiave del pairing QR, e solo lei: vive qui, in memoria, per la durata
+     * di questo processo. Non finisce nel file di configurazione ne' nella
+     * custodia dell'OS, e non viene ripresa al prossimo avvio. Un invito vale
+     * finche' resta acceso il server che l'ha emesso; chiuso quello, la chiave
+     * non esiste piu' da nessuna parte e i dispositivi vanno riappaiati.
+     *
+     * Quello che si conserva e' solo la scelta del modo QR, che non e' un
+     * segreto. La passphrase scritta a mano continua a vivere in
+     * [AppSettings.manualAuthKey], separata da questa.
+     */
+    @Volatile
+    private var sessionKey: String = ""
+
+    fun sessionKey(): String = sessionKey
+
+    fun newSessionKey(): String = WfasAuth.randomPairingKey().also { sessionKey = it }
+
+    fun adoptSessionKey(key: String) { sessionKey = key }
+
+    fun clearSessionKey() { sessionKey = "" }
+
+    /**
+     * All'avvio il modo QR non ha ancora una chiave: quella della sessione
+     * precedente non e' stata salvata. Ne conia una subito, perche' un server
+     * in modo chiave senza chiave non potrebbe accettare nessuno - e in
+     * multicast la cifratura si rifiuterebbe proprio di partire.
+     */
+    fun seedSessionKey(settings: AppSettings): AppSettings {
+        if (!SecurityMode.isQrPairing(settings.securityMode, settings.qrPairingEnabled)) {
+            clearSessionKey()
+            return settings
+        }
+        return settings.copy(authKey = newSessionKey())
+    }
+
     fun dismissInvite() { invite.value = null }
     fun dismissPendingPairing() { pendingPairing.value = null }
     fun clearError() { pairingError.value = null }
@@ -112,8 +148,12 @@ object QrPairingState {
 
     /**
      * Genera un invito. La chiave e' sempre nuova, tranne in multicast quando il
-     * gruppo ha gia' una chiave generata: li' invitare non deve espellere nessuno,
-     * cosa che resta compito esclusivo di [forceNewKey].
+     * gruppo ha gia' una chiave di sessione: li' invitare non deve espellere
+     * nessuno, cosa che resta compito esclusivo di [forceNewKey].
+     *
+     * [applySettings] serve a tenere allineato lo stato in memoria di chi
+     * chiama (la finestra, o il server CLI): la chiave che ci passa non va
+     * salvata da nessuna parte, e [SettingsRepository] la scarta apposta.
      */
     fun generateInvite(
         settings: AppSettings,
@@ -134,26 +174,21 @@ object QrPairingState {
             encryptionForcedByInvite = true
         }
 
-        val currentIsGenerated = settings.authKey.isNotBlank() &&
-            settings.authKey != settings.manualAuthKey &&
-            settings.qrPairingEnabled
-
-        val reuse = multicast && !forceNewKey && currentIsGenerated
+        val reuse = multicast && !forceNewKey && sessionKey.isNotBlank()
 
         val key = if (reuse) {
-            NetworkHandler_v1.mcastSession.value?.key?.takeIf { it.isNotBlank() } ?: settings.authKey
+            (NetworkHandler_v1.mcastSession.value?.key?.takeIf { it.isNotBlank() } ?: sessionKey)
+                .also { adoptSessionKey(it) }
         } else {
-            WfasAuth.randomPairingKey()
+            newSessionKey()
         }
 
-        if (!reuse) {
-            next = next.copy(
-                securityMode = SecurityMode.KEY.name,
-                authKey = key,
-                qrPairingEnabled = true
-            )
-        }
-        if (next !== settings) applySettings(next)
+        next = next.copy(
+            securityMode = SecurityMode.KEY.name,
+            authKey = key,
+            qrPairingEnabled = true
+        )
+        if (next != settings) applySettings(next)
 
         NetworkHandler_v1.configureSecurity(
             SecurityMode.KEY.name, key, next.encryptionEnabled

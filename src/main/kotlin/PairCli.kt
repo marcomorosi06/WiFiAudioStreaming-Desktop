@@ -15,7 +15,6 @@
  * limitations under the Licence.
  */
 
-import java.io.File
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicReference
 
@@ -39,25 +38,53 @@ data class QrRenderOptions(
 
 object PairRuntime {
 
-    fun generate(port: Int, multicast: Boolean, forceNewKey: Boolean): QrInvite? {
-        val all = SettingsRepository.loadSettings()
+    /**
+     * Chi sa emettere un invito in questo processo.
+     *
+     * La chiave del pairing non sta piu' nel file di configurazione, quindi un
+     * invito non puo' piu' nascere leggendolo: lo emette chi ha il server in
+     * mano - la finestra dal proprio stato, il server CLI dal proprio - e chi
+     * lo chiede da fuori ('wfas pair invite') arriva qui attraverso il canale
+     * di controllo. Senza un'istanza accesa non c'e' niente da emettere: un
+     * invito che nessuno puo' onorare non e' un invito.
+     */
+    @Volatile
+    var issuer: ((forceNewKey: Boolean) -> QrInvite?)? = null
+
+    fun generate(forceNewKey: Boolean): QrInvite? = issuer?.invoke(forceNewKey)
+
+    /**
+     * Emettitore per un server CLI: lo stato vivo sono gli argomenti con cui e'
+     * partito, piu' la chiave di sessione. [QrPairingState.generateInvite]
+     * vuole un [AppSettings], ma di quello qui conta solo la parte sicurezza:
+     * il resto e' contorno che non viene ne' letto ne' salvato.
+     */
+    fun cliIssuer(args: CliArgs): (Boolean) -> QrInvite? = { forceNewKey ->
         val ip = NetworkHandler_v1.getLocalIpAddress()
-        if (!multicast && (ip.isBlank() || ip == "0.0.0.0")) return null
-        QrPairingState.invite.value = null
-        QrPairingState.generateInvite(
-            settings = all.app,
-            localIp = ip,
-            port = port,
-            multicast = multicast,
-            forceNewKey = forceNewKey
-        ) { next -> SettingsRepository.saveSettings(all.copy(app = next)) }
-        return QrPairingState.invite.value
+        if (!args.multicast && (ip.isBlank() || ip == "0.0.0.0")) null
+        else {
+            QrPairingState.invite.value = null
+            QrPairingState.generateInvite(
+                settings = AppSettings(
+                    securityMode      = SecurityMode.KEY.name,
+                    authKey           = QrPairingState.sessionKey(),
+                    qrPairingEnabled  = true,
+                    encryptionEnabled = args.encrypt
+                ),
+                localIp = ip,
+                port = args.port,
+                multicast = args.multicast,
+                forceNewKey = forceNewKey
+            ) { next -> QrPairingState.adoptSessionKey(next.authKey) }
+            QrPairingState.invite.value
+        }
     }
 
     fun disable(): Boolean {
         val all = SettingsRepository.loadSettings()
         val app = all.app
         if (!app.qrPairingEnabled) return false
+        QrPairingState.clearSessionKey()
         val target = if (app.manualAuthKey.isBlank()) SecurityMode.OFF.name else SecurityMode.KEY.name
         val next = WfasAuth.nextSecurityState(
             storedMode = app.securityMode,
@@ -142,33 +169,32 @@ object PairCli {
     // invite / regenerate
     // ─────────────────────────────────────────────────────────────────────────
 
-    private class Source(val port: Int, val multicast: Boolean, val pid: String?) {
-        val live: Boolean get() = pid != null
-        fun make(forceNewKey: Boolean): QrInvite? =
-            (if (live) PairIpc.request(forceNewKey)?.invite else null)
-                ?: PairRuntime.generate(port, multicast, forceNewKey)
+    /**
+     * L'istanza che emette gli inviti. Ora ce n'e' sempre una: la chiave sta
+     * nella sua memoria, quindi non esiste piu' un invito emesso da nessuno.
+     */
+    private class Source(val pid: String?) {
+        fun make(forceNewKey: Boolean): QrInvite? = PairIpc.request(forceNewKey)?.invite
     }
 
+    /**
+     * Un invito esiste solo finche' esiste il server che l'ha emesso: la chiave
+     * vive nella memoria di quel processo e non viene salvata da nessuna parte.
+     * Senza un'istanza accesa non c'e' niente da stampare - il codice sarebbe
+     * gia' scaduto nel momento in cui compare.
+     */
     private fun doInvite(forceNewKey: Boolean, args: CliArgs, opts: QrRenderOptions): Int {
-        val remote = PairIpc.request(forceNewKey)
-        val source = if (remote != null) Source(remote.port, remote.multicast, remote.pid)
-                     else Source(args.port, args.multicast, null)
-
-        if (remote == null && forceNewKey && !SettingsRepository.loadSettings().app.qrPairingEnabled) {
-            return fail(
-                "QR pairing is off and no server is running: there is no key to replace. " +
-                    "Run 'wfas pair invite' first.",
-                args.json, ExitCode.USAGE_ERROR
-            )
-        }
-
-        val invite = remote?.invite ?: source.make(forceNewKey) ?: return fail(
-            "Could not determine a local IP address for this machine.",
-            args.json, ExitCode.RESOURCE_ERROR
+        val remote = PairIpc.request(forceNewKey) ?: return fail(
+            "No running instance to invite to. The key in a pairing code lives only in the " +
+                "memory of the server that issued it, so there is nothing to pair with until " +
+                "one is up: start it with 'wfas --server --qr', or open the app.",
+            args.json, ExitCode.NOT_FOUND
         )
+        val source = Source(remote.pid)
+        val invite = remote.invite
 
         if (args.json) {
-            println(inviteJson(invite, source.live))
+            println(inviteJson(invite))
             return ExitCode.OK
         }
         if (args.quiet) {
@@ -288,10 +314,8 @@ object PairCli {
         val out = ArrayList<String>()
 
         out += ""
-        out += "  " + bold("WFAS pairing invite") + when {
-            source.live -> dim("  running server, PID ${source.pid}")
-            else        -> dim("  no server running yet")
-        }
+        out += "  " + bold("WFAS pairing invite") +
+                (source.pid?.let { dim("  running server, PID $it") } ?: "")
         out += ""
 
         if (opts.enabled && warn == null) {
@@ -308,8 +332,6 @@ object PairCli {
         if (invite.encryptionForced)
             out += field("Encryption", green("on") + " " + dim("turned on for this invite"), cols)
         out += field("Link", invite.uri, cols)
-        if (!source.live)
-            out += "  ${dim("Saved to the config: start the server with 'wfas --server' to accept it.")}"
         out += ""
         val fits = out.size + 2 < TerminalSize.rows - 1
         val inPlace = live && fits
@@ -344,7 +366,7 @@ object PairCli {
         return value.chunked(width).mapIndexed { i, c -> if (i == 0) head + c else indent + c }
     }
 
-    private fun inviteJson(invite: QrInvite, live: Boolean): String = jsonObject(
+    private fun inviteJson(invite: QrInvite): String = jsonObject(
         "status" to "ok",
         "uri" to invite.uri,
         "deeplink" to WfasPairingUri.build(
@@ -360,7 +382,7 @@ object PairCli {
         "expires_in" to remaining(invite).coerceAtLeast(0L),
         "ttl" to WfasPairingUri.PAIRING_TTL_SECONDS,
         "encryption_forced" to invite.encryptionForced,
-        "source" to if (live) "running_server" else "offline"
+        "source" to "running_server"
     )
 
     // ─────────────────────────────────────────────────────────────────────────
@@ -368,12 +390,12 @@ object PairCli {
     // ─────────────────────────────────────────────────────────────────────────
 
     fun serverInvite(args: CliArgs, forceNewKey: Boolean = false) {
-        val invite = PairRuntime.generate(args.port, args.multicast, forceNewKey)
+        val invite = PairRuntime.generate(forceNewKey)
         if (invite == null) {
             if (!args.json) System.err.println("  " + red("!") + " No local address to invite on.")
             return
         }
-        if (args.json) { println(inviteJson(invite, false)); return }
+        if (args.json) { println(inviteJson(invite)); return }
         if (args.quiet) { println(invite.uri); return }
 
         val opts = args.qrOptions()
@@ -428,7 +450,6 @@ object PairCli {
             multicast = payload.isMulticast,
             authMode = SecurityMode.KEY.name,
             authKey = payload.keyBase64,
-            authExplicit = true,
             encrypt = true,
             fromInvite = true,
             inviteEpoch = payload.mcastEpoch,
@@ -524,7 +545,9 @@ object PairCli {
         val app = SettingsRepository.loadSettings().app
         val registered = ProtocolRegistrar.isRegistered()
         val running = PairIpc.findInstance()
-        val generated = app.authKey.isNotBlank() && app.authKey != app.manualAuthKey && app.qrPairingEnabled
+        // In modo QR la chiave e' di sessione: sta nella memoria dell'istanza
+        // accesa, non qui. Da fuori si sa che c'e', non quale sia.
+        val sessionOnly = SecurityMode.isQrPairing(app.securityMode, app.qrPairingEnabled)
 
         if (json) {
             println(
@@ -533,8 +556,8 @@ object PairCli {
                     "qr_pairing" to app.qrPairingEnabled,
                     "security_mode" to app.securityMode,
                     "ui_mode" to SecurityMode.uiMode(app.securityMode, app.qrPairingEnabled),
-                    "key_present" to app.authKey.isNotBlank(),
-                    "key_generated" to generated,
+                    "key_present" to (app.authKey.isNotBlank() || (sessionOnly && running != null)),
+                    "key_session_only" to sessionOnly,
                     "manual_key_present" to app.manualAuthKey.isNotBlank(),
                     "encryption" to app.encryptionEnabled,
                     "scheme" to ProtocolRegistrar.SCHEME,
@@ -557,10 +580,11 @@ object PairCli {
         val mode = SecurityMode.fromStringSafe(app.securityMode)
         println(
             "  ${dim("Key")}         " + when {
-                app.authKey.isBlank() -> dim("none")
-                !mode.requiresKey     -> yellow("manual") + dim("  stored but unused: security is ${mode.name}")
-                generated             -> green("generated") + dim("  came from an invite")
-                else                  -> yellow("manual")
+                sessionOnly && running != null -> green("in memory") + dim("  generated by the running instance, never stored")
+                sessionOnly                    -> dim("none") + dim("  a new one is generated when a server starts")
+                app.authKey.isBlank()          -> dim("none")
+                !mode.requiresKey              -> yellow("manual") + dim("  stored but unused: security is ${mode.name}")
+                else                           -> yellow("manual")
             }
         )
         println("  ${dim("Encryption")}  ${if (app.encryptionEnabled) green("on") else dim("off")}")
@@ -636,53 +660,25 @@ object PairIpc {
 
     class Remote(val invite: QrInvite, val port: Int, val multicast: Boolean, val pid: String?)
 
-    fun findInstance(): kotlin.Pair<Int, String>? {
-        val tmpDir = File(System.getProperty("java.io.tmpdir"))
-        val files = tmpDir.listFiles { f -> f.name.startsWith("wfas-") && f.name.endsWith(".port") }
-            ?.sortedByDescending { it.lastModified() } ?: return null
-        for (f in files) {
-            val port = runCatching { f.readText().trim().toIntOrNull() }.getOrNull() ?: continue
-            val pid = f.name.removePrefix("wfas-").removeSuffix(".port")
-            val alive = pid.toLongOrNull()
-                ?.let { ProcessHandle.of(it).map { h -> h.isAlive }.orElse(false) } ?: false
-            if (!alive) continue
-            return port to pid
-        }
-        return null
-    }
-
-    private fun ask(request: String): String? {
-        val found = findInstance() ?: return null
-        return runCatching {
-            java.net.Socket(java.net.InetAddress.getLoopbackAddress(), found.first).use { socket ->
-                socket.soTimeout = 4000
-                val writer = socket.getOutputStream().bufferedWriter()
-                writer.write(request)
-                writer.newLine()
-                writer.flush()
-                socket.getInputStream().bufferedReader().readLine()
-            }
-        }.getOrNull()
-    }
+    /**
+     * L'istanza a cui parlare. Passa da [IpcAuth]: le sessioni stanno in una
+     * cartella 0700 e portano il token dell'handshake, che questa classe non
+     * puo' saltare piu' di quanto possa saltarlo 'wfas control'.
+     */
+    fun findInstance(): kotlin.Pair<Int, String>? =
+        IpcAuth.listSessions().firstOrNull { it.authenticated }
+            ?.let { it.port to it.pid.toString() }
 
     fun handOffDeepLink(uri: String): Boolean {
         val escaped = uri.replace("\\", "\\\\").replace("\"", "\\\"")
-        val response = ask("{\"cmd\": \"deeplink\", \"uri\": \"$escaped\"}") ?: return false
+        val response = IpcClient.requestRaw("{\"cmd\": \"deeplink\", \"uri\": \"$escaped\"}")
+            ?.second ?: return false
         return response.contains("\"status\": \"ok\"")
     }
 
     fun request(forceNewKey: Boolean): Remote? {
-        val found = findInstance() ?: return null
-        val response = runCatching {
-            java.net.Socket(java.net.InetAddress.getLoopbackAddress(), found.first).use { socket ->
-                socket.soTimeout = 4000
-                val writer = socket.getOutputStream().bufferedWriter()
-                writer.write("{\"cmd\": \"pair\", \"rekey\": $forceNewKey}")
-                writer.newLine()
-                writer.flush()
-                socket.getInputStream().bufferedReader().readLine()
-            }
-        }.getOrNull() ?: return null
+        val (session, response) =
+            IpcClient.requestRaw("{\"cmd\": \"pair\", \"rekey\": $forceNewKey}") ?: return null
 
         if (!response.contains("\"status\": \"ok\"")) return null
 
@@ -709,7 +705,7 @@ object PairIpc {
             ),
             port = port,
             multicast = multicast,
-            pid = found.second
+            pid = session.pid.toString()
         )
     }
 }

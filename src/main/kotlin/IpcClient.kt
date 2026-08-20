@@ -173,9 +173,30 @@ object IpcClient {
      */
     private fun resolveKey(args: CliArgs): String? {
         if (args.authKey.isNotBlank()) return args.authKey
+        return storedKey()
+    }
+
+    private fun storedKey(): String? {
         System.getenv(SettingsRepository.ENV_AUTH_KEY)?.takeIf { it.isNotBlank() }?.let { return it }
         return runCatching { SettingsRepository.loadSettings().app.authKey }
             .getOrNull()?.takeIf { it.isNotBlank() }
+    }
+
+    /**
+     * Una richiesta sola, senza il ciclo di 'wfas control'.
+     *
+     * Serve a chi parla con l'istanza viva per altri motivi - un invito, un
+     * deep link - e non ha una riga di comando da cui ricavare la chiave. Passa
+     * comunque dallo stesso handshake: il canale di controllo non ha una porta
+     * di servizio. Ritorna la risposta grezza, o null se non risponde nessuno o
+     * l'autenticazione non passa.
+     */
+    fun requestRaw(payload: String): kotlin.Pair<IpcAuth.Session, String>? {
+        val session = IpcAuth.listSessions().firstOrNull { it.authenticated } ?: return null
+        return when (val outcome = tryOnce(session, payload, storedKey())) {
+            is Outcome.Answered -> session to outcome.response
+            else -> null
+        }
     }
 
     private fun promptForKey(wrong: Boolean, args: CliArgs): String? {

@@ -156,7 +156,7 @@ object CliHelpModel {
             )
         ),
         examples = listOf(
-            "wfas --server"                   to "start a server with the saved settings",
+            "wfas --server"                   to "start a server, unauthenticated and in the clear",
             "wfas --client"                   to "receive from the first server found",
             "wfas --mode discover"            to "list the servers on this network",
             "wfas --mode discover --watch"    to "keep the list updating",
@@ -282,7 +282,7 @@ object CliHelpModel {
             )
         ),
         examples = listOf(
-            "wfas --server"                  to "start with the saved settings",
+            "wfas --server"                  to "start with the saved audio and network settings",
             "wfas --server --port 9500"      to "serve on a non-default port",
             "wfas --server --multicast"      to "serve every listener on the group",
             "wfas --mode server --rtp --sdp" to "server plus RTP, printing the SDP",
@@ -654,7 +654,17 @@ object CliHelpModel {
                         tokens = listOf("--auth-mode"),
                         detail = "off  accept anyone\n" +
                                 "ask  prompt on the terminal for each client that connects\n" +
-                                "key  require the pre-shared key"
+                                "key  require the pre-shared key\n\n" +
+                                "The security of a command line session comes from the command " +
+                                "line, and from nowhere else: a key set in the app protects the " +
+                                "app, and 'wfas --server' starts in the clear whatever the app " +
+                                "window says. That way one command means one thing on every " +
+                                "machine.\n\n" +
+                                "The other direction is explicit, so it is allowed: asking for " +
+                                "key mode without saying which key looks for one where you may " +
+                                "have put it on purpose - " + SettingsRepository.ENV_AUTH_KEY + " " +
+                                "first, then the system credential store, then this terminal. " +
+                                "None found, nothing starts."
                     ),
                     HelpEntry(
                         syntax = "--ask-timeout <sec>",
@@ -697,7 +707,13 @@ object CliHelpModel {
                         tokens = listOf("--qr"),
                         detail = "Server mode. Implies --auth-mode key and --encrypt, so it needs no " +
                                 "--auth-key: the code carries the key it just made. While the " +
-                                "server runs, p prints a new invite and r rotates the key."
+                                "server runs, p prints a new invite and r rotates the key.\n\n" +
+                                "That key lives in this process and nowhere else: it is never " +
+                                "written to the configuration or to the credential store, and it " +
+                                "dies with the server. An invite is worth something only while " +
+                                "the server that issued it is up, and the next one starts from a " +
+                                "key nobody has seen before - so a device paired once is not " +
+                                "paired for good."
                     )
                 )
             ),

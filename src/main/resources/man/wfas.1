@@ -432,6 +432,7 @@ ask  prompt on the terminal for each client that connects
 key  require the pre\-shared key
 .fi
 .RE
+The security of a command line session comes from the command line, and from nowhere else: a key set in the app protects the app, and 'wfas \-\-server' starts in the clear whatever the app window says. That way one command means one thing on every machine.  The other direction is explicit, so it is allowed: asking for key mode without saying which key looks for one where you may have put it on purpose \- WFAS_AUTH_KEY first, then the system credential store, then this terminal. None found, nothing starts.
 .RE
 .TP
 .B \-\-ask\-timeout <sec>
@@ -468,7 +469,7 @@ Requires a key, so pair it with \-\-auth\-key, or use \-\-qr to have one generat
 Generate a key, start encrypted, and print the pairing QR.
 .RS
 .PP
-Server mode. Implies \-\-auth\-mode key and \-\-encrypt, so it needs no \-\-auth\-key: the code carries the key it just made. While the server runs, p prints a new invite and r rotates the key.
+Server mode. Implies \-\-auth\-mode key and \-\-encrypt, so it needs no \-\-auth\-key: the code carries the key it just made. While the server runs, p prints a new invite and r rotates the key.  That key lives in this process and nowhere else: it is never written to the configuration or to the credential store, and it dies with the server. An invite is worth something only while the server that issued it is up, and the next one starts from a key nobody has seen before \- so a device paired once is not paired for good.
 .RE
 .SS QR pairing  (wfas pair <command>)
 .PP
@@ -704,7 +705,7 @@ See also: wfas \-\-help start.
 .SS Getting started
 .TP
 .B wfas \-\-server
-Start a server with the saved settings.
+Start a server, unauthenticated and in the clear.
 .TP
 .B wfas \-\-client
 Receive from the first server found.
@@ -723,7 +724,7 @@ Open the GUI and start serving immediately.
 .SS Server options
 .TP
 .B wfas \-\-server
-Start with the saved settings.
+Start with the saved audio and network settings.
 .TP
 .B wfas \-\-server \-\-port 9500
 Serve on a non\-default port.
@@ -925,6 +926,10 @@ A unicast server is bound to the address of its connected client for the whole s
 The \-\-sdp flag generates an SDP descriptor based on the configured audio settings. The payload type is L16 (raw PCM) over RTP. Most players, including VLC, ffplay and GStreamer, support this format.
 .PP
 \-\-auth\-mode, \-\-auth\-key and \-\-encrypt protect the native WFAS stream only. RTP, HTTP, DLNA and Snapcast are standard protocols with no authentication and no encryption, so enabling them alongside \-\-encrypt puts the same audio on the network in the clear.
+.PP
+Authorization is never inherited from the desktop application. A key typed into its settings window protects that window; a command line server is authenticated only if the command says so. Asking for key mode without naming a key is the one implicit step, and it is still something you asked for: the key is then read from WFAS_AUTH_KEY, from the system credential store, or from the terminal, in that order.
+.PP
+The key behind a QR pairing invite is different: it is generated on the spot, kept in memory, and never stored. It is valid while the server that issued it runs, and the next server starts from a new one \- pairing a device again is a deliberate act, not a state the machine drifts into.
 .SH LICENSING
 wfas itself is licensed under the European Union Public Licence (EUPL) version 1.2.
 .PP

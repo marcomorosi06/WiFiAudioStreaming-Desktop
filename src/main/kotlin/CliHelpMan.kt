@@ -60,7 +60,18 @@ object CliHelpMan {
 
         "--auth-mode, --auth-key and --encrypt protect the native WFAS stream only. RTP, HTTP, " +
         "DLNA and Snapcast are standard protocols with no authentication and no encryption, so " +
-        "enabling them alongside --encrypt puts the same audio on the network in the clear."
+        "enabling them alongside --encrypt puts the same audio on the network in the clear.",
+
+        "Authorization is never inherited from the desktop application. A key typed into its " +
+        "settings window protects that window; a command line server is authenticated only if " +
+        "the command says so. Asking for key mode without naming a key is the one implicit " +
+        "step, and it is still something you asked for: the key is then read from " +
+        "WFAS_AUTH_KEY, from the system credential store, or from the terminal, in that order.",
+
+        "The key behind a QR pairing invite is different: it is generated on the spot, kept in " +
+        "memory, and never stored. It is valid while the server that issued it runs, and the " +
+        "next server starts from a new one - pairing a device again is a deliberate act, not a " +
+        "state the machine drifts into."
     )
 
     private val LICENSING = listOf(

@@ -100,6 +100,7 @@ import java.awt.image.BufferedImage
 import javax.imageio.ImageIO
 
 fun applySecurityUiMode(settings: AppSettings, uiMode: String): AppSettings {
+    val wasQr = SecurityMode.isQrPairing(settings.securityMode, settings.qrPairingEnabled)
     val next = WfasAuth.nextSecurityState(
         storedMode = settings.securityMode,
         authKey = settings.authKey,
@@ -107,9 +108,18 @@ fun applySecurityUiMode(settings: AppSettings, uiMode: String): AppSettings {
         qrPairingEnabled = settings.qrPairingEnabled,
         uiMode = uiMode
     )
+    // Entrare nel modo QR significa cominciare una sessione di pairing nuova:
+    // la chiave la conia [QrPairingState] e resta solo in memoria. Uscirne la
+    // butta - non c'e' nessun posto da cui potrebbe tornare.
+    val nowQr = SecurityMode.isQrPairing(next.storedMode, next.qrPairingEnabled)
+    val key = when {
+        nowQr && !wasQr -> QrPairingState.newSessionKey()
+        nowQr           -> next.authKey
+        else            -> next.authKey.also { QrPairingState.clearSessionKey() }
+    }
     return settings.copy(
         securityMode = next.storedMode,
-        authKey = next.authKey,
+        authKey = key,
         manualAuthKey = next.manualAuthKey,
         qrPairingEnabled = next.qrPairingEnabled
     )

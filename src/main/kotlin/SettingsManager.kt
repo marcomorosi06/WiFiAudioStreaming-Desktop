@@ -289,7 +289,14 @@ object SettingsRepository {
             SecretVault.clear(VAULT_MANUAL_KEY)
             return
         }
-        settings.app.authKey.let {
+        // La chiave del pairing QR e' di sessione: la genera un invito e muore
+        // con il processo che l'ha emesso. Salvarla vorrebbe dire che un
+        // dispositivo appaiato una volta resta appaiato per sempre, senza che
+        // nessuno lo abbia piu' deciso. Si conserva solo la passphrase scritta
+        // a mano, che l'utente ritrova uscendo dal modo QR.
+        if (SecurityMode.isQrPairing(settings.app.securityMode, settings.app.qrPairingEnabled)) {
+            SecretVault.clear(VAULT_AUTH_KEY)
+        } else settings.app.authKey.let {
             if (it.isNotEmpty()) SecretVault.store(VAULT_AUTH_KEY, it) else SecretVault.clear(VAULT_AUTH_KEY)
         }
         settings.app.manualAuthKey.let {
@@ -307,22 +314,33 @@ object SettingsRepository {
         val legacyAuth   = stored.app.authKey.takeIf { it.isNotEmpty() }
         val legacyManual = stored.app.manualAuthKey.takeIf { it.isNotEmpty() }
         val migrating    = legacyAuth != null || legacyManual != null
+        // Vedi persistSecrets: in modo QR la chiave attiva non si eredita da
+        // niente, nemmeno da una copia lasciata da una versione precedente.
+        val ephemeral    = SecurityMode.isQrPairing(stored.app.securityMode, stored.app.qrPairingEnabled)
 
         // A secret is only removed from its old home once it is provably in the
         // new one: `store` reports whether the vault took it. Without a desktop
         // session there is no vault at all, and there the plaintext has to stay
         // where it is - losing the user's key is worse than leaving a copy in a
         // place we would rather it was not.
+        // In modo QR la chiave attiva non viene messa al sicuro: viene buttata,
+        // ed e' quello il punto. La passphrase manuale invece si migra come
+        // sempre, altrimenti uscire dal modo QR non la ritroverebbe piu'.
         val secured = when {
             !migrating                  -> false
             !stored.app.rememberAuthKey -> true   // asked not to keep it: dropping it is the point
             !SecretVault.available      -> false
-            else -> (legacyAuth?.let { SecretVault.store(VAULT_AUTH_KEY, it) } ?: true) &&
+            else -> (legacyAuth?.takeUnless { ephemeral }
+                        ?.let { SecretVault.store(VAULT_AUTH_KEY, it) } ?: true) &&
                     (legacyManual?.let { SecretVault.store(VAULT_MANUAL_KEY, it) } ?: true)
         }
 
         val env = System.getenv(ENV_AUTH_KEY)?.takeIf { it.isNotBlank() }
-        val auth   = env ?: legacyAuth   ?: SecretVault.load(VAULT_AUTH_KEY).orEmpty()
+        val vaulted = SecretVault.load(VAULT_AUTH_KEY).orEmpty()
+        // Una chiave QR finita nella custodia da una versione precedente va
+        // tolta di li', non solo ignorata: e' un segreto che nessuno usa piu'.
+        if (ephemeral && vaulted.isNotEmpty() && SecretVault.available) SecretVault.clear(VAULT_AUTH_KEY)
+        val auth   = if (ephemeral) "" else env ?: legacyAuth ?: vaulted
         val manual = legacyManual ?: SecretVault.load(VAULT_MANUAL_KEY).orEmpty()
 
         val hydrated = stored.copy(app = stored.app.copy(authKey = auth, manualAuthKey = manual))

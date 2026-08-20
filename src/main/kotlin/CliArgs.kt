@@ -104,7 +104,6 @@ data class CliArgs(
     val authMode:        String          = "OFF",
     val authKey:         String          = "",
     val encrypt:         Boolean         = false,
-    val authExplicit:    Boolean         = false,
     val fromInvite:      Boolean         = false,
     val inviteEpoch:     Long?           = null,
 ) {
@@ -196,7 +195,6 @@ data class CliArgs(
             var qrPlain         = false
             var qrInvert        = false
             var qrShowKey       = false
-            var authExplicit    = false
             var networkIface    = "Auto"
             var useNativeEngine = true
             var viz             = false
@@ -605,7 +603,6 @@ data class CliArgs(
                     "--auth-mode" -> {
                         val v = nextArg(args, i, "--auth-mode") ?: parseError("--auth-mode requires a value: off, ask or key")
                         i++
-                        authExplicit = true
                         authMode = when (v.lowercase()) {
                             "off"  -> "OFF"
                             "ask"  -> "ASK"
@@ -617,19 +614,16 @@ data class CliArgs(
                         val v = nextArg(args, i, "--auth-key") ?: parseError("--auth-key requires a value")
                         i++
                         authKey = authKeyFromArg(v)
-                        authExplicit = true
                         if (authMode == "OFF") authMode = "KEY"
                     }
                     "--auth-key-file" -> {
                         val v = nextArg(args, i, "--auth-key-file") ?: parseError("--auth-key-file requires a path")
                         i++
                         authKey = authKeyFromFile(v)
-                        authExplicit = true
                         if (authMode == "OFF") authMode = "KEY"
                     }
                     "--encrypt" -> {
                         encrypt = true
-                        authExplicit = true
                         if (authMode == "OFF") authMode = "KEY"
                     }
                     "--check-update", "--check-updates" -> checkUpdate = true
@@ -707,15 +701,8 @@ data class CliArgs(
                     parseError("--qr shows a pairing code for a server. Use 'wfas pair connect <link>' to join one.")
                 authMode = SecurityMode.KEY.name
                 encrypt = true
-                authExplicit = true
             }
 
-            if (authMode == SecurityMode.KEY.name && authKey.isBlank() && !qr) {
-                parseError(
-                    "key authentication needs a key. Pass --auth-key <key>, or --qr to have " +
-                            "one generated and shown as a pairing code."
-                )
-            }
             if (encrypt && authMode != SecurityMode.KEY.name) {
                 parseError("--encrypt needs a key: it implies --auth-mode key, not '${authMode.lowercase()}'.")
             }
@@ -795,7 +782,6 @@ data class CliArgs(
                 authMode        = authMode,
                 authKey         = authKey,
                 encrypt         = encrypt,
-                authExplicit    = authExplicit,
             )
         }
 

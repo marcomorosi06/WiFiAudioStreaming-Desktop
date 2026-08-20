@@ -2911,6 +2911,18 @@ object NetworkHandler_v1 {
 
                             when (SecurityMode.fromStringSafe(securityMode)) {
                                 SecurityMode.KEY -> {
+                                    // Fail closed. Senza chiave la prova si
+                                    // calcolerebbe su una stringa vuota, cioe'
+                                    // su un segreto che chiunque puo'
+                                    // indovinare: meglio rifiutare tutti che
+                                    // accettare chi ha capito che non c'e'
+                                    // niente da sapere. In modo QR e' lo stato
+                                    // normale finche' non si genera un invito.
+                                    if (authKey.isBlank()) {
+                                        AppDebug.log("[SERVER][UNICAST] key mode without a key, refusing $clientAddress")
+                                        socket.send(Datagram(buildPacket { writeText(UNAUTHORIZED_MESSAGE) }, clientAddress))
+                                        continue
+                                    }
                                     val cproof = WfasAuth.getToken(msg, "cproof")
                                     val cnonce = WfasAuth.getToken(msg, "cnonce") ?: ""
                                     if (cproof == null) {
@@ -4635,7 +4647,9 @@ fun main(args: Array<String>) {
 
 fun startGuiApplication(cliArgs: CliArgs) = application {
     val loadedSettings = SettingsRepository.loadSettings()
-    var appSettings    by remember { mutableStateOf(loadedSettings.app) }
+    // La chiave del pairing QR non e' stata salvata: se ne conia una per questa
+    // sessione, altrimenti il modo chiave partirebbe senza chiave.
+    var appSettings    by remember { mutableStateOf(QrPairingState.seedSessionKey(loadedSettings.app)) }
     var audioSettings  by remember { mutableStateOf(loadedSettings.audio) }
     var streamingPort  by remember { mutableStateOf(loadedSettings.streamingPort) }
     var micPort        by remember { mutableStateOf(loadedSettings.micPort) }
@@ -4965,6 +4979,22 @@ fun startGuiApplication(cliArgs: CliArgs) = application {
             )
             if (forced && !appSettings.encryptionEnabled) {
                 appSettings = appSettings.copy(encryptionEnabled = true)
+            }
+        }
+        // Un invito chiesto da fuori ('wfas pair invite') deve nascere dallo
+        // stato di questa finestra: la chiave sta qui, non nel file, e chi la
+        // rinnova deve poterla far vedere anche alla finestra stessa.
+        LaunchedEffect(appSettings, streamingPort, isMulticastMode) {
+            PairRuntime.issuer = { forceNewKey ->
+                QrPairingState.invite.value = null
+                QrPairingState.generateInvite(
+                    settings = appSettings,
+                    localIp = NetworkHandler_v1.getLocalIpAddress(),
+                    port = streamingPort.toIntOrNull() ?: 9090,
+                    multicast = isMulticastMode,
+                    forceNewKey = forceNewKey
+                ) { next -> appSettings = next }
+                QrPairingState.invite.value
             }
         }
         LaunchedEffect(appSettings.securityMode, appSettings.authKey, appSettings.encryptionEnabled) {
