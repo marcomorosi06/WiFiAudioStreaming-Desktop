@@ -274,7 +274,7 @@ compose.desktop {
         jvmArgs += baseArgs
 
         nativeDistributions {
-            targetFormats(TargetFormat.Dmg, TargetFormat.Deb, TargetFormat.Rpm)
+            targetFormats(TargetFormat.Dmg, TargetFormat.Deb, TargetFormat.Rpm, TargetFormat.Msi, TargetFormat.Exe)
 
             packageName = "WiFi Audio Streaming"
             packageVersion = appVersion
