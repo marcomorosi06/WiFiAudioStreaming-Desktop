@@ -26,7 +26,7 @@ This application allows you to send your PC's audio to any device on the same lo
 
 # 📸 Overview
 
-*Screenshots of the Material You interface.*
+*Screenshots of the Material You interface. Preview of the upcoming Material You interface (v1.2). Current stable release (v1.1) uses the previous UI.*
 
 <p align="center">
   <img src="https://github.com/marcomorosi06/WiFiAudioStreaming-Desktop/blob/master/images/server.jpg?raw=true" alt="Server Mode"><br>
@@ -105,6 +105,20 @@ https://private-user-images.githubusercontent.com/229497341/628825916-c36bb746-a
 
 - **Bilingual Support (EN/IT)**
   Automatically adapts to your OS language.
+
+---
+
+## ⚠️ Security & Encryption Notice
+
+The optional WFAS encryption feature is provided **"AS IS"** and is intended primarily as a lightweight privacy and traffic-protection layer for trusted local networks (LAN/P2P).
+
+It is **not intended to provide protection against high-threat attackers, hostile networks, or security-critical environments**, and it should not be relied upon as a substitute for a dedicated secure transport or other security mechanisms where stronger guarantees are required.
+
+Users and integrators are responsible for evaluating whether WFAS's security properties and their network environment are appropriate for their intended use.
+
+The WFAS protocol and its reference implementations are provided under the terms of their respective open-source licenses. No additional security guarantees are implied beyond those explicitly documented by the protocol and implementation.
+
+Security issues should be reported to the project maintainers so they can be investigated and addressed in future releases.
 
 ---
 
