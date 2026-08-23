@@ -8,6 +8,14 @@ This edition introduces **20 global languages** with real-time dynamic localizat
 
 ## 🌟 What's New & Highlights
 
+### 🛡️ Zero Core Protocol & Engine Modifications (100% Wire Compatible)
+> [!IMPORTANT]
+> **No modifications were made to the core WFAS audio engine or the WFAS v2 wire protocol specification.**
+> - All challenge-response HMAC tokens (`snonce`, `sproof`, `cnonce`, `cproof`), packet framing, ChaCha20-Poly1305 encryption payloads, and network primitives remain **100% untouched and fully compliant** with upstream v1.2.
+> - All enhancements are strictly located at the client-side credential management layer (`SecretVault` / `SecretStore`), UI presentation layer (Reactive Compose i18n), and client auto-connect state cleanup.
+
+---
+
 ### 🌐 1. Full 20 Global Languages Support & Real-time Language Switcher
 - **Comprehensive Multilingual Localization**: Full translations for 20 major world languages:
   - 🇬🇧 **English**, 🇻🇳 **Tiếng Việt (Vietnamese)**, 🇮🇹 **Italiano (Italian)**, 🇪🇸 **Español (Spanish)**, 🇫🇷 **Français (French)**, 🇩🇪 **Deutsch (German)**, 🇵🇹 **Português (Portuguese)**, 🇷🇺 **Русский (Russian)**, 🇯🇵 **日本語 (Japanese)**, 🇰🇷 **한국어 (Korean)**, 🇨🇳 **简体中文 (Simplified Chinese)**, 🇹🇼 **繁體中文 (Traditional Chinese)**, 🇸🇦 **العربية (Arabic)**, 🇮🇳 **हिन्दी (Hindi)**, 🇮🇩 **Bahasa Indonesia (Indonesian)**, 🇹🇷 **Türkçe (Turkish)**, 🇵🇱 **Polski (Polish)**, 🇳🇱 **Nederlands (Dutch)**, 🇹🇭 **ไทย (Thai)**, 🇺🇦 **Українська (Ukrainian)**.
@@ -55,7 +63,7 @@ This edition introduces **20 global languages** with real-time dynamic localizat
 - 🍏 **macOS (Apple Silicon & Intel)**: `.dmg` *(Automated via GitHub Actions)*
 
 ### 📱 Android
-- 📱 **Android Package**: `WiFi-Audio-Streaming-Android-v1.2-rebuild.apk` (`37.52 MB`)
+- 📱 **Android Package**: `WiFi-Audio-Streaming-Android-v1.2-rebuild.apk` (`39.48 MB`)
 
 ---
 
