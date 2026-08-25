@@ -3325,6 +3325,10 @@ object NetworkHandler_v1 {
                         var handshakeOk = false
 
                         suspend fun promptKeyAndRestart(wrong: Boolean): Boolean {
+                            if (wrong) {
+                                SecretVault.clearServerKey(serverInfo.ip)
+                                SecretVault.clearServerKey("${serverInfo.ip}:${serverInfo.port}")
+                            }
                             val k = onKeyRequest?.invoke(wrong) ?: return false
                             if (k.isBlank()) return false
                             clientKey = k
@@ -5015,6 +5019,13 @@ fun startGuiApplication(cliArgs: CliArgs) = application {
                 runCatching { kotlinx.coroutines.runBlocking { def.await() } }.getOrDefault(false)
             }
         }
+        var activeConnectingServer by remember { mutableStateOf<ServerInfo?>(null) }
+        var rememberKeyChecked by remember { mutableStateOf(true) }
+
+        LaunchedEffect(appSettings.language) {
+            Strings.setLanguage(appSettings.language)
+        }
+
         var keyRequestWrong by remember { mutableStateOf<Boolean?>(null) }
         val keyDecision = remember { java.util.concurrent.atomic.AtomicReference<kotlinx.coroutines.CompletableDeferred<String?>?>(null) }
         LaunchedEffect(Unit) {
@@ -5070,10 +5081,35 @@ fun startGuiApplication(cliArgs: CliArgs) = application {
                                     onValueChange = { keyText = it },
                                     modifier = Modifier.fillMaxWidth()
                                 )
+                                Spacer(Modifier.height(8.dp))
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Checkbox(
+                                        checked = rememberKeyChecked,
+                                        onCheckedChange = { rememberKeyChecked = it }
+                                    )
+                                    Spacer(Modifier.width(8.dp))
+                                    Text(stringResource("remember_password_label"))
+                                }
                             }
                         },
                         confirmButton = {
-                            Button(onClick = { keyDecision.getAndSet(null)?.complete(keyText); keyRequestWrong = null }) {
+                            Button(onClick = {
+                                val entered = keyText
+                                if (rememberKeyChecked && entered.isNotBlank() && activeConnectingServer != null) {
+                                    val srv = activeConnectingServer!!
+                                    SecretVault.storeServerKey(srv.ip, entered)
+                                    SecretVault.storeServerKey("${srv.ip}:${srv.port}", entered)
+                                    val srvName = srv.ip
+                                    val existing = appSettings.savedServers.filterNot { it.ip == srv.ip || it.name == srvName }
+                                    val updatedSaved = existing + SavedServerItem(id = srvName, name = srvName, ip = srv.ip, port = srv.port)
+                                    val updatedRecent = (listOf(srvName) + appSettings.recentServers.filterNot { it == srvName }).take(10)
+                                    val newApp = appSettings.copy(savedServers = updatedSaved, recentServers = updatedRecent)
+                                    SettingsRepository.saveSettings(AllSettings(app = newApp, audio = audioSettings, streamingPort = streamingPort, micPort = micPort))
+                                    appSettings = newApp
+                                }
+                                keyDecision.getAndSet(null)?.complete(entered)
+                                keyRequestWrong = null
+                            }) {
                                 Text(stringResource("key_dialog_connect"))
                             }
                         },
@@ -5093,7 +5129,8 @@ fun startGuiApplication(cliArgs: CliArgs) = application {
                         "status_server_silent_maybe_outdated",
                         "status_server_busy",
                         "status_unauthorized",
-                        "status_unsupported_format"
+                        "status_unsupported_format",
+                        "status_key_required"
                     )
                 }
 
@@ -5428,21 +5465,16 @@ fun startGuiApplication(cliArgs: CliArgs) = application {
                                 // tentare senza chiave finirebbe comunque in un
                                 // rifiuto, ma dopo aver annunciato la nostra presenza.
                                 val storedKey = target.resolveKey()
-                                if (target.hasKey && storedKey == null) {
-                                    AppDebug.log("[AUTOCONNECT] key for ${target.displayName()} not available in ${SecretVault.label}, skipping")
-                                    connectionStatus = Strings.get("auto_connect_key_locked", target.displayName())
-                                    continue
-                                }
+                                    ?: SecretVault.loadServerKey(target.ip)
+                                    ?: SecretVault.loadServerKey("${target.ip}:$port")
 
+                                val targetServer = knownServer ?: ServerInfo(target.ip, false, port, null)
+                                activeConnectingServer = targetServer
                                 NetworkHandler_v1.clientPresharedKey = storedKey.orEmpty()
                                 NetworkHandler_v1.clientKeyFromInvite = false
                                 NetworkHandler_v1.expectedMcastEpoch = null
-                                // Senza chiave salvata la finestra si apre solo se
-                                // l'utente ha scelto di essere interrotto.
-                                NetworkHandler_v1.clientKeyPromptAllowed =
-                                    appSettings.autoConnectPromptForKey
+                                NetworkHandler_v1.clientKeyPromptAllowed = true
 
-                                val targetServer = knownServer ?: ServerInfo(target.ip, false, port, null)
                                 isStreaming = true
                                 connectionStatus = Strings.get("auto_connect_connecting", target.displayName())
 
@@ -5510,13 +5542,15 @@ fun startGuiApplication(cliArgs: CliArgs) = application {
                                 val mic  = micPort.toIntOrNull() ?: 9092
 
                                 scope.launch {
-                                    // 1. Controllo furbo: l'IP è già stato scoperto in background?
                                     val knownServer = discoveredDevices.values.find { it.ip == ip }
-
-                                    // 2. Auto-rilevamento: se è sconosciuto, eseguiamo il ping silente
                                     val isMulti = knownServer?.isMulticast ?: NetworkHandler_v1.probeIsMulticast(ip, port)
 
                                     val manualServerInfo = ServerInfo(ip, isMulti, port, knownServer?.capabilities, serverAudioSettings = knownServer?.serverAudioSettings)
+                                    activeConnectingServer = manualServerInfo
+                                    val savedKey = SecretVault.loadServerKey(manualServerInfo.ip)
+                                        ?: SecretVault.loadServerKey("${manualServerInfo.ip}:${manualServerInfo.port}")
+                                        ?: ""
+                                    NetworkHandler_v1.clientPresharedKey = savedKey
                                     allowKeyPrompt()
                                     NetworkHandler_v1.endDeviceDiscovery()
                                     NetworkHandler_v1.launchClientInstance(
@@ -5558,12 +5592,6 @@ fun startGuiApplication(cliArgs: CliArgs) = application {
                                 isMulticastMode = isMulticastMode || appSettings.rtpEnabled ||
                                         appSettings.httpEnabled || appSettings.dlnaEnabled || appSettings.snapcastEnabled
 
-                                // A previous auto-start may have left its own (auto-start)
-                                // security on the shared handler. A manual start uses the
-                                // current standard settings, so re-apply them here rather
-                                // than inheriting whatever the last start left behind. The
-                                // settings-change effect above only fires when the settings
-                                // themselves change, which is not the case here.
                                 NetworkHandler_v1.configureSecurity(
                                     appSettings.securityMode, appSettings.authKey, appSettings.encryptionEnabled
                                 )
@@ -5584,7 +5612,6 @@ fun startGuiApplication(cliArgs: CliArgs) = application {
                                         virtualDriverStatus  = NetworkHandler_v1.checkVirtualDriverStatus(appSettings.useNativeEngine)
                                         connectionStatus     = Strings.get("status_inactive")
                                     } else if (key == "status_client_disconnected") {
-                                        // --persist: la sessione e' finita, il server no: resta in ascolto.
                                         if (cliArgs.persist ?: appSettings.serverPersist) {
                                             connectionStatus = Strings.get("status_client_disconnected")
                                         } else scope.launch {
@@ -5603,6 +5630,11 @@ fun startGuiApplication(cliArgs: CliArgs) = application {
                                 NetworkHandler_v1.requestStopCurrentStream()
                             },
                             onConnectToServer = { serverInfo ->
+                                activeConnectingServer = serverInfo
+                                val savedKey = SecretVault.loadServerKey(serverInfo.ip)
+                                    ?: SecretVault.loadServerKey("${serverInfo.ip}:${serverInfo.port}")
+                                    ?: ""
+                                NetworkHandler_v1.clientPresharedKey = savedKey
                                 isStreaming = true
                                 val mic = micPort.toIntOrNull() ?: 9092
                                 allowKeyPrompt()

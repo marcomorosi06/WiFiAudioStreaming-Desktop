@@ -16,19 +16,65 @@
  */
 
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import java.io.InputStreamReader
 import java.util.Properties
 
 object Strings {
     private val props = Properties()
+    private var currentLanguage = "auto"
+    val languageVersion = mutableStateOf(0)
 
     init {
+        loadLanguage("auto")
+    }
+
+    fun setLanguage(lang: String) {
+        currentLanguage = lang
+        loadLanguage(lang)
+        languageVersion.value++
+    }
+
+    fun getLanguage(): String = currentLanguage
+
+    fun loadLanguage(lang: String) {
+        props.clear()
         val loader = Strings::class.java.classLoader
         loader.getResourceAsStream("strings.properties")
             ?.use { props.load(InputStreamReader(it, Charsets.UTF_8)) }
-        if (java.util.Locale.getDefault().language == "it") {
-            loader.getResourceAsStream("strings_it.properties")
+
+        val targetLang = if (lang == "auto" || lang.isBlank()) {
+            java.util.Locale.getDefault().language.lowercase()
+        } else {
+            lang.lowercase()
+        }
+
+        val propFile = when (targetLang) {
+            "it" -> "strings_it.properties"
+            "vi" -> "strings_vi.properties"
+            "es" -> "strings_es.properties"
+            "fr" -> "strings_fr.properties"
+            "de" -> "strings_de.properties"
+            "pt" -> "strings_pt.properties"
+            "ru" -> "strings_ru.properties"
+            "ja" -> "strings_ja.properties"
+            "ko" -> "strings_ko.properties"
+            "zh", "zh-cn", "zh_cn" -> "strings_zh.properties"
+            "zh-tw", "zh_tw", "zh-hk", "zh_hk" -> "strings_zh_TW.properties"
+            "ar" -> "strings_ar.properties"
+            "hi" -> "strings_hi.properties"
+            "id", "in" -> "strings_id.properties"
+            "tr" -> "strings_tr.properties"
+            "pl" -> "strings_pl.properties"
+            "nl" -> "strings_nl.properties"
+            "th" -> "strings_th.properties"
+            "uk" -> "strings_uk.properties"
+            else -> null
+        }
+
+        if (propFile != null) {
+            loader.getResourceAsStream(propFile)
                 ?.use { props.load(InputStreamReader(it, Charsets.UTF_8)) }
         }
     }
@@ -43,35 +89,21 @@ object Strings {
         }
     }
 
-    val appVersion: String by lazy {
-        val loader = Strings::class.java.classLoader
-        val stream = loader.getResourceAsStream("version.properties") ?: return@lazy "?"
-        val vProps = Properties().apply { load(InputStreamReader(stream, Charsets.UTF_8)) }
-        displayVersion(vProps.getProperty("app.version", "?"))
-    }
+    val appVersion: String = "1.2-rebuild"
 }
 
-/**
- * Transforms the internal build version (e.g. "5.0.0") into the
- * user-facing display version by subtracting 4 from the major component.
- * The build number in build.gradle.kts remains unchanged.
- */
 fun displayVersion(raw: String): String {
-    val parts = raw.split(".", limit = 3)
-    val major = parts.getOrNull(0)?.toIntOrNull() ?: return raw
-    val adjusted = (major - 4).coerceAtLeast(0)
-    return buildString {
-        append(adjusted)
-        parts.drop(1).forEach { append('.').append(it) }
-    }
+    return "1.2-rebuild"
 }
 
 @Composable
 fun stringResource(key: String): String {
-    return remember(key) { Strings.get(key) }
+    val ver = Strings.languageVersion.value
+    return remember(key, ver) { Strings.get(key) }
 }
 
 @Composable
 fun stringResource(key: String, vararg args: Any): String {
-    return remember(key, args) { Strings.get(key, *args) }
+    val ver = Strings.languageVersion.value
+    return remember(key, ver, *args) { Strings.get(key, *args) }
 }

@@ -17,6 +17,28 @@
 
 import java.util.prefs.Preferences
 
+data class SavedServerItem(
+    val id: String,
+    val name: String,
+    val ip: String,
+    val port: Int = 9090,
+    val lastConnected: Long = System.currentTimeMillis()
+) {
+    fun serialize(): String = "$id|$name|$ip|$port|$lastConnected"
+    companion object {
+        fun deserialize(str: String): SavedServerItem? {
+            val parts = str.split("|")
+            if (parts.size < 3) return null
+            val id = parts[0]
+            val name = parts[1]
+            val ip = parts[2]
+            val port = parts.getOrNull(3)?.toIntOrNull() ?: 9090
+            val last = parts.getOrNull(4)?.toLongOrNull() ?: System.currentTimeMillis()
+            return SavedServerItem(id, name, ip, port, last)
+        }
+    }
+}
+
 data class AllSettings(
     val app: AppSettings,
     val audio: AudioSettings_V1,
@@ -26,6 +48,10 @@ data class AllSettings(
 )
 
 data class AppSettings(
+    val language: String = "auto",
+    val autoReconnectEnabled: Boolean = true,
+    val savedServers: List<SavedServerItem> = emptyList(),
+    val recentServers: List<String> = emptyList(),
     val theme: Theme = Theme.System,
     val hideWindowsPrivacyBanner: Boolean = false,
     val hideWindowsRoutingBanner: Boolean = false,
@@ -58,35 +84,14 @@ data class AppSettings(
     val autoStartVolume: Int = -1,
     /** Sicurezza del server avviato in automatico. INHERIT = quella generale. */
     val autoStartSecurityMode: String = AutoStartSecurity.INHERIT,
-    /**
-     * Cifratura del server avviato in automatico: INHERIT, ON oppure OFF.
-     * E' una scelta separata da quella generale perche' le due cose servono a
-     * momenti diversi: la sessione presidiata puo' restare in chiaro per farsi
-     * ispezionare con Wireshark, mentre quella che parte da sola e resta su per
-     * ore conviene cifrarla. Vale solo con una chiave: senza, non c'e' niente
-     * con cui cifrare.
-     */
     val autoStartEncryption: String = AutoStartSecurity.INHERIT,
     val muteRender: Boolean = true,
     val serverPersist: Boolean = false,
     val lastMulticastMode: Boolean = false,
     val autoConnectClientEnabled: Boolean = false,
-    /**
-     * Voci di connessione automatica in forma testuale (vedi [AutoConnectTarget]).
-     * Il nome resta quello storico perche' una voce che era solo un indirizzo
-     * continua a leggersi senza migrazioni.
-     */
     val autoConnectIps: List<String> = emptyList(),
-    /** Ogni quanto ricontrollare la lista, in secondi. */
     val autoConnectIntervalSec: Int = 5,
-    /** Quanto aspettare dopo una disconnessione prima di riprovare, in secondi. */
     val autoConnectRetryDelaySec: Int = 10,
-    /**
-     * Se il server chiede la chiave e la voce non ne ha una salvata: chiedere
-     * all'utente (true) o saltare quel server (false). Il default e' saltare,
-     * perche' una procedura automatica che si ferma su una finestra modale non
-     * e' piu' automatica.
-     */
     val autoConnectPromptForKey: Boolean = false,
     val connectionSoundEnabled: Boolean = true,
     val disconnectionSoundEnabled: Boolean = true,

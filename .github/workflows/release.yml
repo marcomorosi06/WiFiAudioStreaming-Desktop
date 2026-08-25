@@ -182,8 +182,8 @@ jobs:
             ./release-assets/**/*.tar.gz
             ./release-assets/**/*.AppImage
 
-      # Create Draft release
-      - name: Create Draft Release
+      # Create Release
+      - name: Create Release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           RELEASE_VERSION: ${{ github.ref_name }}
@@ -192,8 +192,14 @@ jobs:
           # Turn on recursive globbing for this shell execution
           shopt -s globstar
 
-          gh release create "${RELEASE_VERSION}" \
-            --draft \
-            --title "Desktop Release ${RELEASE_VERSION}" \
-            --generate-notes \
-            ./release-assets/**/*.*
+          if [ -f "RELEASE_NOTES.md" ]; then
+            gh release create "${RELEASE_VERSION}" \
+              --title "WiFi Audio Streaming ${RELEASE_VERSION}" \
+              --notes-file RELEASE_NOTES.md \
+              ./release-assets/**/*.*
+          else
+            gh release create "${RELEASE_VERSION}" \
+              --title "WiFi Audio Streaming ${RELEASE_VERSION}" \
+              --generate-notes \
+              ./release-assets/**/*.*
+          fi

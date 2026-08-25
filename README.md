@@ -3,20 +3,20 @@
 </p>
 
 <h1 align="center">WiFi Audio Streaming (Desktop)</h1>
+<h3 align="center">🚀 Edition: <code>v1.2-rebuild</code> (Rebuilt & Enhanced by Ali_ / alithw)</h3>
 
 <p align="center">
-  <a href="https://github.com/marcomorosi06/WiFiAudioStreaming-Desktop/releases"><img src="https://img.shields.io/badge/Available%20on-GitHub-181717?style=for-the-badge&logo=github" alt="Available on GitHub" /></a>
-  <a href="https://gitlab.com/marcomorosi.dev/WiFiAudioStreaming-Desktop/-/releases"><img src="https://img.shields.io/badge/Available%20on-GitLab-FC6D26?style=for-the-badge&logo=gitlab" alt="Available on GitLab" /></a>
-  <a href="https://aur.archlinux.org/packages/wifi-audio-streaming-desktop"><img src="https://img.shields.io/aur/version/wifi-audio-streaming-desktop?color=blue&logo=arch-linux" alt="AUR version" /></a>
-</p>
-
-<p align="center">
-<a href="https://trendshift.io/repositories/16237?utm_source=trendshift-badge&amp;utm_medium=badge&amp;utm_campaign=badge-trendshift-16237" target="_blank" rel="noopener noreferrer"><img src="https://trendshift.io/api/badge/trendshift/repositories/16237/daily?language=Kotlin" alt="marcomorosi06%2FWiFiAudioStreaming-Desktop | Trendshift" width="250" height="55"/></a>
+  <a href="https://github.com/alithw/WiFiAudioStreaming-Desktop"><img src="https://img.shields.io/badge/Custom%20Build-v1.2--rebuild-blue?style=for-the-badge" alt="v1.2-rebuild" /></a>
+  <a href="https://github.com/marcomorosi06/WiFiAudioStreaming-Desktop"><img src="https://img.shields.io/badge/Upstream-v1.2-green?style=for-the-badge" alt="Upstream v1.2" /></a>
 </p>
 
 Turn your computer into a **wireless audio transmitter or receiver**.
 
-This application allows you to send your PC's audio to any device on the same local network, or listen to audio from another device. It is designed to work seamlessly with the [Android version](https://github.com/marcomorosi06/WiFiAudioStreaming-Android).
+This edition features **v1.2-rebuild** enhancements:
+- 🌐 **20 Global Languages with Dynamic Runtime Switching** (English, Tiếng Việt, Italiano, Español, Français, Deutsch, Português, Русский, 日本語, 한국어, 简体中文, 繁體中文, العربية, हिन्दी, Bahasa Indonesia, Türkçe, Polski, Nederlands, ไทย, Українська).
+- 🔐 **Encrypted Vault & Seamless Auto-Login**: Remembers server passwords via native OS DPAPI / macOS Keychain / Linux SecretService, connects seamlessly without popups, and automatically forgets invalid passwords on unauthorized response (`UNAUTHORIZED`).
+- ♾️ **Unicast Server Persist**: Keeps server active and listening for new connections when a client disconnects.
+- ⚡ **Auto-Reconnect & Saved Servers Manager**: Reconnect with exponential backoff and manage all remembered devices in Settings.
 
 🌐 **Website**: [marcomorosi.eu/wifi-audio-streaming](https://www.marcomorosi.eu/wifi-audio-streaming/)
 

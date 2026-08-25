@@ -61,6 +61,24 @@ object SecretVault {
         backend?.let { runCatching { it.clear(name) } }
     }
 
+    fun serverKeyAccount(serverId: String): String =
+        "server_key_" + serverId.trim().lowercase().replace(':', '_').replace('.', '_').replace('-', '_')
+
+    fun storeServerKey(serverId: String, key: String): Boolean {
+        if (serverId.isBlank()) return false
+        return store(serverKeyAccount(serverId), key)
+    }
+
+    fun loadServerKey(serverId: String): String? {
+        if (serverId.isBlank()) return null
+        return load(serverKeyAccount(serverId))
+    }
+
+    fun clearServerKey(serverId: String) {
+        if (serverId.isBlank()) return
+        clear(serverKeyAccount(serverId))
+    }
+
     /**
      * Health of the credential store, distinguishing "there is nothing to talk to"
      * from "there is, but it does not work". [NoStore] is decided cheaply from the

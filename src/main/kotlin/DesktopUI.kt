@@ -566,12 +566,16 @@ fun AppContent(
                                     autoConnectIps = appSettings.autoConnectIps,
                                     onToggleAutoConnectIp = { ip ->
                                         val newList = appSettings.autoConnectIps.toMutableList()
+                                        val added = !newList.contains(ip)
                                         if (newList.contains(ip)) {
                                             newList.remove(ip)
                                         } else {
                                             newList.add(ip)
                                         }
-                                        onAppSettingsChange(appSettings.copy(autoConnectIps = newList))
+                                        onAppSettingsChange(appSettings.copy(
+                                            autoConnectIps = newList,
+                                            autoConnectClientEnabled = if (added) true else appSettings.autoConnectClientEnabled
+                                        ))
                                     }
                                 )
                             }
@@ -918,6 +922,79 @@ fun WelcomeScreen(
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
+fun LanguageSelector(
+    currentLanguage: String,
+    onLanguageChange: (String) -> Unit
+) {
+    val languages = listOf(
+        "auto" to stringResource("lang_auto"),
+        "en" to "English",
+        "vi" to "Tiếng Việt",
+        "it" to "Italiano",
+        "es" to "Español",
+        "fr" to "Français",
+        "de" to "Deutsch",
+        "pt" to "Português",
+        "ru" to "Русский",
+        "ja" to "日本語",
+        "ko" to "한국어",
+        "zh" to "简体中文",
+        "zh-TW" to "繁體中文",
+        "ar" to "العربية",
+        "hi" to "हिन्दी",
+        "id" to "Bahasa Indonesia",
+        "tr" to "Türkçe",
+        "pl" to "Polski",
+        "nl" to "Nederlands",
+        "th" to "ไทย",
+        "uk" to "Українська"
+    )
+    var expanded by remember { mutableStateOf(false) }
+    val currentLabel = languages.find { it.first.equals(currentLanguage, ignoreCase = true) }?.second
+        ?: languages.first().second
+
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerHigh)
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(16.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween
+        ) {
+            Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.weight(1f)) {
+                Icon(Icons.Outlined.Translate, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
+                Spacer(Modifier.width(16.dp))
+                Column {
+                    Text(stringResource("lang_selector_title"), style = MaterialTheme.typography.titleMedium)
+                    Text(stringResource("lang_selector_desc"), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+            }
+            Box {
+                OutlinedButton(onClick = { expanded = true }) {
+                    Text(currentLabel)
+                    Spacer(Modifier.width(4.dp))
+                    Icon(Icons.Outlined.ArrowDropDown, contentDescription = null)
+                }
+                DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
+                    languages.forEach { (code, name) ->
+                        DropdownMenuItem(
+                            text = { Text(name) },
+                            onClick = {
+                                expanded = false
+                                onLanguageChange(code)
+                                Strings.setLanguage(code)
+                            }
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
 fun SettingsScreen(
     visible: Boolean,
     appSettings: AppSettings,
@@ -1165,6 +1242,7 @@ fun SettingsScreen(
                     "audio_quality" to Icons.Outlined.Tune,
                     "network" to Icons.Outlined.SettingsEthernet,
                     "startup_window" to Icons.Outlined.PowerSettingsNew,
+                    "saved_servers_title" to Icons.Outlined.Key,
                     "sounds_group" to Icons.Outlined.VolumeUp,
                     "system_group" to Icons.Outlined.Terminal,
                     "info_group" to Icons.Outlined.Info
@@ -1218,6 +1296,16 @@ fun SettingsScreen(
                                         ThemeSelector(
                                             currentTheme = appSettings.theme,
                                             onThemeChange = { onAppSettingsChange(appSettings.copy(theme = it)) }
+                                        )
+
+                                        HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
+
+                                        LanguageSelector(
+                                            currentLanguage = appSettings.language,
+                                            onLanguageChange = { lang ->
+                                                onAppSettingsChange(appSettings.copy(language = lang))
+                                                Strings.setLanguage(lang)
+                                            }
                                         )
 
                                         HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
@@ -1411,6 +1499,57 @@ fun SettingsScreen(
 
                                     }
                                     4 -> {
+                                        Text(
+                                            stringResource("saved_servers_desc"),
+                                            style = MaterialTheme.typography.bodyMedium,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                                        )
+                                        if (appSettings.savedServers.isEmpty()) {
+                                            Card(
+                                                modifier = Modifier.fillMaxWidth().padding(vertical = 16.dp),
+                                                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerHigh)
+                                            ) {
+                                                Box(Modifier.fillMaxWidth().padding(32.dp), contentAlignment = Alignment.Center) {
+                                                    Text(
+                                                        stringResource("saved_servers_empty"),
+                                                        style = MaterialTheme.typography.bodyMedium,
+                                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                                    )
+                                                }
+                                            }
+                                        } else {
+                                            appSettings.savedServers.forEach { server ->
+                                                Card(
+                                                    modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
+                                                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerHigh)
+                                                ) {
+                                                    Row(
+                                                        modifier = Modifier.fillMaxWidth().padding(16.dp),
+                                                        verticalAlignment = Alignment.CenterVertically,
+                                                        horizontalArrangement = Arrangement.SpaceBetween
+                                                    ) {
+                                                        Column(modifier = Modifier.weight(1f)) {
+                                                            Text(server.name, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+                                                            Text("${server.ip}:${server.port}", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.primary)
+                                                        }
+                                                        Button(
+                                                            onClick = {
+                                                                SecretVault.clearServerKey(server.name)
+                                                                SecretVault.clearServerKey(server.ip)
+                                                                SecretVault.clearServerKey("${server.ip}:${server.port}")
+                                                                val updated = appSettings.savedServers.filterNot { it.id == server.id }
+                                                                onAppSettingsChange(appSettings.copy(savedServers = updated))
+                                                            },
+                                                            colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error)
+                                                        ) {
+                                                            Text(stringResource("saved_servers_forget"))
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                    5 -> {
                                         SwitchSetting(
                                             title = stringResource("connection_sound_title"),
                                             description = stringResource("connection_sound_desc"),
@@ -1430,7 +1569,7 @@ fun SettingsScreen(
                                         )
 
                                     }
-                                    5 -> {
+                                     6 -> {
                                         Row(
                                             modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp),
                                             verticalAlignment = Alignment.CenterVertically,
@@ -1611,7 +1750,7 @@ fun SettingsScreen(
                                         }
 
                                     }
-                                    6 -> {
+                                     7 -> {
                                         InfoSetting(
                                             title = stringResource("license_info_title"),
                                             description = stringResource("license_info_desc"),
@@ -1638,7 +1777,7 @@ fun SettingsScreen(
 
                                         InfoSetting(
                                             title = stringResource("developed_by"),
-                                            description = "Marco Morosi",
+                                            description = "Marco Morosi (v1.2-rebuild by Ali_ / alithw)",
                                             icon = Icons.Outlined.Person
                                         )
                                         HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
