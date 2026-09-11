@@ -77,6 +77,16 @@ data class AppSettings(
      * continua a leggersi senza migrazioni.
      */
     val autoConnectIps: List<String> = emptyList(),
+    /**
+     * Sorgenti RTP salvate nella sezione Ricevi, una riga per sorgente
+     * (vedi [RtpSource.serialize]). Sono configurazioni, non segreti.
+     */
+    val rtpSources: List<String> = emptyList(),
+    /**
+     * Server Snapcast salvati nella sezione Ricevi, una riga per server
+     * (vedi [SnapcastServerRef.serialize]).
+     */
+    val snapcastServers: List<String> = emptyList(),
     /** Ogni quanto ricontrollare la lista, in secondi. */
     val autoConnectIntervalSec: Int = 5,
     /** Quanto aspettare dopo una disconnessione prima di riprovare, in secondi. */

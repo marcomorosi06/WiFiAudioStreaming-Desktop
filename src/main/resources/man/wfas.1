@@ -5,7 +5,13 @@
 wfas \- stream audio over your local network
 .SH SYNOPSIS
 .B wfas
-[\-\-gui | \-\-cli] [\-\-mode server|client|discover] [OPTIONS]
+[\-\-gui | \-\-cli] [\-\-mode server|client|discover|rtp|snapcast] [OPTIONS]
+.br
+.B wfas
+rtp [listen|inspect|sdp|sources|save|forget] [source] [OPTIONS]
+.br
+.B wfas
+snapcast <command> [server|client|group] [OPTIONS]
 .br
 .B wfas
 control <command>
@@ -26,7 +32,7 @@ firewall <command>
 \-\-help [<topic> | all]
 .SH DESCRIPTION
 .PP
-wfas transmits audio from one device (server) to one or more receivers (clients) on the same local network using the WFAS v2 protocol. It also speaks RTP, HTTP, DLNA and Snapcast as optional additional protocols, so receivers that know nothing about WFAS can play the same audio.
+wfas transmits audio from one device (server) to one or more receivers (clients) on the same local network using the WFAS v2 protocol. It also speaks RTP, HTTP, DLNA and Snapcast as optional additional protocols, so receivers that know nothing about WFAS can play the same audio, and it speaks two of them in the other direction as well: 'wfas rtp' listens to somebody else's RTP stream, and 'wfas snapcast' joins a Snapcast multiroom system as one of its clients.
 .PP
 Run from a terminal with no arguments, wfas prints a short hint and exits. Run with no arguments and no console, as happens on a double click, it opens the graphical interface. Use \-\-cli, or any of the mode flags, to stay in the terminal on headless systems such as a Raspberry Pi or inside automation scripts.
 .PP
@@ -47,6 +53,9 @@ Client options \- output device, volume, microphone
 .TP
 .B protocols
 Streaming protocols \- RTP, HTTP, DLNA, Snapcast
+.TP
+.B receive
+Receiving RTP & Snapcast \- listen to streams this machine did not start
 .TP
 .B network
 USB & network \- cable link, interfaces, IPv4/IPv6
@@ -103,7 +112,7 @@ Start as audio source. Shorthand for \-\-mode server.
 Start as audio receiver. Shorthand for \-\-mode client.
 .TP
 .B \-\-mode <m>
-server | client | discover
+server | client | discover | rtp | snapcast
 .RS
 .PP
 .RS 2
@@ -111,8 +120,11 @@ server | client | discover
 server    capture this machine's audio and serve it
 client    receive audio from a server and play it
 discover  scan the network for active servers, then exit
+rtp       listen to an RTP stream, as 'wfas rtp listen' does
+snapcast  join a Snapcast server, as 'wfas snapcast listen' does
 .fi
 .RE
+The last two have no counterpart in the window, so \-\-gui does not apply to them. They are described under 'receive'.
 .RE
 .SS Discovery
 .PP
@@ -265,9 +277,9 @@ List the audio devices this system reports.
 .PP
 A device is normally kept only if it answers a format probe. That probe opens the card, so it fails whenever another audio server (PulseAudio, PipeWire, JACK) holds it, which is common on Linux and on Raspberry Pi. When no device passes, wfas keeps the full list instead of leaving you with nothing, and 'devices' says so explicitly.
 .PP
-See also: wfas \-\-help runtime, wfas \-\-help network, wfas \-\-help config.
+See also: wfas \-\-help receive, wfas \-\-help runtime, wfas \-\-help network, wfas \-\-help config.
 .SH STREAMING PROTOCOLS
-Besides its own protocol the server can speak four standard ones at the same time, so receivers that have never heard of WFAS can still play the audio. Each of these implies \-\-multicast. None of them is authenticated or encrypted: \-\-auth\-mode, \-\-auth\-key and \-\-encrypt cover the native WFAS stream only.
+Besides its own protocol the server can speak four standard ones at the same time, so receivers that have never heard of WFAS can still play the audio. Each of these implies \-\-multicast. None of them is authenticated or encrypted: \-\-auth\-mode, \-\-auth\-key and \-\-encrypt cover the native WFAS stream only.  This is the sending side. wfas also receives two of these protocols \- 'wfas rtp listen' and 'wfas snapcast listen' \- and those live under 'receive'.
 .SS RTP
 .PP
 Plain RTP for VLC, ffplay and hardware receivers. Pair it with \-\-sdp so the receiver knows what it is getting.
@@ -350,7 +362,273 @@ Stream identifier advertised to clients.
 .br
 Default: default.
 .PP
-See also: wfas \-\-help server, wfas \-\-help security, wfas \-\-help runtime.
+See also: wfas \-\-help receive, wfas \-\-help server, wfas \-\-help security, wfas \-\-help runtime.
+.SH RECEIVING RTP & SNAPCAST
+The other direction of 'Streaming protocols': there wfas speaks RTP and Snapcast to send, here it speaks them to receive. 'wfas rtp' plays a stream produced by ffmpeg, VLC, a hardware sender or another wfas server; 'wfas snapcast' joins a Snapcast server as one of its clients, in sync with every other room, and can read and change the whole installation from the control channel. Neither has anything to do with the native WFAS client, which is 'wfas \-\-client'.
+.SS RTP  (wfas rtp <command>)
+.PP
+The source can be given in four ways, and they can be mixed: an .sdp file, the descriptor on standard input, an address, or the name of a source saved earlier. Whatever is given, the individual options below still have the last word, so a saved source can be reused on a different port without editing anything.
+.TP
+.B rtp listen [source]
+Listen to an RTP stream and play it. Aliases: play, receive.
+.RS
+.PP
+source is recognised on its own: a path ending in .sdp or any readable file is an SDP descriptor, \- reads one from standard input, 239.255.0.1:9094 or :9094 is an address, and anything else is looked up among the saved sources by name, by #index or by address. With nothing at all, the single saved source is used.
+.RE
+.TP
+.B rtp inspect <source>
+Say what the descriptor means, and what it leaves out. Aliases: check, parse.
+.RS
+.PP
+Reads the SDP without opening a socket, then prints the address, the format, whether the delivery is multicast, and whether the audio can be played natively or has to go through FFmpeg. Anything the descriptor did not say and wfas had to assume is listed as a warning, because those assumptions are exactly what makes a stream come out at the wrong speed or pitch.
+.RE
+.TP
+.B rtp sdp [source]
+Print the SDP descriptor of a source, for another player.
+.RS
+.PP
+Writes the original descriptor when the source came from one, and otherwise builds a minimal valid one from the fields. \-\-sdp\-out also saves it to a file.
+.RE
+.TP
+.B rtp sources
+List the saved sources with their index. Aliases: list, ls, saved.
+.RS
+.PP
+The index is the #n accepted anywhere a source is named.
+.RE
+.TP
+.B rtp save [name]
+Save the source described by the current options.
+.RS
+.PP
+A source with the same address and port replaces the old entry instead of adding a duplicate. Saved sources are shared with the desktop app: they are app.rtpSources in the configuration.
+.RE
+.TP
+.B rtp forget <name|#n|all>
+Remove a saved source. Aliases: remove, rm, delete.
+.SS RTP options
+.TP
+.B \-\-sdp\-file <path>
+Read the SDP descriptor from a file, or from standard input with \-.
+.RS
+.PP
+Same thing as passing the path as the source; the flag exists so scripts do not have to rely on the guess. Do not confuse it with \-\-sdp and \-\-sdp\-out, which belong to the sending side.
+.RE
+.TP
+.B \-\-rtp\-address <addr>
+Multicast group to join, or the local address to listen on.
+.br
+Default: any interface.
+.RS
+.PP
+An address in 224.0.0.0/4 (or ff00::/8) is a multicast group and is joined on the interface chosen by \-\-interface. Anything else, empty included, means unicast: the port alone decides.
+.RE
+.TP
+.B \-\-rtp\-port <n>
+Port to listen on.
+.br
+Default: 9094, or whatever the SDP says.
+.TP
+.B \-\-rtp\-codec <name>
+Payload encoding, as in the a=rtpmap line.
+.br
+Default: L16.
+.RS
+.PP
+L16 is raw 16\-bit PCM and is played straight through, which is the lowest latency path. Every other encoding is handed to FFmpeg, which decodes it and adds its own buffering.
+.RE
+.TP
+.B \-\-rtp\-rate <hz>
+Sample rate of the stream.
+.br
+Default: 48000, range 8000\-192000.
+.RS
+.PP
+It has to match the sender. A wrong rate does not fail: it plays at the wrong speed and pitch, which is why 'rtp inspect' says out loud when the descriptor did not state one.
+.RE
+.TP
+.B \-\-rtp\-channels <n>
+1 or 2.
+.br
+Default: 2.
+.TP
+.B \-\-rtp\-payload <n>
+RTP payload type, 0\-127.
+.br
+Default: 96.
+.RS
+.PP
+Packets carrying a different payload type are ignored, so this is what keeps two streams sharing one port apart.
+.RE
+.TP
+.B \-\-rtp\-name <text>
+Label for the source, used when saving and in the listings.
+.PP
+The output device, the buffer and the initial volume come from the shared options: \-\-output, \-\-latency, \-\-volume and \-\-mute behave exactly as they do for the native client.
+.SS Snapcast  (wfas snapcast <command>)
+.PP
+Snapcast keeps every room on the same sample at the same instant, so this is a full client and not just a player: the control channel shows the groups, the clients and the streams of the whole installation, and lets you change them. Alias: snap. The server can be named as an address, as the name of a saved one, or left out entirely, in which case it is looked for over mDNS and used if it is the only one.
+.TP
+.B snapcast listen [server]
+Join the server and play in sync. Aliases: connect, play, join.
+.TP
+.B snapcast discover
+Find the Snapcast servers announced on this network. Aliases: browse, scan.
+.RS
+.PP
+Add \-\-watch to keep the list updating, \-\-json for one line per server.
+.RE
+.TP
+.B snapcast mixer
+Join the server and control the whole installation from one screen. Aliases: ui, tui, top.
+.RS
+.PP
+This is 'snapcast listen' with a screen instead of status lines: it plays the audio too, exactly like the desktop application, where listening and controlling are one window.  Arrows or jk move, left and right change the volume by 5, m mutes, g moves the client to another group, s detaches it into one of its own, n renames, y sets the latency, t picks the stream, r refreshes, q leaves. On a group row the volume keys shift every client in it by the same amount, so the balance between rooms is kept.  Everything shown comes from the server, and every key sends a command on the control channel: there is no local state that could drift from what the other apps see. Without an interactive terminal, or with \-\-json, it falls back to the status lines of 'snapcast listen', so a pipe gets output and not a screenful of escape sequences.
+.RE
+.TP
+.B snapcast status
+Groups, clients and streams of the whole installation.
+.RS
+.PP
+Add \-\-watch to follow it live: the view is redrawn when the server actually reports a change, not on a timer.
+.RE
+.TP
+.B snapcast clients | groups | streams
+The three views on their own, one row per entry.
+.TP
+.B snapcast volume <client> <0\-100>
+Set a client's volume. Alias: vol.
+.RS
+.PP
+A client is named by its name, by its id, by its address or by the #n of the listing; a fragment of the name is enough as long as it matches only one. The same goes for groups.
+.RE
+.TP
+.B snapcast mute | unmute <client>
+Mute or unmute one client.
+.TP
+.B snapcast latency <client> <ms>
+Per\-client delay, \-2000 to 2000.
+.RS
+.PP
+Positive values delay that room, to line it up with one that is slower to play.
+.RE
+.TP
+.B snapcast rename <client> <name>
+Rename a client on the server.
+.TP
+.B snapcast move <client> <group>
+Move a client into an existing group.
+.RS
+.PP
+Snapcast has no move command: the only one available rewrites the whole membership of the destination group, so wfas reads it, adds the client and writes it back. The old group is the server's problem.
+.RE
+.TP
+.B snapcast split <client>
+Detach a client into a group of its own. Alias: detach.
+.RS
+.PP
+Same mechanism in reverse, and it depends on the server: some do not re\-home a client removed from a group, and leave it invisible while it keeps playing. wfas checks afterwards and puts it back where it was if that happened, rather than leaving you with a room nobody can control.
+.RE
+.TP
+.B snapcast group\-mute <group> on|off
+Mute or unmute a whole group.
+.TP
+.B snapcast group\-rename <group> <name>
+Rename a group. Alias: group\-name.
+.TP
+.B snapcast group\-stream <group> <stream>
+Point a group at one of the server's streams.
+.RS
+.PP
+\&'wfas snapcast streams' lists the ids that are accepted here.
+.RE
+.TP
+.B snapcast servers
+List the saved servers with their index. Alias: saved.
+.TP
+.B snapcast save [name]
+Save the server described by the current options.
+.RS
+.PP
+Shared with the desktop app as app.snapcastServers.
+.RE
+.TP
+.B snapcast forget <name|#n|all>
+Remove a saved server. Aliases: remove, rm, delete.
+.SS Snapcast options
+.TP
+.B \-\-snap\-host <host>
+Address of the Snapcast server to join.
+.RS
+.PP
+Not to be confused with \-\-snapcast, which makes this machine a Snapcast server instead of a client.
+.RE
+.TP
+.B \-\-snap\-port <n>
+Audio port of the server.
+.br
+Default: 1704.
+.TP
+.B \-\-snap\-control\-port <n>
+JSON\-RPC control port of the server.
+.br
+Default: 1705, or the audio port plus one.
+.RS
+.PP
+The control channel is optional: without it the audio still plays, but the volume of this machine cannot be changed from anywhere and the rest of the installation stays invisible.
+.RE
+.TP
+.B \-\-snap\-name <text>
+Name announced to the server.
+.br
+Default: this machine's hostname.
+.RS
+.PP
+It is what shows up in the Snapcast apps and in 'wfas snapcast clients'. Unrelated to \-\-snapcast\-name, which names the stream a wfas Snapcast server publishes.
+.RE
+.TP
+.B \-\-no\-audio
+Mixer only: control the system without joining it.
+.RS
+.PP
+Turns 'snapcast mixer' into a remote control. Useful from a laptop that should change the volume of the house without becoming another room, and on a machine with no usable audio output at all.
+.RE
+.TP
+.B \-\-snap\-id <id>
+Client identifier.
+.br
+Default: the MAC address of this machine.
+.RS
+.PP
+The server remembers volume, latency and group per identifier, so changing it starts from a clean slate; two clients sharing one identifier fight over the same settings.
+.RE
+.PP
+\-\-volume, \-\-mute and \-\-latency go through the control channel, so the server and every other app see them. Without a control channel \-\-volume and \-\-mute fall back to a local trim, and \-\-latency has nowhere to go.
+.SS While listening
+.PP
+Both sessions take single\-letter commands on standard input, and both answer 'wfas control' from another terminal.
+.TP
+.B q
+Stop and exit. Also quit, stop.
+.TP
+.B v <0\-100>
+Set the volume.
+.TP
+.B m / u
+Mute and unmute.
+.TP
+.B s
+RTP: packets, loss and buffer. Snapcast: codec, buffer and sync error.
+.TP
+.B g
+Snapcast only: the groups and clients of the installation.
+.TP
+.B l <ms>
+Snapcast only: this client's latency.
+.PP
+\-\-viz draws the spectrum analyser for either one, and 'wfas control status' from another terminal reports what is being received, from where, and how full the buffer is.
+.PP
+See also: wfas \-\-help protocols, wfas \-\-help client, wfas \-\-help runtime.
 .SH USB & NETWORK
 How the audio physically gets across: over Wi\-Fi, over the USB cable, or both, and which address family to use.
 .SS USB link
@@ -695,7 +973,7 @@ Falls back to the complete text whenever the output is not an interactive termin
 Print every section at once, never interactive.
 .TP
 .B \-\-help <topic>
-Print one section. Topics: start, server, client, protocols, network, security, config, runtime, reference
+Print one section. Topics: start, server, client, protocols, receive, network, security, config, runtime, reference
 .TP
 .B \-\-help \-\-json
 Emit the whole option table as JSON, for completions and docs.
@@ -787,6 +1065,49 @@ Synchronised multiroom audio.
 .TP
 .B wfas \-\-server \-\-snapcast \-\-snapcast\-codec flac
 Half the bandwidth, same sync.
+.SS Receiving RTP & Snapcast
+.TP
+.B wfas rtp listen stream.sdp
+Play the stream an SDP file describes.
+.TP
+.B ffmpeg ... | wfas rtp listen \-
+Take the descriptor from a pipe.
+.TP
+.B wfas rtp listen 239.255.0.1:9094
+Join a multicast group directly.
+.TP
+.B wfas rtp inspect stream.sdp
+Read the descriptor without listening.
+.TP
+.B wfas rtp save kitchen \-\-rtp\-address 239.255.0.1
+Remember it as 'kitchen'.
+.TP
+.B wfas rtp listen kitchen \-\-viz
+Listen to it with the spectrum analyser.
+.TP
+.B wfas snapcast discover
+Find the Snapcast servers on this network.
+.TP
+.B wfas snapcast listen
+Join the only server around.
+.TP
+.B wfas snapcast mixer
+Play, and control every room from one screen.
+.TP
+.B wfas snapcast mixer \-\-no\-audio
+Control the house without playing here.
+.TP
+.B wfas snapcast status \-\-watch
+Follow the whole installation live.
+.TP
+.B wfas snapcast volume kitchen 40
+Turn the kitchen down.
+.TP
+.B wfas snapcast move kitchen Living
+Put the kitchen in the living room group.
+.TP
+.B wfas snapcast clients \-\-json
+One JSON line per client, for scripts.
 .SS USB & network
 .TP
 .B wfas \-\-server \-\-usb
@@ -924,6 +1245,10 @@ On Windows, some firewalls block multicast packets. If clients cannot discover t
 A unicast server is bound to the address of its connected client for the whole session: control messages arriving from any other address are discarded, so a third device on the LAN cannot terminate someone else's session. To serve several listeners at once, use multicast.
 .PP
 The \-\-sdp flag generates an SDP descriptor based on the configured audio settings. The payload type is L16 (raw PCM) over RTP. Most players, including VLC, ffplay and GStreamer, support this format.
+.PP
+RTP and Snapcast also work in the receiving direction. 'wfas rtp listen' plays a stream produced by ffmpeg, VLC, a hardware sender or another wfas server, taking its description from an .sdp file, from standard input, from an address or from a source saved earlier. 'wfas snapcast listen' joins a Snapcast server as one of its clients, in sync with every other room. Saved sources and servers are the same entries the desktop application uses, app.rtpSources and app.snapcastServers in the configuration file.
+.PP
+The Snapcast control channel, port 1705 by default, is optional for playback and necessary for everything else: without it the audio still plays, but the volume of this machine cannot be changed from anywhere and the rest of the installation stays invisible. 'wfas snapcast status' reports whether it answered, and at which address it tried, because a refused connection, a timeout and a channel that drops after opening are three different problems.
 .PP
 \-\-auth\-mode, \-\-auth\-key and \-\-encrypt protect the native WFAS stream only. RTP, HTTP, DLNA and Snapcast are standard protocols with no authentication and no encryption, so enabling them alongside \-\-encrypt puts the same audio on the network in the clear.
 .PP

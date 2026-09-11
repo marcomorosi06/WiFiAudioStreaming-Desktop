@@ -34,6 +34,32 @@ object ExitCode {
     const val AUTH_FAILED    = 5
 }
 
+/**
+ * Il registro della sessione di ricezione che non passa da NetworkHandler.
+ *
+ * 'wfas control stop' sa fermare uno stream WFAS perche' quello passa di li'.
+ * Un ascolto RTP o un client Snapcast vivono per conto loro: senza questo
+ * registro il comando risponderebbe "ok" senza fermare niente, che e' peggio
+ * di un errore. Ce n'e' una alla volta, come per il resto della CLI.
+ */
+object ExternalReceiver {
+
+    /** "rtp", "snapcast", oppure vuoto quando non si sta ricevendo. */
+    @Volatile var kind: String = ""
+    @Volatile var detail: String = ""
+    @Volatile var onStop:   (() -> Unit)? = null
+    @Volatile var onVolume: ((Float) -> Unit)? = null
+    @Volatile var onMute:   ((Boolean) -> Unit)? = null
+    @Volatile var statusFields: (() -> Map<String, Any?>)? = null
+
+    val active: Boolean get() = kind.isNotEmpty()
+
+    fun clear() {
+        kind = ""; detail = ""
+        onStop = null; onVolume = null; onMute = null; statusFields = null
+    }
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // ANSI helpers
 // ─────────────────────────────────────────────────────────────────────────────
@@ -432,6 +458,8 @@ fun runCli(rawArgs: CliArgs) {
             RunMode.CLI_CLIENT  -> runCliClient(args, settings)
             RunMode.CLI_DISCOVER -> runCliDiscover(args)
             RunMode.CLI_MONITOR  -> runCliMonitor(args, settings)
+            RunMode.CLI_RTP      -> runCliRtp(args, settings)
+            RunMode.CLI_SNAPCAST -> runCliSnapcast(args, settings)
             else -> Unit
         }
     }
@@ -1143,4 +1171,547 @@ private suspend fun runCliDiscover(args: CliArgs) {
         if (!args.json && !args.quiet) printDiscoverHeader(args)
         for ((host, info) in found.entries.sortedBy { it.value.ip }) emitDiscover(args, host, info)
     }
+}
+// ─────────────────────────────────────────────────────────────────────────────
+// RTP receive mode
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Ascolta un flusso RTP altrui.
+ *
+ * A differenza del client WFAS qui non c'e' nessuna stretta di mano: si apre
+ * una porta e si aspetta. Per questo lo stato "in attesa" e' visibile e
+ * separato da "sto ricevendo": senza distinguerli, una porta sbagliata e un
+ * mittente spento sarebbero la stessa schermata muta.
+ */
+private suspend fun runCliRtp(args: CliArgs, settings: AllSettings) {
+    val source = when (val r = RtpCli.resolve(args)) {
+        is RtpCli.Resolution.Fail -> {
+            RtpCli.reportFailure(r, args.json)
+            kotlin.system.exitProcess(r.code)
+        }
+        is RtpCli.Resolution.Ok -> {
+            RtpCli.printWarnings(r.warnings, args.json, args.quiet)
+            r.source
+        }
+    }
+
+    val outputDevice = resolveOutputDevice(args.outputDevice)
+    if (outputDevice == null) {
+        err(red("!") + " No audio output device found.")
+        err(dim("    Run 'wfas devices' to see what Java Sound reports on this system."))
+        kotlin.system.exitProcess(ExitCode.RESOURCE_ERROR)
+    }
+
+    val latencyMs = args.latency ?: settings.audio.latencyMs
+    if (args.volume != null) NetworkHandler_v1.setClientVolume(args.volume)
+    var muted = args.mute
+    if (muted) NetworkHandler_v1.setClientVolume(0f)
+
+    val where = if (source.address.isBlank()) ":${source.port}" else "${source.address}:${source.port}"
+
+    if (args.json) {
+        jsonLine(
+            "event" to "rtp_listening", "pid" to ProcessHandle.current().pid(),
+            "address" to source.address, "port" to source.port,
+            "codec" to source.encoding, "rate" to source.sampleRate,
+            "channels" to source.channels, "payload" to source.payloadType,
+            "multicast" to source.isMulticast, "native" to source.isNativePcm,
+            "output" to outputDevice.name, "latency" to latencyMs
+        )
+    } else if (!args.viz) {
+        out("", args)
+        out(bold("  WiFi Audio Streaming") + "  - RTP receive", args)
+        out("  ${dim("Source")}   ${cyan(where)} ${dim(if (source.isMulticast) "multicast" else "unicast")}", args)
+        out("  ${dim("Format")}   ${source.formatSummary()}", args)
+        out("  ${dim("Path")}     " + (if (source.isNativePcm) green("native L16") else yellow("FFmpeg")), args)
+        out("  ${dim("Output")}   ${outputDevice.name}", args)
+        out("  ${dim("Buffer")}   ${latencyMs} ms", args)
+        out("", args)
+        out(dim("  Commands: q=stop, v <0-100>=volume, m=mute, u=unmute, s=stats"), args)
+        out("", args)
+    }
+
+    val viz = if (args.viz && !args.json)
+        AudioVisualizer(
+            channels = source.channels, label = "rtp  $where",
+            sampleRate = source.sampleRate, theme = args.vizTheme, groove = args.groove
+        )
+    else null
+
+    val done = CompletableDeferred<Unit>()
+    var userStopped = false
+    var exitCode = ExitCode.OK
+    var last = RtpStatus()
+
+    if (viz != null) {
+        args.volume?.let { viz.setVolumePercent((it * 100).toInt()) }
+        viz.onVolume = { v -> NetworkHandler_v1.setClientVolume(v.coerceIn(0f, 2f)) }
+        viz.onQuit = { userStopped = true; if (!done.isCompleted) done.complete(Unit) }
+        viz.statusMsg = "waiting for packets..."
+    }
+    viz?.start()
+
+    val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
+    val receiver = RtpReceiver(
+        source = source,
+        onStatus = { st ->
+            val before = last.state
+            last = st
+            if (st.state != before) {
+                when (st.state) {
+                    RtpState.WAITING -> {
+                        if (args.json) jsonLine("event" to "rtp_waiting", "port" to source.port)
+                        else if (viz != null) viz.statusMsg = ".  waiting for packets"
+                        else out("  ${dim(".")}  waiting for packets on $where", args)
+                    }
+                    RtpState.PLAYING -> {
+                        if (args.json) jsonLine("event" to "rtp_playing", "port" to source.port)
+                        else if (viz != null) viz.statusMsg = "+  receiving"
+                        else out("  ${green("+")}  receiving", args)
+                        // Se il flusso non e' quello descritto, dirlo: e'
+                        // l'unica occasione in cui l'utente puo' correggere il
+                        // proprio SDP invece di sentire un audio giusto e non
+                        // sapere perche' i numeri che aveva scritto erano altri.
+                        val realRate = st.detectedSampleRate
+                        val realCh   = st.detectedChannels
+                        if (realRate != null && realCh != null &&
+                            (realRate != source.sampleRate || realCh != source.channels)) {
+                            val was = "${source.sampleRate} Hz " +
+                                    (if (source.channels == 1) "mono" else "${source.channels} ch")
+                            val now = "$realRate Hz " + (if (realCh == 1) "mono" else "$realCh ch")
+                            if (args.json) {
+                                jsonLine(
+                                    "event" to "rtp_format_detected",
+                                    "sample_rate" to realRate, "channels" to realCh
+                                )
+                            } else if (viz != null) {
+                                viz.statusMsg = "+  receiving  ($now)"
+                            } else {
+                                out("  ${yellow("~")}  the stream is $now, not $was: " +
+                                        "playing what the stream says", args)
+                            }
+                        }
+                    }
+                    RtpState.ERROR -> {
+                        val msg = Strings.get(st.errorKey ?: "rtp_err_socket") +
+                                (st.errorDetail?.let { ": $it" } ?: "")
+                        if (args.json) jsonLine("event" to "rtp_error", "message" to msg)
+                        else if (viz != null) viz.statusMsg = "!  $msg"
+                        else err(red("!") + " $msg")
+                        exitCode = ExitCode.RESOURCE_ERROR
+                        if (!done.isCompleted) done.complete(Unit)
+                    }
+                    RtpState.IDLE -> Unit
+                }
+            }
+        },
+        onPcm = viz?.let { v -> { samples -> v.feedFrame(samples) } },
+        openPlayer = { rate, ch ->
+            NetworkHandler_v1.openPcmPlaybackSink(outputDevice, rate, ch, latencyMs)
+        },
+        preferredInterface = args.networkIface
+    )
+
+    fun stats(): String =
+        "${last.packets} packets, ${last.bytes / 1024} KB, ${last.lostPackets} lost, " +
+                "buffer ${last.bufferMs} ms"
+
+    ExternalReceiver.kind = "rtp"
+    ExternalReceiver.detail = where
+    ExternalReceiver.onStop = { userStopped = true; if (!done.isCompleted) done.complete(Unit) }
+    ExternalReceiver.onVolume = { v -> NetworkHandler_v1.setClientVolume(v.coerceIn(0f, 2f)) }
+    ExternalReceiver.onMute = { m ->
+        muted = m
+        NetworkHandler_v1.setClientVolume(if (m) 0f else (args.volume ?: 1f))
+    }
+    ExternalReceiver.statusFields = {
+        mapOf(
+            "rtp_address" to source.address, "rtp_port" to source.port,
+            "rtp_codec" to source.encoding, "rtp_rate" to source.sampleRate,
+            "rtp_channels" to source.channels, "rtp_native" to source.isNativePcm,
+            "rtp_detected_rate" to (last.detectedSampleRate ?: source.sampleRate),
+            "rtp_detected_channels" to (last.detectedChannels ?: source.channels),
+            "rtp_state" to last.state.name.lowercase(), "rtp_packets" to last.packets,
+            "rtp_lost" to last.lostPackets, "rtp_buffer_ms" to last.bufferMs,
+            "rtp_muted" to muted
+        )
+    }
+
+    receiver.start(scope)
+
+    if (viz == null) {
+        ConsoleInput.start { raw ->
+            val line = raw.trim()
+            when {
+                line.equals("q", true) || line.equals("quit", true) || line.equals("stop", true) -> {
+                    userStopped = true
+                    if (!done.isCompleted) done.complete(Unit)
+                }
+                line.matches(Regex("(?i)v(?:ol(?:ume)?)?\\s+(\\d+(?:\\.\\d+)?)")) -> {
+                    val pct = line.split("\\s+".toRegex()).last().toFloatOrNull()
+                    if (pct != null) {
+                        muted = false
+                        NetworkHandler_v1.setClientVolume((pct / 100f).coerceIn(0f, 2f))
+                        if (!args.quiet && !args.json) println("  volume: ${pct.toInt()}%")
+                    }
+                }
+                line.equals("m", true) || line.equals("mute", true) -> {
+                    muted = true; NetworkHandler_v1.setClientVolume(0f)
+                    if (!args.quiet && !args.json) println("  muted")
+                }
+                line.equals("u", true) || line.equals("unmute", true) -> {
+                    muted = false; NetworkHandler_v1.setClientVolume(args.volume ?: 1f)
+                    if (!args.quiet && !args.json) println("  unmuted")
+                }
+                line.equals("s", true) || line.equals("stats", true) -> {
+                    if (args.json) jsonLine(
+                        "event" to "rtp_stats", "packets" to last.packets, "bytes" to last.bytes,
+                        "lost" to last.lostPackets, "buffer_ms" to last.bufferMs
+                    ) else println("  ${dim(stats())}")
+                }
+            }
+        }
+    }
+
+    if (args.debug && !args.viz && !args.json) DebugHud.start(sending = false, peer = where)
+
+    done.await()
+
+    ConsoleInput.stop()
+    receiver.stop()
+    scope.cancel()
+    ExternalReceiver.clear()
+    DebugHud.stop()
+    viz?.stop()
+
+    if (args.json) jsonLine(
+        "event" to "rtp_stopped", "packets" to last.packets,
+        "bytes" to last.bytes, "lost" to last.lostPackets
+    ) else if (!args.quiet && !args.viz) out("  ${dim(stats())}", args)
+
+    if (!userStopped && exitCode != ExitCode.OK) kotlin.system.exitProcess(exitCode)
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Snapcast client mode
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Client Snapcast: audio sincronizzato con tutti gli altri client del server.
+ *
+ * Due connessioni distinte, come vuole il protocollo: l'audio sulla 1704 e il
+ * controllo sulla 1705. Il controllo e' accessorio — se non risponde l'audio
+ * suona lo stesso — ma senza di lui non si vede la stanza intera e il volume
+ * di questa macchina non si puo' cambiare da nessuna parte, quindi si dice a
+ * voce alta quando manca invece di lasciarlo intuire.
+ */
+private suspend fun runCliSnapcast(args: CliArgs, settings: AllSettings) {
+    val server = SnapcastCli.resolveServer(args) ?: kotlin.system.exitProcess(ExitCode.NOT_FOUND)
+
+    // 'mixer' e' questa stessa sessione con una schermata al posto delle righe
+    // di stato: riproduce come l'ascolto. Senza terminale, o in JSON, si torna
+    // alle righe — una schermata ANSI dentro una pipe non serve a nessuno.
+    val wantMixer = args.snapCmd is SnapCommand.Mixer
+    val useMixer  = wantMixer && !args.json && SnapcastMixer.usable()
+    // Il telecomando puro: si comanda l'impianto senza entrarci come client.
+    val noAudio   = wantMixer && args.snapNoAudio
+
+    if (useMixer && args.viz) err(
+        yellow("!") + " --viz and the mixer both want the whole screen: showing the mixer."
+    )
+
+    val outputDevice = if (noAudio) null else resolveOutputDevice(args.outputDevice)
+    if (outputDevice == null && !noAudio) {
+        err(red("!") + " No audio output device found.")
+        err(dim("    Run 'wfas devices' to see what Java Sound reports on this system."))
+        err(dim("    'wfas snapcast mixer --no-audio' controls the system without playing."))
+        kotlin.system.exitProcess(ExitCode.RESOURCE_ERROR)
+    }
+
+    val clientId = args.snapClientId ?: NetworkHandler_v1.localClientId()
+    val clientName = args.snapClientName
+        ?: runCatching { java.net.InetAddress.getLocalHost().hostName }.getOrDefault("WFAS")
+
+    if (args.json) {
+        jsonLine(
+            "event" to "snap_connecting", "pid" to ProcessHandle.current().pid(),
+            "host" to server.host, "stream_port" to server.streamPort,
+            "control_port" to server.controlPort, "client_id" to clientId,
+            "client_name" to clientName, "output" to (outputDevice?.name ?: ""),
+            "audio" to !noAudio, "mixer" to useMixer
+        )
+    } else if (!args.viz && !useMixer) {
+        out("", args)
+        out(bold("  WiFi Audio Streaming") + "  - Snapcast client", args)
+        out("  ${dim("Server")}   ${cyan(server.host)} ${dim("audio")} ${server.streamPort} ${dim("control")} ${server.controlPort}", args)
+        out("  ${dim("As")}       $clientName ${dim(clientId)}", args)
+        out("  ${dim("Output")}   ${outputDevice?.name ?: "(not playing)"}", args)
+        out("", args)
+        out(dim("  Commands: q=stop, v <0-100>=volume, m=mute, u=unmute, s=status, g=groups, l <ms>=latency"), args)
+        out("", args)
+    }
+
+    val viz = if (args.viz && !args.json && !useMixer)
+        AudioVisualizer(
+            channels = settings.audio.channels, label = "snapcast  ${server.host}",
+            sampleRate = settings.audio.sampleRate.toInt(), theme = args.vizTheme, groove = args.groove
+        )
+    else null
+
+    val done = CompletableDeferred<Unit>()
+    var userStopped = false
+    var exitCode = ExitCode.OK
+    var stream = SnapStreamStatus(server = server)
+    var control = SnapControlStatus()
+    var streamError: String? = null
+
+    val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
+
+    val ctrl = SnapcastControlClient(server.host, server.controlPort) { st -> control = st }
+
+    /** Il nostro volume passa dal server: e' lui a decidere, e gli altri devono vederlo. */
+    fun setOwnVolume(percent: Int, mute: Boolean): Boolean {
+        val me = control.status.client(clientId) ?: return false
+        return ctrl.setClientVolume(me.id, percent.coerceIn(0, 100), mute)
+    }
+
+    val client = if (noAudio) null else SnapcastStreamClient(
+        server = server,
+        clientId = clientId,
+        clientName = clientName,
+        onStatus = { st ->
+            val before = stream.state
+            stream = st
+            if (st.state != before) {
+                when (st.state) {
+                    SnapStreamState.CONNECTING -> {
+                        if (args.json) jsonLine("event" to "snap_state", "state" to "connecting")
+                        else if (viz != null) viz.statusMsg = ".  connecting"
+                        else if (!useMixer) out("  ${dim(".")}  connecting to ${server.host}:${server.streamPort}", args)
+                    }
+                    SnapStreamState.BUFFERING -> {
+                        if (args.json) jsonLine(
+                            "event" to "snap_state", "state" to "buffering",
+                            "codec" to st.codec, "rate" to st.sampleRate,
+                            "channels" to st.channels, "buffer" to st.bufferMs
+                        ) else if (viz != null) viz.statusMsg = ".  syncing"
+                        else if (!useMixer) out("  ${dim(".")}  ${st.codec} ${st.sampleRate} Hz, ${st.channels} ch, " +
+                                "buffer ${st.bufferMs} ms - syncing", args)
+                    }
+                    SnapStreamState.PLAYING -> {
+                        if (args.json) jsonLine("event" to "snap_state", "state" to "playing")
+                        else if (viz != null) viz.statusMsg = "+  playing"
+                        else if (!useMixer) out("  ${green("+")}  playing", args)
+                    }
+                    SnapStreamState.ERROR -> {
+                        val msg = Strings.get(st.errorKey ?: "snap_err_stream") +
+                                (st.errorDetail?.let { ": $it" } ?: "")
+                        streamError = msg
+                        if (args.json) jsonLine("event" to "snap_error", "message" to msg)
+                        else if (viz != null) viz.statusMsg = "!  $msg"
+                        else if (!useMixer) err(red("!") + " $msg")
+                        exitCode = ExitCode.DISCONNECTED
+                        if (!done.isCompleted) done.complete(Unit)
+                    }
+                    SnapStreamState.IDLE -> Unit
+                }
+            }
+        },
+        onPcm = viz?.let { v -> { samples -> v.feedFrame(samples) } },
+        openPlayer = { rate, ch, bufferMs ->
+            NetworkHandler_v1.openPcmPlaybackSink(outputDevice, rate, ch, bufferMs)
+        }
+    )
+
+    if (viz != null) {
+        viz.onVolume = { v -> if (!setOwnVolume((v * 100).toInt(), false)) NetworkHandler_v1.setClientVolume(v) }
+        viz.onQuit = { userStopped = true; if (!done.isCompleted) done.complete(Unit) }
+        viz.statusMsg = "connecting..."
+    }
+    viz?.start()
+
+    ctrl.start(scope)
+    client?.start(scope)
+
+    // Volume, mute e latenza iniziali passano dal canale di controllo, che
+    // pero' arriva dopo: si aspetta il primo stato invece di sparare comandi
+    // su un client che il server non ha ancora registrato.
+    if (args.volume != null || args.mute || args.latency != null) {
+        scope.launch {
+            var waited = 0
+            while (waited < 8000 && control.status.client(clientId) == null) { delay(200); waited += 200 }
+            val me = control.status.client(clientId)
+            if (me == null) {
+                if (!args.json && !args.quiet) err(
+                    yellow("!") + " The control channel did not list this client, so --volume, --mute " +
+                            "and --latency could not be applied on the server."
+                )
+                args.volume?.let { NetworkHandler_v1.setClientVolume(it) }
+            } else {
+                val pct = args.volume?.let { (it * 100).toInt() } ?: me.volumePercent
+                if (args.volume != null || args.mute) ctrl.setClientVolume(me.id, pct.coerceIn(0, 100), args.mute)
+                args.latency?.let { ctrl.setClientLatency(me.id, it.coerceIn(-2000, 2000)) }
+            }
+        }
+    }
+
+    ExternalReceiver.kind = "snapcast"
+    ExternalReceiver.detail = "${server.host}:${server.streamPort}"
+    ExternalReceiver.onStop = { userStopped = true; if (!done.isCompleted) done.complete(Unit) }
+    ExternalReceiver.onVolume = { v ->
+        if (!setOwnVolume((v * 100).toInt(), false)) NetworkHandler_v1.setClientVolume(v)
+    }
+    ExternalReceiver.onMute = { m ->
+        val me = control.status.client(clientId)
+        if (me != null) ctrl.setClientVolume(me.id, me.volumePercent, m)
+        else NetworkHandler_v1.setClientVolume(if (m) 0f else 1f)
+    }
+    ExternalReceiver.statusFields = {
+        val me = control.status.client(clientId)
+        mapOf(
+            "snap_host" to server.host, "snap_stream_port" to server.streamPort,
+            "snap_control_port" to server.controlPort,
+            "snap_state" to stream.state.name.lowercase(), "snap_codec" to stream.codec,
+            "snap_rate" to stream.sampleRate, "snap_channels" to stream.channels,
+            "snap_buffer_ms" to stream.bufferMs,
+            "snap_sync_error_ms" to String.format("%.2f", stream.syncErrorMs),
+            "snap_clock_offset_ms" to String.format("%.2f", stream.clockOffsetMs),
+            "snap_control" to control.state.name.lowercase(),
+            "snap_groups" to control.status.groups.size,
+            "snap_clients" to control.status.allClients.size,
+            "snap_volume" to (me?.volumePercent ?: stream.volumePercent),
+            "snap_muted" to (me?.muted ?: stream.muted)
+        )
+    }
+
+    fun printRoom() {
+        val st = control.status
+        if (args.json) {
+            jsonLine("event" to "snap_room", "groups" to st.groups.size, "clients" to st.allClients.size)
+            return
+        }
+        if (control.state != SnapControlState.CONNECTED) {
+            println("  " + yellow("!") + " control channel: ${control.state.name.lowercase()}" +
+                    (control.errorDetail?.let { " (${it})" } ?: ""))
+            return
+        }
+        st.groups.forEachIndexed { gi, g ->
+            println("  ${bold("#${gi + 1} ${g.displayName()}")}${dim("  stream ")}${g.streamId}" +
+                    (if (g.muted) " " + yellow("muted") else ""))
+            g.clients.forEach { c ->
+                val me = if (c.id == clientId) cyan(" (this machine)") else ""
+                val vol = if (c.muted) yellow("muted") else "${c.volumePercent}%"
+                println("      ${if (c.connected) green("+") else dim("-")} ${c.displayName().padEnd(24)}" +
+                        "$vol${dim("  latency ")}${c.latencyMs}ms$me")
+            }
+        }
+    }
+
+    fun printStatus() {
+        if (args.json) {
+            jsonLine(
+                "event" to "snap_stats", "state" to stream.state.name.lowercase(),
+                "codec" to stream.codec, "rate" to stream.sampleRate,
+                "channels" to stream.channels, "buffer_ms" to stream.bufferMs,
+                "playout_ms" to stream.playoutBufferMs,
+                "sync_error_ms" to String.format("%.2f", stream.syncErrorMs),
+                "clock_offset_ms" to String.format("%.2f", stream.clockOffsetMs),
+                "control" to control.state.name.lowercase()
+            )
+            return
+        }
+        println("  ${dim("stream")} ${stream.state.name.lowercase()}  ${stream.codec} " +
+                "${stream.sampleRate} Hz ${stream.channels} ch  ${dim("buffer")} ${stream.bufferMs} ms  " +
+                "${dim("sync")} ${String.format("%.1f", stream.syncErrorMs)} ms  " +
+                "${dim("control")} ${control.state.name.lowercase()}")
+    }
+
+    /** Quel che il mixer mostra dell'audio: una riga, quella che manca a colpo d'occhio. */
+    fun audioLine(): String {
+        if (noAudio) return dim("remote control only — this machine is not playing")
+        streamError?.let { return red("! ") + it }
+        val s = stream
+        val word = when (s.state) {
+            SnapStreamState.PLAYING    -> green("playing")
+            SnapStreamState.BUFFERING  -> yellow("syncing")
+            SnapStreamState.CONNECTING -> yellow("connecting")
+            SnapStreamState.ERROR      -> red("error")
+            SnapStreamState.IDLE       -> dim("idle")
+        }
+        val fmt = if (s.sampleRate > 0) "${s.codec} ${s.sampleRate} Hz ${s.channels} ch" else ""
+        return "$word  " + dim(fmt) +
+                (if (s.bufferMs > 0) dim("  buffer ") + "${s.bufferMs} ms" else "") +
+                (if (s.state == SnapStreamState.PLAYING)
+                    dim("  sync ") + String.format("%.1f ms", s.syncErrorMs) else "") +
+                dim("  out ") + (outputDevice?.name ?: "-")
+    }
+
+    if (useMixer) {
+        SnapcastMixer.run(
+            client = ctrl,
+            statusOf = { control },
+            selfId = clientId,
+            title = "${server.host}:${server.controlPort}",
+            audioLine = { audioLine() },
+            stopWhen = { done.isCompleted }
+        )
+        // Se il ciclo e' finito da solo (stream caduto, 'wfas control stop')
+        // l'uscita l'ha gia' decisa qualcun altro, e non e' un'uscita voluta.
+        if (!done.isCompleted) { userStopped = true; done.complete(Unit) }
+    } else if (viz == null) {
+        ConsoleInput.start { raw ->
+            val line = raw.trim()
+            when {
+                line.equals("q", true) || line.equals("quit", true) || line.equals("stop", true) -> {
+                    userStopped = true
+                    if (!done.isCompleted) done.complete(Unit)
+                }
+                line.matches(Regex("(?i)v(?:ol(?:ume)?)?\\s+(\\d+(?:\\.\\d+)?)")) -> {
+                    val pct = line.split("\\s+".toRegex()).last().toFloatOrNull()?.toInt()
+                    if (pct != null) {
+                        if (setOwnVolume(pct, false)) {
+                            if (!args.quiet && !args.json) println("  volume: ${pct.coerceIn(0, 100)}%")
+                        } else {
+                            NetworkHandler_v1.setClientVolume((pct / 100f).coerceIn(0f, 2f))
+                            if (!args.quiet && !args.json)
+                                println("  volume: $pct% ${dim("(locally: the control channel is not available)")}")
+                        }
+                    }
+                }
+                line.equals("m", true) || line.equals("mute", true)   -> { ExternalReceiver.onMute?.invoke(true);  if (!args.quiet && !args.json) println("  muted") }
+                line.equals("u", true) || line.equals("unmute", true) -> { ExternalReceiver.onMute?.invoke(false); if (!args.quiet && !args.json) println("  unmuted") }
+                line.matches(Regex("(?i)l(?:at(?:ency)?)?\\s+(-?\\d+)")) -> {
+                    val ms = line.split("\\s+".toRegex()).last().toIntOrNull()
+                    val me = control.status.client(clientId)
+                    if (ms != null && me != null) {
+                        ctrl.setClientLatency(me.id, ms.coerceIn(-2000, 2000))
+                        if (!args.quiet && !args.json) println("  latency: ${ms.coerceIn(-2000, 2000)} ms")
+                    } else if (!args.quiet && !args.json) {
+                        println("  ${yellow("!")} the control channel does not list this client yet")
+                    }
+                }
+                line.equals("s", true) || line.equals("status", true) -> printStatus()
+                line.equals("g", true) || line.equals("groups", true) -> printRoom()
+            }
+        }
+    }
+
+    // L'indicatore di debug scrive righe: dentro lo schermo del mixer le
+    // sovrascriverebbe a caso.
+    if (args.debug && !args.viz && !args.json && !useMixer)
+        DebugHud.start(sending = false, peer = "${server.host}:${server.streamPort}")
+
+    done.await()
+
+    ConsoleInput.stop()
+    client?.stop()
+    ctrl.stop()
+    scope.cancel()
+    ExternalReceiver.clear()
+    DebugHud.stop()
+    viz?.stop()
+
+    if (args.json) jsonLine("event" to "snap_stopped")
+    if (!userStopped && exitCode != ExitCode.OK) kotlin.system.exitProcess(exitCode)
 }

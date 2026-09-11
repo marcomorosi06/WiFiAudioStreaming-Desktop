@@ -187,10 +187,50 @@ fun AppContent(
     micRoutingMode: MicRoutingMode = MicRoutingMode.OFF,
     onMicRoutingModeChange: (MicRoutingMode) -> Unit = {},
     selectedMicMixInput: Mixer.Info? = null,
-    onMicMixInputSelected: (Mixer.Info) -> Unit = {}
+    onMicMixInputSelected: (Mixer.Info) -> Unit = {},
+    // ── Ricezione RTP / SDP ───────────────────────────────────
+    rtpDraft: RtpSource = RtpSource(),
+    onRtpDraftChange: (RtpSource) -> Unit = {},
+    rtpSaved: List<RtpSource> = emptyList(),
+    onRtpSave: (RtpSource) -> Unit = {},
+    onRtpForget: (RtpSource) -> Unit = {},
+    rtpStatus: RtpStatus = RtpStatus(),
+    onRtpListen: (RtpSource) -> Unit = {},
+    onRtpStop: () -> Unit = {},
+    // ── Client Snapcast ────────────────────────────────────────────────
+    snapcastDiscovered: List<SnapcastServerRef> = emptyList(),
+    snapcastSaved: List<SnapcastServerRef> = emptyList(),
+    snapcastHost: String = "",
+    onSnapcastHostChange: (String) -> Unit = {},
+    snapcastStreamPort: Int = SnapcastDefaults.STREAM_PORT,
+    onSnapcastStreamPortChange: (Int) -> Unit = {},
+    snapcastControlPort: Int = SnapcastDefaults.CONTROL_PORT,
+    onSnapcastControlPortChange: (Int) -> Unit = {},
+    onSnapcastSave: (SnapcastServerRef) -> Unit = {},
+    onSnapcastForget: (SnapcastServerRef) -> Unit = {},
+    onSnapcastConnect: (SnapcastServerRef) -> Unit = {},
+    onSnapcastStop: () -> Unit = {},
+    snapStream: SnapStreamStatus = SnapStreamStatus(),
+    snapControl: SnapControlStatus = SnapControlStatus(),
+    snapSelfClientId: String = "",
+    onSnapSetVolume: (String, Int, Boolean) -> Unit = { _, _, _ -> },
+    onSnapSetName: (String, String) -> Unit = { _, _ -> },
+    onSnapSetLatency: (String, Int) -> Unit = { _, _ -> },
+    onSnapGroupMute: (String, Boolean) -> Unit = { _, _ -> },
+    onSnapGroupStream: (String, String) -> Unit = { _, _ -> },
+    onSnapGroupName: (String, String) -> Unit = { _, _ -> },
+    onSnapMoveClient: (String, String) -> Unit = { _, _ -> },
+    onSnapSplitClient: (String) -> Unit = {},
+    snapSplitSupported: Boolean = true,
+    onSnapRefresh: () -> Unit = {}
 ) {
     val listState = rememberLazyListState()
     val scrollScope = rememberCoroutineScope()
+    // Mentre si riceve RTP la schermata diventa quella di sessione, come per
+    // una connessione WFAS: spettro in alto e configurazione via.
+    val rtpLive = rtpStatus.active && !isServer
+    val snapLive = snapStream.active && !isServer
+    val externalLive = rtpLive || snapLive
     val focusRequester = remember { FocusRequester() }
 
     Scaffold(
@@ -300,7 +340,38 @@ fun AppContent(
                     }
                 }
 
-                item {
+                if (snapLive) {
+                    item {
+                        SnapcastSessionPanel(
+                            stream = snapStream,
+                            control = snapControl,
+                            selfClientId = snapSelfClientId,
+                            onStop = onSnapcastStop,
+                            onSetVolume = onSnapSetVolume,
+                            onSetName = onSnapSetName,
+                            onSetLatency = onSnapSetLatency,
+                            onGroupMute = onSnapGroupMute,
+                            onGroupStream = onSnapGroupStream,
+                            onGroupName = onSnapGroupName,
+                            onMoveClient = onSnapMoveClient,
+                            onSplitClient = onSnapSplitClient,
+                            splitSupported = snapSplitSupported,
+                            onRefresh = onSnapRefresh
+                        )
+                    }
+                }
+
+                if (rtpLive) {
+                    item {
+                        RtpSessionPanel(
+                            status = rtpStatus,
+                            outputName = selectedOutputDevice?.name,
+                            onStop = onRtpStop
+                        )
+                    }
+                }
+
+                if (!externalLive) item {
                     val serverReady = !(isServer && !appSettings.useNativeEngine && virtualDriverStatus is VirtualDriverStatus.Missing)
                     val startAllowed = WfasPolicy.canStartServerWith(
                         appSettings.wfasMode,
@@ -328,7 +399,7 @@ fun AppContent(
                     )
                 }
 
-                item {
+                if (!externalLive) item {
                     QrPairingBar(
                         appSettings = appSettings,
                         isServer = isServer,
@@ -356,7 +427,7 @@ fun AppContent(
                     )
                 }
 
-                if (isStreaming) {
+                if (isStreaming || externalLive) {
                     item {
                         SpectrumPanel(
                             enabled = appSettings.vizEnabled,
@@ -443,7 +514,7 @@ fun AppContent(
                     }
                 }
 
-                if (!isStreaming) {
+                if (!isStreaming && !externalLive) {
                     val startAllowed = WfasPolicy.canStartServerWith(
                         appSettings.wfasMode,
                         UsbLink.isReady(),
@@ -572,7 +643,34 @@ fun AppContent(
                                             newList.add(ip)
                                         }
                                         onAppSettingsChange(appSettings.copy(autoConnectIps = newList))
-                                    }
+                                    },
+                                    snapcastServers = snapcastDiscovered,
+                                    onConnectSnapcast = onSnapcastConnect
+                                )
+                                SnapcastConnectCard(
+                                    host = snapcastHost,
+                                    onHostChange = onSnapcastHostChange,
+                                    streamPort = snapcastStreamPort,
+                                    onStreamPortChange = onSnapcastStreamPortChange,
+                                    controlPort = snapcastControlPort,
+                                    onControlPortChange = onSnapcastControlPortChange,
+                                    saved = snapcastSaved,
+                                    onSave = onSnapcastSave,
+                                    onForget = onSnapcastForget,
+                                    onConnect = onSnapcastConnect,
+                                    busy = snapStream.active,
+                                    outputReady = selectedOutputDevice != null
+                                )
+                                RtpReceiveCard(
+                                    draft = rtpDraft,
+                                    onDraftChange = onRtpDraftChange,
+                                    saved = rtpSaved,
+                                    onSave = onRtpSave,
+                                    onForget = onRtpForget,
+                                    status = rtpStatus,
+                                    onListen = onRtpListen,
+                                    onStop = onRtpStop,
+                                    outputReady = selectedOutputDevice != null
                                 )
                             }
                         }
@@ -3756,10 +3854,15 @@ fun DeviceDiscoveryList(
     onRefresh: () -> Unit,
     enabled: Boolean,
     autoConnectIps: List<String>,
-    onToggleAutoConnectIp: (String) -> Unit
+    onToggleAutoConnectIp: (String) -> Unit,
+    snapcastServers: List<SnapcastServerRef> = emptyList(),
+    onConnectSnapcast: (SnapcastServerRef) -> Unit = {}
 ) {
+    // L'altezza minima esiste solo per non far collassare la card mentre cerca.
+    // Se qualcosa da mostrare c'e' gia', a decidere e' il contenuto.
+    val hasAnything = devices.isNotEmpty() || snapcastServers.isNotEmpty()
     ElevatedCard(
-        modifier = Modifier.fillMaxWidth().heightIn(min = 340.dp),
+        modifier = Modifier.fillMaxWidth().heightIn(min = if (hasAnything) 0.dp else 340.dp),
         shape = RoundedCornerShape(24.dp)
     ) {
         Column(Modifier.padding(16.dp)) {
@@ -3781,22 +3884,55 @@ fun DeviceDiscoveryList(
                     label = "alpha-animation"
                 )
 
-                Column(
-                    modifier = Modifier.fillMaxWidth().padding(vertical = 24.dp),
-                    horizontalAlignment = Alignment.CenterHorizontally,
-                    verticalArrangement = Arrangement.spacedBy(16.dp)
-                ) {
-                    CircularProgressIndicator()
-                    Text(
-                        text = stringResource("status_searching_servers"),
-                        style = MaterialTheme.typography.bodyLarge,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = alpha)
-                    )
+                if (snapcastServers.isEmpty()) {
+                    Column(
+                        modifier = Modifier.fillMaxWidth().padding(vertical = 24.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.spacedBy(16.dp)
+                    ) {
+                        CircularProgressIndicator()
+                        Text(
+                            text = stringResource("status_searching_servers"),
+                            style = MaterialTheme.typography.bodyLarge,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = alpha)
+                        )
+                    }
+                } else {
+                    // C'e' gia' qualcosa da mostrare sotto: la ricerca WFAS si
+                    // riduce a una riga, invece di tenere occupato mezzo schermo
+                    // con uno spinner e spingere giu' i server Snapcast.
+                    Row(
+                        modifier = Modifier.fillMaxWidth().padding(vertical = 6.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(10.dp)
+                    ) {
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(14.dp),
+                            strokeWidth = 2.dp
+                        )
+                        Text(
+                            text = stringResource("status_searching_servers"),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = alpha)
+                        )
+                    }
                 }
             } else {
                 val deviceList = remember(devices) { devices.entries.toList() }
                 val listState = rememberLazyListState()
-                Box(modifier = Modifier.fillMaxWidth().heightIn(max = 460.dp)) {
+
+                // Quanto spazio si concede alla lista WFAS prima di farla
+                // scorrere. Senza Snapcast sotto non c'e' motivo di stringerla;
+                // con Snapcast sotto, una fila lunga di server WFAS spingerebbe
+                // la sezione multi-room fuori schermo. Si taglia a tre righe e
+                // mezza: la quarta resta visibile a meta' e si capisce da sola
+                // che la lista continua.
+                //
+                // E' un tetto, non un'altezza fissa: con due o tre server la
+                // lista resta corta e la sezione Snapcast sale da sola.
+                val rowPitch = 78.dp
+                val maxRows = if (snapcastServers.isEmpty()) 6f else 3.5f
+                Box(modifier = Modifier.fillMaxWidth().heightIn(max = rowPitch * maxRows)) {
                     LazyColumn(
                         state = listState,
                         modifier = Modifier.fillMaxWidth().padding(end = 12.dp),
@@ -3819,6 +3955,16 @@ fun DeviceDiscoveryList(
                     )
                 }
             }
+
+            // I server Snapcast stanno nella stessa card ma in una sezione
+            // staccata e marchiata: sono un'altra cosa dai server WFAS, e
+            // confonderli porta l'utente a chiedersi perche' il volume di
+            // "quel dispositivo" non risponde.
+            SnapcastDiscoverySection(
+                servers = snapcastServers,
+                onConnect = onConnectSnapcast,
+                enabled = enabled
+            )
         }
     }
 }

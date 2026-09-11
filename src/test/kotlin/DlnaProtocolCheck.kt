@@ -217,6 +217,11 @@ fun main() {
     wfasPairingUriChecks()
     snapcastProtocolChecks()
     controlChannelChecks()
+    rtpSdpChecks()
+    rtpReceiverChecks()
+    snapcastClientChecks()
+    snapcastOverlayChecks()
+    cliReceiveChecks()
 
     println()
     if (failures == 0) println("ALL CHECKS PASSED") else println("$failures CHECK(S) FAILED")

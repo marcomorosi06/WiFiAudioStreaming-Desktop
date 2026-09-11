@@ -383,6 +383,30 @@ class SnapcastState(
             emptied.forEach { groups.remove(it) }
             if (known.isEmpty()) groups.remove(groupId)
             else groups[groupId] = target.copy(clientIds = known)
+
+            // Nessun client puo' restare senza gruppo.
+            //
+            // Questo comando e' l'unico modo che Snapcast offre per cambiare la
+            // composizione dei gruppi, e chi viene tolto da un gruppo senza
+            // entrare in un altro va rialloggiato: e' quello che fa snapserver.
+            // Senza, il client resta collegato e continua a suonare ma sparisce
+            // da "groups", cioe' da ogni interfaccia — e non essendo piu'
+            // nominabile non lo raggiunge piu' nessun comando. L'unico modo di
+            // recuperarlo diventa riavviarlo.
+            //
+            // Eredita lo stream del gruppo da cui e' uscito, cosi' continua a
+            // sentire la stessa sorgente.
+            val homeless = clients.keys.filter { id ->
+                groups.values.none { it.clientIds.contains(id) }
+            }
+            homeless.forEach { id ->
+                val newId = UUID.randomUUID().toString()
+                groups[newId] = SnapcastGroup(
+                    id = newId,
+                    streamId = target.streamId,
+                    clientIds = listOf(id)
+                )
+            }
         }
         persist()
         notifyServerUpdate()

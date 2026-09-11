@@ -602,6 +602,23 @@ object NetworkHandler_v1 {
         return resolved.substringBefore('.').ifBlank { "wfas" }
     }
 
+    /**
+     * Identita' stabile di questo computer come client Snapcast.
+     *
+     * Il server ricorda volume, nome e latenza per ID: se cambiasse a ogni
+     * avvio, ogni riconnessione comparirebbe come un client nuovo e le
+     * regolazioni dell'utente andrebbero perse. Si usa il MAC della prima
+     * interfaccia vera, con ripiego stabile sul nome host.
+     */
+    fun localClientId(): String = runCatching {
+        java.net.NetworkInterface.getNetworkInterfaces().toList()
+            .filter { !it.isLoopback && it.isUp }
+            .mapNotNull { it.hardwareAddress }
+            .firstOrNull { it.size == 6 }
+            ?.joinToString(":") { b -> "%02x".format(b) }
+            ?: ("wfas-" + java.net.InetAddress.getLocalHost().hostName.lowercase())
+    }.getOrDefault("wfas-desktop")
+
     fun getActiveNetworkInterface(preferredName: String = "Auto"): NetworkInterface? = try {
         val usb = if (preferredName == "Auto") UsbLink.activeInterface() else null
         val allInterfaces = NetworkInterface.getNetworkInterfaces().toList()
@@ -755,6 +772,12 @@ object NetworkHandler_v1 {
     @Volatile private var aacPcmQueue:  java.util.concurrent.ArrayBlockingQueue<ByteArray>? = null
     @Volatile private var opusPcmQueue: java.util.concurrent.ArrayBlockingQueue<ByteArray>? = null
     @Volatile private var rtpPcmQueue:  java.util.concurrent.ArrayBlockingQueue<ByteArray>? = null
+
+    /** Byte di audio che la coda RTP non ha accettato: il timestamp li salta. */
+    private val rtpSkippedBytes = java.util.concurrent.atomic.AtomicLong(0L)
+
+    /** Mezzo secondo di ritardo e il ritmo si rifa' da adesso, invece di rincorrere. */
+    private val rtpPaceResyncNs = 500_000_000L
     @Volatile private var dlnaManager: DlnaSessionManager? = null
     @Volatile private var snapcastManager: SnapcastSessionManager? = null
 
@@ -2364,11 +2387,18 @@ object NetworkHandler_v1 {
     ) = launch(Dispatchers.IO) {
         val queue = java.util.concurrent.ArrayBlockingQueue<ByteArray>(25)
         rtpPcmQueue = queue
+        rtpSkippedBytes.set(0L)
 
         var sequenceNumber = (Math.random() * 65535).toInt()
         var rtpTimestamp   = (Math.random() * Int.MAX_VALUE).toLong()
         val ssrc           = (Math.random() * Int.MAX_VALUE).toLong()
-        val timestampIncrement = (audioSettings.bufferSize / 2 / audioSettings.channels).toLong()
+        val rtpFrameBytes  = audioSettings.channels * 2
+        val rtpClockRate   = audioSettings.sampleRate.toLong().coerceAtLeast(8000L)
+
+        /** Quando tocca al prossimo pacchetto. 0 = non abbiamo ancora un ritmo. */
+        var nextDueNs = 0L
+        /** Da mettere sul primo pacchetto dopo un buco, come vuole RFC 3551. */
+        var marker = false
 
         val socket: DatagramSocket = if (isMulticast) {
             MulticastSocket().apply {
@@ -2385,6 +2415,21 @@ object NetworkHandler_v1 {
             while (isActive) {
                 val pcmLeBytes = queue.poll(200, java.util.concurrent.TimeUnit.MILLISECONDS) ?: continue
 
+                // Quel che la coda ha buttato via non e' audio che non e'
+                // esistito: e' audio che manca. Il timestamp lo salta, cosi'
+                // chi ascolta vede il buco e lo copre; senza, crederebbe che
+                // il flusso sia continuo e si ritroverebbe in anticipo di quel
+                // tanto per tutto il resto della sessione.
+                val skippedBytes = rtpSkippedBytes.getAndSet(0L)
+                if (skippedBytes >= rtpFrameBytes) {
+                    val skippedFrames = skippedBytes / rtpFrameBytes
+                    rtpTimestamp += skippedFrames
+                    if (nextDueNs != 0L) {
+                        nextDueNs += skippedFrames * 1_000_000_000L / rtpClockRate
+                    }
+                    marker = true
+                }
+
                 // Dimensione massima sicura per evitare la frammentazione IP (MTU 1500)
                 val maxPayloadSize = 1400
                 var offset = 0
@@ -2396,7 +2441,8 @@ object NetworkHandler_v1 {
 
                     // Header RTP
                     buf.put(0x80.toByte())
-                    buf.put(96.toByte())
+                    buf.put(if (marker) (96 or 0x80).toByte() else 96.toByte())
+                    marker = false
                     buf.putShort((sequenceNumber and 0xFFFF).toShort())
                     buf.putInt((rtpTimestamp and 0xFFFFFFFFL).toInt())
                     buf.putInt((ssrc and 0xFFFFFFFFL).toInt())
@@ -2406,11 +2452,35 @@ object NetworkHandler_v1 {
                     val beBuf = buf.asShortBuffer()
                     while (leBuf.hasRemaining()) beBuf.put(leBuf.get())
 
+                    val samplesInChunk = chunkSize / 2 / audioSettings.channels // 2 byte per sample (16-bit)
+
+                    // Il ritmo: ogni pacchetto parte quando gli tocca.
+                    //
+                    // Il resto del server manda a raffica, e per WFAS va bene:
+                    // il suo client sa a quale campione va suonato ogni
+                    // pacchetto e ha una coda che assorbe le ondate. Un
+                    // ricevitore RTP no -- RTP e' un flusso e basta, e chi lo
+                    // ascolta si aspetta che arrivi al ritmo con cui si suona.
+                    // Dieci pacchetti insieme e poi 66 ms di niente vuol dire
+                    // una coda che si svuota fino in fondo a ogni giro.
+                    //
+                    // Il ritmo si conta sui campioni, non sull'orologio: cosi'
+                    // e' esattamente quello con cui la scheda audio li produce
+                    // e non deriva. Se restiamo indietro di mezzo secondo --
+                    // l'audio si e' fermato, il thread e' stato via -- si
+                    // riparte da adesso invece di rincorrere il passato.
+                    val nowNs = System.nanoTime()
+                    if (nextDueNs == 0L || nowNs - nextDueNs > rtpPaceResyncNs) {
+                        nextDueNs = nowNs
+                    } else if (nextDueNs - nowNs > 1_000_000L) {
+                        delay((nextDueNs - nowNs) / 1_000_000L)
+                    }
+                    nextDueNs += samplesInChunk * 1_000_000_000L / rtpClockRate
+
                     runCatching { socket.send(DatagramPacket(rtpPacket, rtpPacket.size, destAddress, port)) }
 
                     // Aggiorniamo i contatori in modo millimetrico per il prossimo pacchetto
                     sequenceNumber = (sequenceNumber + 1) and 0xFFFF
-                    val samplesInChunk = chunkSize / 2 / audioSettings.channels // 2 byte per sample (16-bit)
                     rtpTimestamp += samplesInChunk
                     offset += chunkSize
                 }
@@ -2428,7 +2498,11 @@ object NetworkHandler_v1 {
     // FIX: RTP ora riceve anch'esso una copia distinta del buffer, eliminando la
     // potenziale data race con il loop del grabber che potrebbe riusare byteBuffer.
     private fun distributeToSidecars(pcmBytes: ByteArray) {
-        rtpPcmQueue?.let  { if (it.remainingCapacity() > 0) it.offer(pcmBytes.copyOf()) }
+        rtpPcmQueue?.let {
+            if (it.remainingCapacity() <= 0 || !it.offer(pcmBytes.copyOf())) {
+                rtpSkippedBytes.addAndGet(pcmBytes.size.toLong())
+            }
+        }
         aacPcmQueue?.let  { if (it.remainingCapacity() > 0) it.offer(pcmBytes.copyOf()) }
         opusPcmQueue?.let { if (it.remainingCapacity() > 0) it.offer(pcmBytes.copyOf()) }
         dlnaManager?.submitPcm(pcmBytes.copyOf())
@@ -4209,6 +4283,81 @@ object NetworkHandler_v1 {
         return runCatching { AudioSystem.getMixer(again) }.getOrNull()
     }
 
+    /**
+     * Uscita audio per il ricevitore RTP.
+     *
+     * Riusa la stessa linea e lo stesso jitter buffer del client WFAS: un
+     * flusso RTP ha esattamente gli stessi problemi di rete (ritardo variabile,
+     * pacchetti persi), quindi non ha senso una seconda implementazione che
+     * invecchia per conto suo.
+     *
+     * La frequenza e i canali arrivano dallo stream, non dalle impostazioni:
+     * un SDP puo' descrivere qualcosa di diverso da quello che l'app usa per
+     * trasmettere, e la linea va aperta su quello che arriva davvero.
+     */
+    fun openPcmPlaybackSink(
+        mixerInfo: Mixer.Info?,
+        sampleRate: Int,
+        channels: Int,
+        latencyMs: Int
+    ): PcmPlaybackSink? {
+        val fmt = AudioSettings_V1(
+            sampleRate = sampleRate.toFloat(),
+            bitDepth   = 16,
+            channels   = channels,
+            bufferSize = (sampleRate * channels * 2 * 10 / 1000)
+        )
+        val line = (mixerInfo?.let { prepareSourceDataLine(it, fmt) }
+            ?: runCatching {
+                AudioSystem.getSourceDataLine(fmt.toAudioFormat()).also { it.open(fmt.toAudioFormat()); it.start() }
+            }.getOrNull()) ?: run {
+            AppDebug.log("[RTP-RX] nessuna linea di uscita per ${sampleRate}Hz ${channels}ch")
+            return null
+        }
+
+        val prebuffer = latencyMs.coerceIn(40, 1000)
+        val player = JitterAudioPlayer(
+            line, sampleRate, channels,
+            prebufferMs = prebuffer,
+            maxBufferMs = prebuffer + 280
+        ).also { it.start() }
+
+        // Stesso trattamento dei buchi del client WFAS: senza mascheratura ogni
+        // pacchetto perso e' un salto secco nella forma d'onda, e si sente come
+        // un click. Lo stato serve a ricordare l'ultimo audio buono e la coda
+        // da dissolvere sul primo pacchetto vero che torna.
+        val frameBytes = (channels * 2).coerceAtLeast(2)
+        val state = ClientPlaybackState()
+        val maxConcealBytes = MAX_CONCEAL_FRAMES.toInt() * frameBytes
+
+        return object : PcmPlaybackSink {
+            override fun submit(pcmLittleEndian: ByteArray) {
+                val len = pcmLittleEndian.size - (pcmLittleEndian.size % frameBytes)
+                if (len <= 0) return
+                val tail = state.concealTail
+                if (tail != null) {
+                    state.concealTail = null
+                    val merged = crossfadeIntoReal(pcmLittleEndian, 0, len, tail, frameBytes)
+                    player.submit(merged, 0, merged.size)
+                } else {
+                    player.submit(pcmLittleEndian, 0, len)
+                }
+                val lg = state.lastGoodPcm
+                if (lg == null || lg.size != len) state.lastGoodPcm = ByteArray(len)
+                System.arraycopy(pcmLittleEndian, 0, state.lastGoodPcm!!, 0, len)
+            }
+
+            override fun conceal(approxBytes: Int) {
+                val n = approxBytes.coerceIn(0, maxConcealBytes)
+                if (n >= frameBytes) concealGap(player, state, n, frameBytes)
+            }
+
+            override fun bufferedMs(): Int = player.bufferedMs()
+
+            override fun close() { runCatching { player.stop() } }
+        }
+    }
+
     private fun prepareSourceDataLine(mixerInfo: Mixer.Info, audioSettings: AudioSettings_V1): SourceDataLine? {
         val format       = audioSettings.toAudioFormat()
         val dataLineInfo = DataLine.Info(SourceDataLine::class.java, format)
@@ -4588,6 +4737,35 @@ fun main(args: Array<String>) {
     if (cliArgs.printLicenses) { CliArgs.printLicenses(); return }
     if (cliArgs.printFred)     { CliArgs.printFred();     return }
 
+    // Le viste e i comandi di 'rtp' e 'snapcast' finiscono qui: solo l'ascolto
+    // prosegue verso runCli, che e' l'unico che apre davvero una sessione.
+    //
+    // Le preferenze di rete pero' valgono anche qui. Saltarle voleva dire che
+    // 'wfas snapcast discover' cercava su un'interfaccia scelta con criteri
+    // diversi da 'wfas snapcast listen', e che --debug non stampava niente
+    // proprio nei comandi in cui serve di piu'.
+    if (cliArgs.rtpCmd != null || cliArgs.snapCmd != null) {
+        AppDebug.enabled = cliArgs.debug
+        val stored = SettingsRepository.loadSettings()
+        NetAddr.configureFamily(cliArgs.ipFamily)
+        UsbLink.configure(
+            cliArgs.usb ?: stored.app.usbModeEnabled,
+            cliArgs.usbLatency ?: stored.app.usbLatencyMs,
+            cliArgs.usbIface ?: stored.app.usbInterface,
+            override = cliArgs.usb != null || cliArgs.usbLatency != null || cliArgs.usbIface != null
+        )
+    }
+    cliArgs.rtpCmd?.let { c ->
+        if (c !is RtpCommand.Listen) kotlin.system.exitProcess(RtpCli.run(c, cliArgs))
+    }
+    cliArgs.snapCmd?.let { c ->
+        // Ascolto e mixer riproducono: proseguono verso runCli come una
+        // sessione qualunque. Tutto il resto e' solo canale di controllo e
+        // finisce qui.
+        if (c !is SnapCommand.Listen && c !is SnapCommand.Mixer)
+            kotlin.system.exitProcess(SnapcastCli.run(c, cliArgs))
+    }
+
     val pairCmd = cliArgs.pairCmd
     if (pairCmd != null) {
         if (pairCmd is PairCommand.Connect) {
@@ -4731,6 +4909,67 @@ fun startGuiApplication(cliArgs: CliArgs) = application {
     var virtualDriverStatus by remember { mutableStateOf<VirtualDriverStatus>(VirtualDriverStatus.Ok) }
     val scope = rememberCoroutineScope()
 
+    // ── Ricezione RTP / SDP ─────────────────────────────────────────────────
+    // Il draft e' la configurazione in corso di modifica nella card; le salvate
+    // vivono nelle impostazioni. Il ricevitore e' uno solo: ascoltare due
+    // sorgenti insieme non ha senso con una sola uscita audio.
+    var rtpDraft by remember { mutableStateOf(RtpSource()) }
+    var rtpStatus by remember { mutableStateOf(RtpStatus()) }
+    val rtpReceiver = remember { mutableStateOf<RtpReceiver?>(null) }
+    val rtpSaved = remember(appSettings.rtpSources) {
+        appSettings.rtpSources.mapNotNull { RtpSource.deserialize(it) }
+    }
+    DisposableEffect(Unit) {
+        onDispose { rtpReceiver.value?.stop(); rtpReceiver.value = null }
+    }
+
+    // ── Client Snapcast ─────────────────────────────────────────────────────
+    // Tre pezzi indipendenti: la ricerca in rete gira sempre mentre siamo in
+    // ricezione, il client audio e quello di controllo solo da connessi. Il
+    // controllo puo' fallire senza che l'audio ne risenta: sono due porte
+    // diverse e due funzioni diverse.
+    var snapDiscovered by remember { mutableStateOf<List<SnapcastServerRef>>(emptyList()) }
+    var snapHost by remember { mutableStateOf("") }
+    var snapStreamPort by remember { mutableStateOf(SnapcastDefaults.STREAM_PORT) }
+    var snapControlPort by remember { mutableStateOf(SnapcastDefaults.CONTROL_PORT) }
+    var snapStream by remember { mutableStateOf(SnapStreamStatus()) }
+    var snapControl by remember { mutableStateOf(SnapControlStatus()) }
+    // Si scopre solo provando: alcuni server non rialloggiano il client
+    // staccato da un gruppo. Dopo il primo tentativo andato male non si
+    // propone piu' l'operazione, invece di farla fallire ogni volta.
+    var snapSplitSupported by remember { mutableStateOf(true) }
+    var snapServer by remember { mutableStateOf<SnapcastServerRef?>(null) }
+    val snapClient = remember { mutableStateOf<SnapcastStreamClient?>(null) }
+    val snapCtrl = remember { mutableStateOf<SnapcastControlClient?>(null) }
+    val snapBrowser = remember { mutableStateOf<SnapcastBrowser?>(null) }
+    val snapSaved = remember(appSettings.snapcastServers) {
+        appSettings.snapcastServers.mapNotNull { SnapcastServerRef.deserialize(it) }
+    }
+    val snapSelfId = remember { NetworkHandler_v1.localClientId() }
+
+    // La ricerca ha senso solo mentre si guarda la lista dei dispositivi.
+    LaunchedEffect(isServer, isStreaming) {
+        if (!isServer && !isStreaming) {
+            if (snapBrowser.value == null) {
+                snapBrowser.value = SnapcastBrowser(
+                    scope = scope,
+                    interfaceProvider = { NetworkHandler_v1.getActiveNetworkInterface(appSettings.networkInterface) },
+                    onServers = { snapDiscovered = it }
+                ).also { it.start() }
+            }
+        } else {
+            snapBrowser.value?.stop(); snapBrowser.value = null
+            snapDiscovered = emptyList()
+        }
+    }
+
+    DisposableEffect(Unit) {
+        onDispose {
+            snapClient.value?.stop(); snapCtrl.value?.stop(); snapBrowser.value?.stop()
+        }
+    }
+
+
     val outputDevices = remember { mutableStateOf<List<Mixer.Info>>(emptyList()) }
     var selectedOutputDevice by remember { mutableStateOf<Mixer.Info?>(null) }
     val inputDevices  = remember { mutableStateOf<List<Mixer.Info>>(emptyList()) }
@@ -4739,6 +4978,57 @@ fun startGuiApplication(cliArgs: CliArgs) = application {
     var selectedClientMic       by remember { mutableStateOf<Mixer.Info?>(null) }
     var selectedServerMicOutput by remember { mutableStateOf<Mixer.Info?>(null) }
     var selectedMicMixInput     by remember { mutableStateOf<Mixer.Info?>(null) }
+
+    fun stopSnapcast() {
+        snapClient.value?.stop(); snapClient.value = null
+        snapCtrl.value?.stop();   snapCtrl.value = null
+        snapStream = SnapStreamStatus()
+        snapControl = SnapControlStatus()
+        snapSplitSupported = true
+        snapServer = null
+        SpectrumAnalyzer.reset()
+    }
+
+    /**
+     * Apre (o riapre) il solo canale audio verso il server, lasciando in piedi
+     * quello di controllo.
+     *
+     * Riaprirlo e' anche il modo di uscire da un gruppo su un server che non
+     * rialloggia i client staccati: alla riconnessione il server assegna un
+     * gruppo nuovo a chi non ne ha, e questo lo possiamo fare solo per noi
+     * stessi — la riconnessione di un altro client non la comanda nessuno.
+     */
+    fun startSnapStream(server: SnapcastServerRef) {
+        snapClient.value?.stop()
+        snapClient.value = SnapcastStreamClient(
+            server = server,
+            clientId = snapSelfId,
+            clientName = runCatching { java.net.InetAddress.getLocalHost().hostName }
+                .getOrDefault("WFAS"),
+            onStatus = { snapStream = it },
+            onPcm = vizSink,
+            openPlayer = { rate, ch, bufferMs ->
+                NetworkHandler_v1.openPcmPlaybackSink(selectedOutputDevice, rate, ch, bufferMs)
+            }
+        ).also { it.start(scope) }
+    }
+
+    fun connectSnapcast(server: SnapcastServerRef) {
+        stopSnapcast()
+        snapServer = server
+        snapHost = server.host
+        snapStreamPort = server.streamPort
+        snapControlPort = server.controlPort
+
+        startSnapStream(server)
+
+        snapCtrl.value = SnapcastControlClient(
+            host = server.host,
+            port = server.controlPort,
+            onStatus = { snapControl = it }
+        ).also { it.start(scope) }
+    }
+
     var isMulticastMode by remember { mutableStateOf(appSettings.lastMulticastMode) }
     val isMicMuted by NetworkHandler_v1.isMicMuted.collectAsState()
 
@@ -5639,7 +5929,180 @@ fun startGuiApplication(cliArgs: CliArgs) = application {
                             isMicMuted                        = isMicMuted,
                             onMicMuteToggle                   = { NetworkHandler_v1.isMicMuted.value = !NetworkHandler_v1.isMicMuted.value },
                             micRoutingMode                    = micRoutingMode,
-                            onMicRoutingModeChange            = { micRoutingMode = it }
+                            onMicRoutingModeChange            = { micRoutingMode = it },
+                            rtpDraft                          = rtpDraft,
+                            onRtpDraftChange                  = { rtpDraft = it },
+                            rtpSaved                          = rtpSaved,
+                            onRtpSave                         = { src ->
+                                // Stessa destinazione = stessa voce: si aggiorna, non si duplica.
+                                val line = src.serialize()
+                                val rest = appSettings.rtpSources.filterNot {
+                                    RtpSource.deserialize(it)?.let { o ->
+                                        o.address == src.address && o.port == src.port
+                                    } == true
+                                }
+                                appSettings = appSettings.copy(rtpSources = rest + line)
+                            },
+                            onRtpForget                       = { src ->
+                                appSettings = appSettings.copy(
+                                    rtpSources = appSettings.rtpSources.filterNot {
+                                        RtpSource.deserialize(it)?.let { o ->
+                                            o.address == src.address && o.port == src.port
+                                        } == true
+                                    }
+                                )
+                            },
+                            rtpStatus                         = rtpStatus,
+                            onRtpListen                       = { src ->
+                                rtpReceiver.value?.stop()
+                                val rx = RtpReceiver(
+                                    source = src,
+                                    onStatus = { st -> rtpStatus = st },
+                                    onPcm = vizSink,
+                                    openPlayer = { rate, ch ->
+                                        NetworkHandler_v1.openPcmPlaybackSink(
+                                            selectedOutputDevice, rate, ch, audioSettings.latencyMs
+                                        )
+                                    },
+                                    preferredInterface = appSettings.networkInterface
+                                )
+                                rtpReceiver.value = rx
+                                rx.start(scope)
+                            },
+                            onRtpStop                         = {
+                                rtpReceiver.value?.stop()
+                                rtpReceiver.value = null
+                                rtpStatus = RtpStatus()
+                                SpectrumAnalyzer.reset()
+                            },
+                            snapcastDiscovered                = snapDiscovered,
+                            snapcastSaved                     = snapSaved,
+                            snapcastHost                      = snapHost,
+                            onSnapcastHostChange              = { snapHost = it.trim() },
+                            snapcastStreamPort                = snapStreamPort,
+                            onSnapcastStreamPortChange        = { snapStreamPort = it },
+                            snapcastControlPort               = snapControlPort,
+                            onSnapcastControlPortChange       = { snapControlPort = it },
+                            onSnapcastSave                    = { srv ->
+                                val rest = appSettings.snapcastServers.filterNot {
+                                    SnapcastServerRef.deserialize(it)?.let { o ->
+                                        o.host == srv.host && o.streamPort == srv.streamPort
+                                    } == true
+                                }
+                                appSettings = appSettings.copy(snapcastServers = rest + srv.serialize())
+                            },
+                            onSnapcastForget                  = { srv ->
+                                appSettings = appSettings.copy(
+                                    snapcastServers = appSettings.snapcastServers.filterNot {
+                                        SnapcastServerRef.deserialize(it)?.let { o ->
+                                            o.host == srv.host && o.streamPort == srv.streamPort
+                                        } == true
+                                    }
+                                )
+                            },
+                            onSnapcastConnect                 = { connectSnapcast(it) },
+                            onSnapcastStop                    = { stopSnapcast() },
+                            snapStream                        = snapStream,
+                            snapControl                       = snapControl,
+                            snapSelfClientId                  = snapSelfId,
+                            onSnapSetVolume                   = { id, pct, muted ->
+                                snapCtrl.value?.setClientVolume(id, pct, muted)
+                            },
+                            onSnapSetName                     = { id, name ->
+                                snapCtrl.value?.setClientName(id, name)
+                            },
+                            onSnapSetLatency                  = { id, ms ->
+                                snapCtrl.value?.setClientLatency(id, ms)
+                            },
+                            onSnapGroupMute                   = { id, mute ->
+                                snapCtrl.value?.setGroupMute(id, mute)
+                            },
+                            onSnapGroupStream                 = { id, stream ->
+                                snapCtrl.value?.setGroupStream(id, stream)
+                            },
+                            onSnapGroupName                   = { id, name ->
+                                snapCtrl.value?.setGroupName(id, name)
+                            },
+                            onSnapMoveClient                  = { clientId, targetGroupId ->
+                                // In Snapcast un client sta in un gruppo solo, e
+                                // l'unico comando disponibile riscrive l'INTERA
+                                // composizione del gruppo di destinazione: si
+                                // prendono i suoi client attuali e si aggiunge
+                                // quello spostato. Al vecchio gruppo ci pensa il
+                                // server.
+                                val target = snapControl.status.groups
+                                    .firstOrNull { it.id == targetGroupId }
+                                if (target != null) {
+                                    val members = (target.clients.map { it.id } + clientId).distinct()
+                                    snapCtrl.value?.setGroupClients(targetGroupId, members)
+                                    snapCtrl.value?.refresh()
+                                }
+                            },
+                            onSnapSplitClient                 = { clientId ->
+                                // Per staccare un client non esiste un comando
+                                // apposito: si riscrive il suo gruppo ATTUALE
+                                // senza di lui. Il server dovrebbe poi dargliene
+                                // uno nuovo tutto suo -- ma non tutti lo fanno,
+                                // e chi non lo fa lascia il client orfano: non
+                                // compare piu' da nessuna parte pur continuando
+                                // a suonare.
+                                val g = snapControl.status.groups
+                                    .firstOrNull { grp -> grp.clients.any { it.id == clientId } }
+                                if (g != null && g.clients.size > 1) {
+                                    val original  = g.clients.map { it.id }
+                                    val remaining = original.filter { it != clientId }
+                                    snapCtrl.value?.setGroupClients(g.id, remaining)
+                                    snapCtrl.value?.refresh()
+
+                                    if (clientId == snapSelfId) {
+                                        // Siamo noi: usciti dal gruppo, ci
+                                        // ricolleghiamo. Il server assegna un
+                                        // gruppo nuovo a chi si presenta senza,
+                                        // quindi funziona anche dove il comando
+                                        // da solo lascerebbe il client orfano.
+                                        // Costa mezzo secondo di silenzio.
+                                        scope.launch {
+                                            // Prima il comando di uscita deve
+                                            // arrivare al server.
+                                            delay(250)
+                                            snapClient.value?.stop()
+                                            snapClient.value = null
+                                            // Si resta "in collegamento" per non
+                                            // far sparire la schermata d'ascolto
+                                            // durante la pausa.
+                                            snapStream = snapStream.copy(
+                                                state = SnapStreamState.CONNECTING
+                                            )
+                                            delay(500)
+                                            snapServer?.let { startSnapStream(it) }
+                                            delay(1200)
+                                            snapCtrl.value?.refresh()
+                                        }
+                                    } else {
+                                        // Un client altrui non possiamo
+                                        // riavviarlo: resta il tentativo, con
+                                        // verifica e ripristino se il server lo
+                                        // lascia orfano.
+                                        scope.launch {
+                                            delay(1500)
+                                            val stillListed = snapControl.status.groups.any { grp ->
+                                                grp.clients.any { it.id == clientId }
+                                            }
+                                            if (!stillListed) {
+                                                AppDebug.log(
+                                                    "[Snapcast/ctrl] il server non ha rialloggiato " +
+                                                    "$clientId dopo lo stacco: ripristino il gruppo"
+                                                )
+                                                snapSplitSupported = false
+                                                snapCtrl.value?.setGroupClients(g.id, original)
+                                                snapCtrl.value?.refresh()
+                                            }
+                                        }
+                                    }
+                                }
+                            },
+                            snapSplitSupported                = snapSplitSupported,
+                            onSnapRefresh                     = { snapCtrl.value?.refresh() }
                         )
 
                         SettingsScreen(

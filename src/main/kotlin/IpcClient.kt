@@ -319,6 +319,40 @@ object IpcClient {
             row("Snapcast", dim("no"))
         }
 
+        // Ricezione di un flusso altrui: c'e' solo quando questo processo sta
+        // ascoltando RTP o un server Snapcast, e allora e' la cosa piu'
+        // importante della schermata, non una riga in fondo.
+        when (str("receiving").orEmpty()) {
+            "rtp" -> {
+                val extras = buildList {
+                    add("${str("rtp_codec").orEmpty()} ${num("rtp_rate") ?: "?"} Hz")
+                    add("${num("rtp_channels") ?: "?"} ch")
+                    add(if (bool("rtp_native") == "true") "native" else "FFmpeg")
+                    add("${num("rtp_packets") ?: 0} packets")
+                    add("${num("rtp_lost") ?: 0} lost")
+                    add("buffer ${num("rtp_buffer_ms") ?: 0} ms")
+                }
+                row("Receiving", "${green("RTP")}  ${str("receiving_from").orEmpty()}  " +
+                        dim(str("rtp_state").orEmpty()))
+                row("", dim(extras.joinToString(", ")))
+            }
+            "snapcast" -> {
+                val extras = buildList {
+                    add("${str("snap_codec").orEmpty()} ${num("snap_rate") ?: "?"} Hz")
+                    add("${num("snap_channels") ?: "?"} ch")
+                    add("buffer ${num("snap_buffer_ms") ?: 0} ms")
+                    add("sync ${str("snap_sync_error_ms") ?: num("snap_sync_error_ms") ?: "?"} ms")
+                    add("${num("snap_clients") ?: 0} clients in ${num("snap_groups") ?: 0} groups")
+                }
+                val vol = num("snap_volume")?.let { "$it%" } ?: "?"
+                val mut = if (bool("snap_muted") == "true") "  ${yellow("(muted)")}" else ""
+                row("Receiving", "${green("Snapcast")}  ${str("receiving_from").orEmpty()}  " +
+                        dim(str("snap_state").orEmpty()) + "  $vol$mut")
+                row("", dim(extras.joinToString(", ")))
+                row("", dim("control channel: " + (str("snap_control") ?: "?")))
+            }
+        }
+
         row("Link", if (usbUp) green("USB") + (if (usbIf.isNotEmpty()) dim(" ($usbIf)") else "") else dim("Wi-Fi"))
         row("IP", if (family == "auto") dim("auto") else yellow(family))
         row("WFAS", wfas)

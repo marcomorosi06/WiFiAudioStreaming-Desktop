@@ -17,7 +17,57 @@
 
 import java.awt.GraphicsEnvironment
 
-enum class RunMode { GUI, CLI_SERVER, CLI_CLIENT, CLI_DISCOVER, CLI_CONTROL, CLI_MONITOR }
+enum class RunMode {
+    GUI, CLI_SERVER, CLI_CLIENT, CLI_DISCOVER, CLI_CONTROL, CLI_MONITOR,
+    /** Ricezione di un flusso RTP altrui. */
+    CLI_RTP,
+    /** Client Snapcast: audio sincronizzato da un server Snapcast. */
+    CLI_SNAPCAST
+}
+
+/**
+ * I verbi di 'wfas rtp ...'.
+ *
+ * Ascoltare e' l'unico che tiene aperta una sessione; gli altri leggono o
+ * modificano l'elenco delle sorgenti salvate e finiscono subito.
+ */
+sealed class RtpCommand {
+    object Listen  : RtpCommand()
+    object Inspect : RtpCommand()
+    object Sdp     : RtpCommand()
+    object Sources : RtpCommand()
+    data class Save(val name: String?) : RtpCommand()
+    data class Forget(val target: String) : RtpCommand()
+}
+
+/**
+ * I verbi di 'wfas snapcast ...'.
+ *
+ * Solo [Listen] riproduce. Tutto il resto passa dal canale di controllo
+ * JSON-RPC del server: si apre, si chiede o si comanda, si chiude.
+ */
+sealed class SnapCommand {
+    object Listen   : SnapCommand()
+    object Discover : SnapCommand()
+    object Status   : SnapCommand()
+    /** La vista a schermo intero, comandata dalla tastiera. */
+    object Mixer    : SnapCommand()
+    object Clients  : SnapCommand()
+    object Groups   : SnapCommand()
+    object Streams  : SnapCommand()
+    object Servers  : SnapCommand()
+    data class Save(val name: String?) : SnapCommand()
+    data class Forget(val target: String) : SnapCommand()
+    data class Volume(val client: String, val percent: Int) : SnapCommand()
+    data class Mute(val client: String, val muted: Boolean) : SnapCommand()
+    data class Latency(val client: String, val ms: Int) : SnapCommand()
+    data class Rename(val client: String, val name: String) : SnapCommand()
+    data class GroupMute(val group: String, val muted: Boolean) : SnapCommand()
+    data class GroupRename(val group: String, val name: String) : SnapCommand()
+    data class GroupStream(val group: String, val stream: String) : SnapCommand()
+    data class Move(val client: String, val group: String) : SnapCommand()
+    data class Split(val client: String) : SnapCommand()
+}
 
 sealed class ControlCommand {
     data class Volume(val value: Float) : ControlCommand()
@@ -65,6 +115,30 @@ data class CliArgs(
     val configPath:      String?         = null,
     val sdp:             Boolean         = false,
     val sdpOut:          String?         = null,
+    // ── ricezione RTP ───────────────────────────────────────────────────────
+    val rtpCmd:          RtpCommand?     = null,
+    /** Sorgente indicata come argomento: file .sdp, '-', nome salvato, host:porta. */
+    val rtpSpec:         String?         = null,
+    val sdpFile:         String?         = null,
+    val rtpAddress:      String?         = null,
+    val rtpCodec:        String?         = null,
+    val rtpRate:         Int?            = null,
+    val rtpChannels:     Int?            = null,
+    val rtpPayload:      Int?            = null,
+    val rtpName:         String?         = null,
+    /** --rtp-port vale sia per il server sia per l'ascolto: qui si sa se e' stato scritto. */
+    val rtpPortExplicit: Boolean         = false,
+    // ── client Snapcast ─────────────────────────────────────────────────────
+    val snapCmd:         SnapCommand?    = null,
+    /** Server indicato come argomento: nome salvato, #indice, host o host:porta. */
+    val snapSpec:        String?         = null,
+    val snapHost:        String?         = null,
+    val snapPort:        Int?            = null,
+    val snapControlPortCli: Int?         = null,
+    val snapClientName:  String?         = null,
+    val snapClientId:    String?         = null,
+    /** Il mixer di solito riproduce; --no-audio lo rende un solo telecomando. */
+    val snapNoAudio:     Boolean         = false,
     val controlCmd:      ControlCommand? = null,
     val configCmd:       ConfigCommand?  = null,
     val reveal:          Boolean         = false,
@@ -179,6 +253,24 @@ data class CliArgs(
             var configPath: String?         = null
             var sdp             = false
             var sdpOut: String?             = null
+            var rtpCmd: RtpCommand?         = null
+            var rtpSpec: String?            = null
+            var sdpFile: String?            = null
+            var rtpAddress: String?         = null
+            var rtpCodec: String?           = null
+            var rtpRate: Int?               = null
+            var rtpChannels: Int?           = null
+            var rtpPayload: Int?            = null
+            var rtpName: String?            = null
+            var rtpPortExplicit = false
+            var snapCmd: SnapCommand?       = null
+            var snapSpec: String?           = null
+            var snapHost: String?           = null
+            var snapPort: Int?              = null
+            var snapControlPortCli: Int?    = null
+            var snapClientName: String?     = null
+            var snapClientId: String?       = null
+            var snapNoAudio     = false
             var controlCmd: ControlCommand? = null
             var ipFamily        = NetAddr.Family.AUTO
             var usb: Boolean?               = null
@@ -228,13 +320,18 @@ data class CliArgs(
                     "--client" -> { runMode = RunMode.CLI_CLIENT;    modeExplicit = true }
 
                     "--mode" -> {
-                        val v = nextArg(args, i, "--mode") ?: parseError("--mode requires a value: server, client, discover")
+                        val v = nextArg(args, i, "--mode")
+                            ?: parseError("--mode requires a value: server, client, discover, rtp, snapcast")
                         i++
                         when (v.lowercase()) {
                             "server"   -> { guiSubMode = "server";   if (runMode != RunMode.GUI || !modeExplicit) runMode = RunMode.CLI_SERVER }
                             "client"   -> { guiSubMode = "client";   if (runMode != RunMode.GUI || !modeExplicit) runMode = RunMode.CLI_CLIENT }
                             "discover" -> { guiSubMode = "discover"; runMode = RunMode.CLI_DISCOVER }
-                            else -> parseError("Unknown mode '$v'. Valid: server, client, discover")
+                            // Ricevere non ha una controparte nella finestra: sono
+                            // modi solo da terminale, e --gui qui non si applica.
+                            "rtp"      -> { runMode = RunMode.CLI_RTP;      rtpCmd  = rtpCmd  ?: RtpCommand.Listen }
+                            "snapcast", "snap" -> { runMode = RunMode.CLI_SNAPCAST; snapCmd = snapCmd ?: SnapCommand.Listen }
+                            else -> parseError("Unknown mode '$v'. Valid: server, client, discover, rtp, snapcast")
                         }
                         modeExplicit = true
                     }
@@ -347,6 +444,144 @@ data class CliArgs(
                         printDevices = true
                     }
 
+                    "rtp" -> {
+                        modeExplicit = true
+                        val sub = args.getOrNull(i + 1)?.lowercase()
+                        rtpCmd = when (sub) {
+                            null, "listen", "play", "receive" -> { if (sub != null) i++; RtpCommand.Listen }
+                            "inspect", "check", "parse"       -> { i++; RtpCommand.Inspect }
+                            "sdp", "print-sdp", "descriptor"  -> { i++; RtpCommand.Sdp }
+                            "sources", "list", "ls", "saved"  -> { i++; RtpCommand.Sources }
+                            "save", "add" -> {
+                                i++
+                                val n = args.getOrNull(i + 1)?.takeIf { !it.startsWith("-") }
+                                if (n != null) i++
+                                RtpCommand.Save(n)
+                            }
+                            "forget", "remove", "rm", "delete" -> {
+                                val t = args.getOrNull(i + 2)
+                                    ?: parseError("'rtp forget' requires a name, #index or 'all'")
+                                i += 2
+                                RtpCommand.Forget(t)
+                            }
+                            // Non e' un verbo: allora e' gia' la sorgente, e
+                            // 'wfas rtp stream.sdp' vale 'wfas rtp listen stream.sdp'.
+                            else -> RtpCommand.Listen
+                        }
+                        val spec = args.getOrNull(i + 1)?.takeIf { it == "-" || !it.startsWith("-") }
+                        if (spec != null && (rtpCmd is RtpCommand.Listen ||
+                                             rtpCmd is RtpCommand.Inspect ||
+                                             rtpCmd is RtpCommand.Sdp)) {
+                            rtpSpec = spec; i++
+                        }
+                        if (rtpCmd is RtpCommand.Listen) runMode = RunMode.CLI_RTP
+                    }
+
+                    "snapcast", "snap" -> {
+                        modeExplicit = true
+                        val sub = args.getOrNull(i + 1)?.lowercase()
+                        val p1  = args.getOrNull(i + 2)
+                        val p2  = args.getOrNull(i + 3)
+                        fun needClient(verb: String): String =
+                            p1 ?: parseError("'snapcast $verb' requires a client: its name, its id or #n from 'wfas snapcast clients'")
+                        fun needGroup(verb: String): String =
+                            p1 ?: parseError("'snapcast $verb' requires a group: its name, its id or #n from 'wfas snapcast groups'")
+                        snapCmd = when (sub) {
+                            null -> SnapCommand.Listen
+                            "listen", "connect", "play", "join" -> { i++; SnapCommand.Listen }
+                            "discover", "browse", "scan"        -> { i++; SnapCommand.Discover }
+                            "status", "state", "show"           -> { i++; SnapCommand.Status }
+                            "mixer", "ui", "tui", "top"         -> { i++; SnapCommand.Mixer }
+                            "clients"                           -> { i++; SnapCommand.Clients }
+                            "groups"                            -> { i++; SnapCommand.Groups }
+                            "streams"                           -> { i++; SnapCommand.Streams }
+                            "servers", "saved"                  -> { i++; SnapCommand.Servers }
+                            "save", "add" -> {
+                                i++
+                                val n = args.getOrNull(i + 1)?.takeIf { !it.startsWith("-") }
+                                if (n != null) i++
+                                SnapCommand.Save(n)
+                            }
+                            "forget", "remove", "rm", "delete" -> {
+                                val t = p1 ?: parseError("'snapcast forget' requires a name, #index or 'all'")
+                                i += 2
+                                SnapCommand.Forget(t)
+                            }
+                            "volume", "vol" -> {
+                                val c = needClient("volume")
+                                val raw = p2 ?: parseError("'snapcast volume $c' requires a percentage between 0 and 100")
+                                val n = raw.toIntOrNull()
+                                    ?: parseError("'snapcast volume' percentage must be numeric, got '$raw'")
+                                if (n < 0 || n > 100) parseError("'snapcast volume' percentage must be between 0 and 100, got $n")
+                                i += 3
+                                SnapCommand.Volume(c, n)
+                            }
+                            "mute"   -> { val c = needClient("mute");   i += 2; SnapCommand.Mute(c, true) }
+                            "unmute" -> { val c = needClient("unmute"); i += 2; SnapCommand.Mute(c, false) }
+                            "latency", "delay" -> {
+                                val c = needClient("latency")
+                                val raw = p2 ?: parseError("'snapcast latency $c' requires a value in milliseconds")
+                                val n = raw.toIntOrNull()
+                                    ?: parseError("'snapcast latency' value must be numeric, got '$raw'")
+                                if (n < -2000 || n > 2000) parseError("'snapcast latency' must be between -2000 and 2000, got $n")
+                                i += 3
+                                SnapCommand.Latency(c, n)
+                            }
+                            "rename" -> {
+                                val c = needClient("rename")
+                                val n = p2 ?: parseError("'snapcast rename $c' requires a new name")
+                                i += 3
+                                SnapCommand.Rename(c, n)
+                            }
+                            "group-mute" -> {
+                                val g = needGroup("group-mute")
+                                val raw = p2?.lowercase() ?: parseError("'snapcast group-mute $g' requires on or off")
+                                val on = when (raw) {
+                                    "on", "yes", "true", "1", "mute"     -> true
+                                    "off", "no", "false", "0", "unmute"  -> false
+                                    else -> parseError("'snapcast group-mute' expects on or off, got '$raw'")
+                                }
+                                i += 3
+                                SnapCommand.GroupMute(g, on)
+                            }
+                            "group-rename", "group-name" -> {
+                                val g = needGroup("group-rename")
+                                val n = p2 ?: parseError("'snapcast group-rename $g' requires a new name")
+                                i += 3
+                                SnapCommand.GroupRename(g, n)
+                            }
+                            "group-stream" -> {
+                                val g = needGroup("group-stream")
+                                val n = p2 ?: parseError("'snapcast group-stream $g' requires a stream id from 'wfas snapcast streams'")
+                                i += 3
+                                SnapCommand.GroupStream(g, n)
+                            }
+                            "move" -> {
+                                val c = needClient("move")
+                                val g = p2 ?: parseError("'snapcast move $c' requires the target group")
+                                i += 3
+                                SnapCommand.Move(c, g)
+                            }
+                            "split", "detach" -> { val c = needClient("split"); i += 2; SnapCommand.Split(c) }
+                            // Non e' un verbo: e' il server, come in
+                            // 'wfas snapcast salotto'.
+                            else -> SnapCommand.Listen
+                        }
+                        val spec = args.getOrNull(i + 1)?.takeIf { !it.startsWith("-") }
+                        if (spec != null && (snapCmd is SnapCommand.Listen  ||
+                                             snapCmd is SnapCommand.Status  ||
+                                             snapCmd is SnapCommand.Mixer   ||
+                                             snapCmd is SnapCommand.Clients ||
+                                             snapCmd is SnapCommand.Groups  ||
+                                             snapCmd is SnapCommand.Streams)) {
+                            snapSpec = spec; i++
+                        }
+                        // Il mixer riproduce come l'ascolto: e' la stessa sessione,
+                        // con una schermata al posto delle righe di stato.
+                        if (snapCmd is SnapCommand.Listen || snapCmd is SnapCommand.Mixer)
+                            runMode = RunMode.CLI_SNAPCAST
+                    }
+
                     "inspect", "check", "parse" -> {
                         modeExplicit = true
                         val u = args.getOrNull(i + 1)
@@ -394,7 +629,7 @@ data class CliArgs(
 
                     "--multicast"   -> multicast  = true
                     "--rtp"         -> rtp        = true
-                    "--rtp-port"    -> { rtpPort  = nextInt(args, i, "--rtp-port",  1024, 65535); i++ }
+                    "--rtp-port"    -> { rtpPort  = nextInt(args, i, "--rtp-port",  1024, 65535); i++; rtpPortExplicit = true }
                     "--http"        -> http       = true
                     "--http-port"   -> { httpPort = nextInt(args, i, "--http-port", 1024, 65535); i++ }
                     "--http-safari" -> { httpSafari = true; http = true }
@@ -489,6 +724,50 @@ data class CliArgs(
                         sdpOut = nextArg(args, i, "--sdp-out") ?: parseError("--sdp-out requires a file path")
                         i++
                     }
+
+                    // ── Ricezione RTP ───────────────────────────────────────
+                    "--sdp-file" -> {
+                        sdpFile = nextArg(args, i, "--sdp-file")
+                            ?: parseError("--sdp-file requires a path, or - to read the descriptor from standard input")
+                        i++
+                    }
+                    "--rtp-address" -> {
+                        rtpAddress = nextArg(args, i, "--rtp-address")
+                            ?: parseError("--rtp-address requires a multicast group or a local address")
+                        i++
+                    }
+                    "--rtp-codec" -> {
+                        rtpCodec = nextArg(args, i, "--rtp-codec")
+                            ?: parseError("--rtp-codec requires an encoding name, for example L16 or opus")
+                        i++
+                    }
+                    "--rtp-rate"     -> { rtpRate     = nextInt(args, i, "--rtp-rate",     8000, 192000); i++ }
+                    "--rtp-channels" -> { rtpChannels = nextInt(args, i, "--rtp-channels", 1, 2);         i++ }
+                    "--rtp-payload"  -> { rtpPayload  = nextInt(args, i, "--rtp-payload",  0, 127);       i++ }
+                    "--rtp-name" -> {
+                        rtpName = nextArg(args, i, "--rtp-name") ?: parseError("--rtp-name requires a label")
+                        i++
+                    }
+
+                    // ── Client Snapcast ─────────────────────────────────────
+                    "--snap-host" -> {
+                        snapHost = nextArg(args, i, "--snap-host")
+                            ?: parseError("--snap-host requires the address of a Snapcast server")
+                        i++
+                    }
+                    "--snap-port"         -> { snapPort           = nextInt(args, i, "--snap-port",         1, 65535); i++ }
+                    "--snap-control-port" -> { snapControlPortCli = nextInt(args, i, "--snap-control-port", 1, 65535); i++ }
+                    "--snap-name" -> {
+                        snapClientName = nextArg(args, i, "--snap-name")
+                            ?: parseError("--snap-name requires the name to announce to the server")
+                        i++
+                    }
+                    "--snap-id" -> {
+                        snapClientId = nextArg(args, i, "--snap-id")
+                            ?: parseError("--snap-id requires an identifier")
+                        i++
+                    }
+                    "--no-audio" -> snapNoAudio = true
 
                     "--ip4", "--ipv4" -> ipFamily = NetAddr.Family.V4
                     "--ip6", "--ipv6" -> ipFamily = NetAddr.Family.V6
@@ -655,12 +934,16 @@ data class CliArgs(
             // default, cioe' CLI_SERVER, e al posto della lista che l'utente
             // aspettava partiva un server -- con la cattura audio avviata, le
             // porte aperte e l'annuncio in multicast.
-            if (watch && runMode != RunMode.CLI_DISCOVER && pairCmd !is PairCommand.Invite) {
+            val watchableSnap = snapCmd is SnapCommand.Discover || snapCmd is SnapCommand.Status ||
+                    snapCmd is SnapCommand.Clients || snapCmd is SnapCommand.Groups ||
+                    snapCmd is SnapCommand.Streams
+            if (watch && runMode != RunMode.CLI_DISCOVER && pairCmd !is PairCommand.Invite && !watchableSnap) {
                 parseError(
-                    "--watch keeps a live view open, and belongs to discovery or to a pairing " +
-                            "invite. Use 'wfas --mode discover --watch' to keep the server list " +
-                            "updating, or 'wfas pair invite --watch' for a QR code that renews " +
-                            "itself before it expires."
+                    "--watch keeps a live view open, and belongs to discovery, to a pairing " +
+                            "invite, or to a Snapcast view. Use 'wfas --mode discover --watch' to " +
+                            "keep the server list updating, 'wfas snapcast status --watch' to " +
+                            "follow the clients live, or 'wfas pair invite --watch' for a QR code " +
+                            "that renews itself before it expires."
                 )
             }
 
@@ -681,6 +964,47 @@ data class CliArgs(
             }
 
             if (groove > 0f && !viz) parseError("--groove requires --viz")
+
+            // Stessa regola del resto del file: un'opzione che non ha niente su
+            // cui agire non passa in silenzio. Qui il rischio e' concreto perche'
+            // '--rtp' (invio) e '--rtp-address' (ricezione) si somigliano
+            // parecchio, e chi sbaglia lato si ritroverebbe un server al posto
+            // di un ascolto.
+            if (rtpCmd == null) {
+                val rx = listOfNotNull(
+                    sdpFile?.let    { "--sdp-file" },
+                    rtpAddress?.let { "--rtp-address" },
+                    rtpCodec?.let   { "--rtp-codec" },
+                    rtpRate?.let    { "--rtp-rate" },
+                    rtpChannels?.let { "--rtp-channels" },
+                    rtpPayload?.let { "--rtp-payload" },
+                    rtpName?.let    { "--rtp-name" }
+                )
+                if (rx.isNotEmpty()) parseError(
+                    "${rx.joinToString(", ")} describe an RTP stream to LISTEN to, so they belong " +
+                            "to 'wfas rtp listen'. To send RTP from this machine use " +
+                            "'wfas --server --rtp'."
+                )
+            }
+            if (snapNoAudio && snapCmd !is SnapCommand.Mixer) parseError(
+                "--no-audio turns the mixer into a remote control, so it belongs to " +
+                        "'wfas snapcast mixer'. The other commands do not play anything to begin with."
+            )
+
+            if (snapCmd == null) {
+                val rx = listOfNotNull(
+                    snapHost?.let           { "--snap-host" },
+                    snapPort?.let           { "--snap-port" },
+                    snapControlPortCli?.let { "--snap-control-port" },
+                    snapClientName?.let     { "--snap-name" },
+                    snapClientId?.let       { "--snap-id" }
+                )
+                if (rx.isNotEmpty()) parseError(
+                    "${rx.joinToString(", ")} describe the Snapcast server to JOIN, so they belong " +
+                            "to 'wfas snapcast listen'. To run a Snapcast server here use " +
+                            "'wfas --server --snapcast'."
+                )
+            }
 
             // Entrambe le opzioni riguardano il lato che cattura l'audio: fuori
             // dal server non hanno nulla su cui agire, meglio dirlo subito che
@@ -743,6 +1067,24 @@ data class CliArgs(
                 configPath      = configPath,
                 sdp             = sdp,
                 sdpOut          = sdpOut,
+                rtpCmd          = rtpCmd,
+                rtpSpec         = rtpSpec,
+                sdpFile         = sdpFile,
+                rtpAddress      = rtpAddress,
+                rtpCodec        = rtpCodec,
+                rtpRate         = rtpRate,
+                rtpChannels     = rtpChannels,
+                rtpPayload      = rtpPayload,
+                rtpName         = rtpName,
+                rtpPortExplicit = rtpPortExplicit,
+                snapCmd         = snapCmd,
+                snapSpec        = snapSpec,
+                snapHost        = snapHost,
+                snapPort        = snapPort,
+                snapControlPortCli = snapControlPortCli,
+                snapClientName  = snapClientName,
+                snapClientId    = snapClientId,
+                snapNoAudio     = snapNoAudio,
                 controlCmd      = controlCmd,
                 configCmd       = configCmd,
                 reveal          = reveal,
@@ -793,9 +1135,11 @@ data class CliArgs(
             println("""
 WiFi Audio Streaming ${VERSION} - Stream audio over your local network.
 
-  wfas --help     all commands and options
-  wfas --gui      open the desktop app
-  wfas --cli      start the audio server
+  wfas --help             all commands and options
+  wfas --gui              open the desktop app
+  wfas --cli              start the audio server
+  wfas rtp listen <src>   play someone else's RTP stream
+  wfas snapcast listen    join a Snapcast multiroom system
             """.trimIndent())
         }
 

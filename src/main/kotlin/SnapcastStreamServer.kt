@@ -124,7 +124,6 @@ class SnapcastStreamServer(
 
     fun broadcastChunk(timestamp: SnapcastTv, payload: ByteArray) {
         if (sessions.isEmpty()) return
-        println("[DEBUG] broadcastChunk: generating chunk for timestamp ${timestamp.sec}.${timestamp.usec}")
         val frame = SnapcastWire.frame(
             SnapcastMessageType.WIRE_CHUNK,
             nextId(),
@@ -198,8 +197,8 @@ class SnapcastStreamServer(
                         val type = (frame[0].toInt() and 0xFF) or ((frame[1].toInt() and 0xFF) shl 8)
                         if (type == SnapcastMessageType.WIRE_CHUNK) {
                             chunksSent++
-                            if (chunksSent % 50 == 0) {
-                                println("[DEBUG] Session $sessionId sent $chunksSent chunks so far.")
+                            if (chunksSent % 500 == 0) {
+                                AppDebug.log("[Snapcast/srv] sessione $sessionId: $chunksSent blocchi spediti")
                             }
                         }
                     }
@@ -220,7 +219,7 @@ class SnapcastStreamServer(
                 }
             } catch (e: Exception) {
                 if (e !is CancellationException) {
-                    println("[DEBUG] Snapcast session $sessionId write ended: ${e.message}")
+                    AppDebug.log("[Snapcast/srv] sessione $sessionId, scrittura finita: ${e.message}")
                     e.printStackTrace()
                 }
             } finally {
@@ -243,7 +242,7 @@ class SnapcastStreamServer(
                 }
             } catch (e: Exception) {
                 if (e !is CancellationException) {
-                    println("[DEBUG] Snapcast session $sessionId read ended: ${e.message}")
+                    AppDebug.log("[Snapcast/srv] sessione $sessionId, lettura finita: ${e.message}")
                     e.printStackTrace()
                 }
             } finally {
@@ -281,7 +280,6 @@ class SnapcastStreamServer(
 
         private fun handleTime(frame: SnapcastFrame, received: SnapcastTv) {
             val latencyMicros = received.toMicros() - frame.header.sent.toMicros()
-            println("[DEBUG] handleTime: received.micros=${received.toMicros()}, sent.micros=${frame.header.sent.toMicros()}, latencyMicros=$latencyMicros")
             val payload = SnapcastWire.timePayload(SnapcastTv.fromMicros(latencyMicros))
             enqueuePriority(
                 SnapcastWire.frame(

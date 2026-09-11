@@ -40,14 +40,19 @@ object CliHelpModel {
     const val TAGLINE = "Stream audio over your local network."
 
     val QUICK: List<Pair<String, String>> = listOf(
-        "wfas --server"       to "stream this machine's audio",
-        "wfas --client"       to "play audio from a server",
-        "wfas --gui"          to "open the desktop app",
-        "wfas --connect <ip>" to "join a specific server"
+        "wfas --server"        to "stream this machine's audio",
+        "wfas --client"        to "play audio from a server",
+        "wfas --gui"           to "open the desktop app",
+        "wfas --connect <ip>"  to "join a specific server",
+        "wfas rtp listen <src>" to "play someone else's RTP stream",
+        "wfas snapcast listen"  to "join a Snapcast multiroom system",
+        "wfas snapcast mixer"   to "play and control a Snapcast system"
     )
 
     val SYNOPSIS: List<String> = listOf(
-        "wfas [--gui | --cli] [--mode server|client|discover] [OPTIONS]",
+        "wfas [--gui | --cli] [--mode server|client|discover|rtp|snapcast] [OPTIONS]",
+        "wfas rtp [listen|inspect|sdp|sources|save|forget] [source] [OPTIONS]",
+        "wfas snapcast <command> [server|client|group] [OPTIONS]",
         "wfas control <command>",
         "wfas config <command>",
         "wfas devices [--json]",
@@ -129,11 +134,16 @@ object CliHelpModel {
                     ),
                     HelpEntry(
                         syntax = "--mode <m>",
-                        brief = "server | client | discover",
+                        brief = "server | client | discover | rtp | snapcast",
                         tokens = listOf("--mode"),
                         detail = "server    capture this machine's audio and serve it\n" +
                                 "client    receive audio from a server and play it\n" +
-                                "discover  scan the network for active servers, then exit"
+                                "discover  scan the network for active servers, then exit\n" +
+                                "rtp       listen to an RTP stream, as 'wfas rtp listen' does\n" +
+                                "snapcast  join a Snapcast server, as 'wfas snapcast listen' does\n" +
+                                "\n" +
+                                "The last two have no counterpart in the window, so --gui does not " +
+                                "apply to them. They are described under 'receive'."
                     )
                 )
             ),
@@ -402,7 +412,7 @@ object CliHelpModel {
             "wfas devices"                         to "list audio devices and their exact names",
             "wfas devices --json"                  to "same, for scripts"
         ),
-        seeAlso = listOf("runtime", "network", "config")
+        seeAlso = listOf("receive", "runtime", "network", "config")
     )
 
     private val PROTOCOLS = HelpTopic(
@@ -413,7 +423,10 @@ object CliHelpModel {
         intro = "Besides its own protocol the server can speak four standard ones at the same time, " +
                 "so receivers that have never heard of WFAS can still play the audio. Each of these " +
                 "implies --multicast. None of them is authenticated or encrypted: --auth-mode, " +
-                "--auth-key and --encrypt cover the native WFAS stream only.",
+                "--auth-key and --encrypt cover the native WFAS stream only.\n" +
+                "\n" +
+                "This is the sending side. wfas also receives two of these protocols - " +
+                "'wfas rtp listen' and 'wfas snapcast listen' - and those live under 'receive'.",
         blocks = listOf(
             HelpBlock(
                 heading = "RTP",
@@ -538,7 +551,7 @@ object CliHelpModel {
             "wfas --server --snapcast"                 to "synchronised multiroom audio",
             "wfas --server --snapcast --snapcast-codec flac" to "half the bandwidth, same sync"
         ),
-        seeAlso = listOf("server", "security", "runtime")
+        seeAlso = listOf("receive", "server", "security", "runtime")
     )
 
     private val NETWORK = HelpTopic(
@@ -1050,8 +1063,352 @@ object CliHelpModel {
         seeAlso = listOf("client", "config")
     )
 
-    private const val TOPIC_KEYS_PLACEHOLDER = "start, server, client, protocols, network, " +
-            "security, config, runtime, reference"
+
+    private val RECEIVE = HelpTopic(
+        key = "receive",
+        title = "Receiving RTP & Snapcast",
+        tagline = "listen to streams this machine did not start",
+        aliases = listOf("rtp-client", "snapcast-client", "snapclient", "listen", "multiroom"),
+        intro = "The other direction of 'Streaming protocols': there wfas speaks RTP and Snapcast " +
+                "to send, here it speaks them to receive. 'wfas rtp' plays a stream produced by " +
+                "ffmpeg, VLC, a hardware sender or another wfas server; 'wfas snapcast' joins a " +
+                "Snapcast server as one of its clients, in sync with every other room, and can " +
+                "read and change the whole installation from the control channel. Neither has " +
+                "anything to do with the native WFAS client, which is 'wfas --client'.",
+        blocks = listOf(
+            HelpBlock(
+                heading = "RTP  (wfas rtp <command>)",
+                intro = "The source can be given in four ways, and they can be mixed: an .sdp " +
+                        "file, the descriptor on standard input, an address, or the name of a " +
+                        "source saved earlier. Whatever is given, the individual options below " +
+                        "still have the last word, so a saved source can be reused on a " +
+                        "different port without editing anything.",
+                entries = listOf(
+                    HelpEntry(
+                        syntax = "rtp listen [source]",
+                        brief = "Listen to an RTP stream and play it. Aliases: play, receive.",
+                        tokens = listOf("rtp"),
+                        detail = "source is recognised on its own: a path ending in .sdp or any " +
+                                "readable file is an SDP descriptor, - reads one from standard " +
+                                "input, 239.255.0.1:9094 or :9094 is an address, and anything " +
+                                "else is looked up among the saved sources by name, by #index or " +
+                                "by address. With nothing at all, the single saved source is used."
+                    ),
+                    HelpEntry(
+                        syntax = "rtp inspect <source>",
+                        brief = "Say what the descriptor means, and what it leaves out. Aliases: check, parse.",
+                        detail = "Reads the SDP without opening a socket, then prints the address, " +
+                                "the format, whether the delivery is multicast, and whether the " +
+                                "audio can be played natively or has to go through FFmpeg. " +
+                                "Anything the descriptor did not say and wfas had to assume is " +
+                                "listed as a warning, because those assumptions are exactly what " +
+                                "makes a stream come out at the wrong speed or pitch."
+                    ),
+                    HelpEntry(
+                        syntax = "rtp sdp [source]",
+                        brief = "Print the SDP descriptor of a source, for another player.",
+                        detail = "Writes the original descriptor when the source came from one, " +
+                                "and otherwise builds a minimal valid one from the fields. " +
+                                "--sdp-out also saves it to a file."
+                    ),
+                    HelpEntry(
+                        syntax = "rtp sources",
+                        brief = "List the saved sources with their index. Aliases: list, ls, saved.",
+                        detail = "The index is the #n accepted anywhere a source is named."
+                    ),
+                    HelpEntry(
+                        syntax = "rtp save [name]",
+                        brief = "Save the source described by the current options.",
+                        detail = "A source with the same address and port replaces the old entry " +
+                                "instead of adding a duplicate. Saved sources are shared with the " +
+                                "desktop app: they are app.rtpSources in the configuration."
+                    ),
+                    HelpEntry(
+                        syntax = "rtp forget <name|#n|all>",
+                        brief = "Remove a saved source. Aliases: remove, rm, delete."
+                    )
+                )
+            ),
+            HelpBlock(
+                heading = "RTP options",
+                entries = listOf(
+                    HelpEntry(
+                        syntax = "--sdp-file <path>",
+                        brief = "Read the SDP descriptor from a file, or from standard input with -.",
+                        tokens = listOf("--sdp-file"),
+                        detail = "Same thing as passing the path as the source; the flag exists so " +
+                                "scripts do not have to rely on the guess. Do not confuse it with " +
+                                "--sdp and --sdp-out, which belong to the sending side."
+                    ),
+                    HelpEntry(
+                        syntax = "--rtp-address <addr>",
+                        brief = "Multicast group to join, or the local address to listen on.",
+                        default = "any interface",
+                        tokens = listOf("--rtp-address"),
+                        detail = "An address in 224.0.0.0/4 (or ff00::/8) is a multicast group and " +
+                                "is joined on the interface chosen by --interface. Anything else, " +
+                                "empty included, means unicast: the port alone decides."
+                    ),
+                    HelpEntry(
+                        syntax = "--rtp-port <n>",
+                        brief = "Port to listen on.",
+                        default = "9094, or whatever the SDP says",
+                        tokens = listOf("--rtp-port")
+                    ),
+                    HelpEntry(
+                        syntax = "--rtp-codec <name>",
+                        brief = "Payload encoding, as in the a=rtpmap line.",
+                        default = "L16",
+                        tokens = listOf("--rtp-codec"),
+                        detail = "L16 is raw 16-bit PCM and is played straight through, which is " +
+                                "the lowest latency path. Every other encoding is handed to " +
+                                "FFmpeg, which decodes it and adds its own buffering."
+                    ),
+                    HelpEntry(
+                        syntax = "--rtp-rate <hz>",
+                        brief = "Sample rate of the stream.",
+                        default = "48000, range 8000-192000",
+                        tokens = listOf("--rtp-rate"),
+                        detail = "It has to match the sender. A wrong rate does not fail: it plays " +
+                                "at the wrong speed and pitch, which is why 'rtp inspect' says " +
+                                "out loud when the descriptor did not state one."
+                    ),
+                    HelpEntry(
+                        syntax = "--rtp-channels <n>",
+                        brief = "1 or 2.",
+                        default = "2",
+                        tokens = listOf("--rtp-channels")
+                    ),
+                    HelpEntry(
+                        syntax = "--rtp-payload <n>",
+                        brief = "RTP payload type, 0-127.",
+                        default = "96",
+                        tokens = listOf("--rtp-payload"),
+                        detail = "Packets carrying a different payload type are ignored, so this " +
+                                "is what keeps two streams sharing one port apart."
+                    ),
+                    HelpEntry(
+                        syntax = "--rtp-name <text>",
+                        brief = "Label for the source, used when saving and in the listings.",
+                        tokens = listOf("--rtp-name")
+                    )
+                ),
+                outro = "The output device, the buffer and the initial volume come from the shared " +
+                        "options: --output, --latency, --volume and --mute behave exactly as they " +
+                        "do for the native client."
+            ),
+            HelpBlock(
+                heading = "Snapcast  (wfas snapcast <command>)",
+                intro = "Snapcast keeps every room on the same sample at the same instant, so this " +
+                        "is a full client and not just a player: the control channel shows the " +
+                        "groups, the clients and the streams of the whole installation, and lets " +
+                        "you change them. Alias: snap. The server can be named as an address, as " +
+                        "the name of a saved one, or left out entirely, in which case it is looked " +
+                        "for over mDNS and used if it is the only one.",
+                entries = listOf(
+                    HelpEntry(
+                        syntax = "snapcast listen [server]",
+                        brief = "Join the server and play in sync. Aliases: connect, play, join.",
+                        tokens = listOf("snapcast", "snap")
+                    ),
+                    HelpEntry(
+                        syntax = "snapcast discover",
+                        brief = "Find the Snapcast servers announced on this network. Aliases: browse, scan.",
+                        detail = "Add --watch to keep the list updating, --json for one line per server."
+                    ),
+                    HelpEntry(
+                        syntax = "snapcast mixer",
+                        brief = "Join the server and control the whole installation from one " +
+                                "screen. Aliases: ui, tui, top.",
+                        detail = "This is 'snapcast listen' with a screen instead of status " +
+                                "lines: it plays the audio too, exactly like the desktop " +
+                                "application, where listening and controlling are one window.\n" +
+                                "\n" +
+                                "Arrows or jk move, left and right change the volume by 5, m " +
+                                "mutes, g moves the client to another group, s detaches it into " +
+                                "one of its own, n renames, y sets the latency, t picks the " +
+                                "stream, r refreshes, q leaves. On a group row the volume keys " +
+                                "shift every client in it by the same amount, so the balance " +
+                                "between rooms is kept.\n" +
+                                "\n" +
+                                "Everything shown comes from the server, and every key sends a " +
+                                "command on the control channel: there is no local state that " +
+                                "could drift from what the other apps see. Without an " +
+                                "interactive terminal, or with --json, it falls back to the " +
+                                "status lines of 'snapcast listen', so a pipe gets output and " +
+                                "not a screenful of escape sequences."
+                    ),
+                    HelpEntry(
+                        syntax = "snapcast status",
+                        brief = "Groups, clients and streams of the whole installation.",
+                        detail = "Add --watch to follow it live: the view is redrawn when the " +
+                                "server actually reports a change, not on a timer."
+                    ),
+                    HelpEntry(
+                        syntax = "snapcast clients | groups | streams",
+                        brief = "The three views on their own, one row per entry."
+                    ),
+                    HelpEntry(
+                        syntax = "snapcast volume <client> <0-100>",
+                        brief = "Set a client's volume. Alias: vol.",
+                        detail = "A client is named by its name, by its id, by its address or by " +
+                                "the #n of the listing; a fragment of the name is enough as long " +
+                                "as it matches only one. The same goes for groups."
+                    ),
+                    HelpEntry(
+                        syntax = "snapcast mute | unmute <client>",
+                        brief = "Mute or unmute one client."
+                    ),
+                    HelpEntry(
+                        syntax = "snapcast latency <client> <ms>",
+                        brief = "Per-client delay, -2000 to 2000.",
+                        detail = "Positive values delay that room, to line it up with one that " +
+                                "is slower to play."
+                    ),
+                    HelpEntry(
+                        syntax = "snapcast rename <client> <name>",
+                        brief = "Rename a client on the server."
+                    ),
+                    HelpEntry(
+                        syntax = "snapcast move <client> <group>",
+                        brief = "Move a client into an existing group.",
+                        detail = "Snapcast has no move command: the only one available rewrites " +
+                                "the whole membership of the destination group, so wfas reads it, " +
+                                "adds the client and writes it back. The old group is the server's " +
+                                "problem."
+                    ),
+                    HelpEntry(
+                        syntax = "snapcast split <client>",
+                        brief = "Detach a client into a group of its own. Alias: detach.",
+                        detail = "Same mechanism in reverse, and it depends on the server: some do " +
+                                "not re-home a client removed from a group, and leave it invisible " +
+                                "while it keeps playing. wfas checks afterwards and puts it back " +
+                                "where it was if that happened, rather than leaving you with a " +
+                                "room nobody can control."
+                    ),
+                    HelpEntry(
+                        syntax = "snapcast group-mute <group> on|off",
+                        brief = "Mute or unmute a whole group."
+                    ),
+                    HelpEntry(
+                        syntax = "snapcast group-rename <group> <name>",
+                        brief = "Rename a group. Alias: group-name."
+                    ),
+                    HelpEntry(
+                        syntax = "snapcast group-stream <group> <stream>",
+                        brief = "Point a group at one of the server's streams.",
+                        detail = "'wfas snapcast streams' lists the ids that are accepted here."
+                    ),
+                    HelpEntry(
+                        syntax = "snapcast servers",
+                        brief = "List the saved servers with their index. Alias: saved."
+                    ),
+                    HelpEntry(
+                        syntax = "snapcast save [name]",
+                        brief = "Save the server described by the current options.",
+                        detail = "Shared with the desktop app as app.snapcastServers."
+                    ),
+                    HelpEntry(
+                        syntax = "snapcast forget <name|#n|all>",
+                        brief = "Remove a saved server. Aliases: remove, rm, delete."
+                    )
+                )
+            ),
+            HelpBlock(
+                heading = "Snapcast options",
+                entries = listOf(
+                    HelpEntry(
+                        syntax = "--snap-host <host>",
+                        brief = "Address of the Snapcast server to join.",
+                        tokens = listOf("--snap-host"),
+                        detail = "Not to be confused with --snapcast, which makes this machine a " +
+                                "Snapcast server instead of a client."
+                    ),
+                    HelpEntry(
+                        syntax = "--snap-port <n>",
+                        brief = "Audio port of the server.",
+                        default = "1704",
+                        tokens = listOf("--snap-port")
+                    ),
+                    HelpEntry(
+                        syntax = "--snap-control-port <n>",
+                        brief = "JSON-RPC control port of the server.",
+                        default = "1705, or the audio port plus one",
+                        tokens = listOf("--snap-control-port"),
+                        detail = "The control channel is optional: without it the audio still " +
+                                "plays, but the volume of this machine cannot be changed from " +
+                                "anywhere and the rest of the installation stays invisible."
+                    ),
+                    HelpEntry(
+                        syntax = "--snap-name <text>",
+                        brief = "Name announced to the server.",
+                        default = "this machine's hostname",
+                        tokens = listOf("--snap-name"),
+                        detail = "It is what shows up in the Snapcast apps and in " +
+                                "'wfas snapcast clients'. Unrelated to --snapcast-name, which " +
+                                "names the stream a wfas Snapcast server publishes."
+                    ),
+                    HelpEntry(
+                        syntax = "--no-audio",
+                        brief = "Mixer only: control the system without joining it.",
+                        tokens = listOf("--no-audio"),
+                        detail = "Turns 'snapcast mixer' into a remote control. Useful from a " +
+                                "laptop that should change the volume of the house without " +
+                                "becoming another room, and on a machine with no usable audio " +
+                                "output at all."
+                    ),
+                    HelpEntry(
+                        syntax = "--snap-id <id>",
+                        brief = "Client identifier.",
+                        default = "the MAC address of this machine",
+                        tokens = listOf("--snap-id"),
+                        detail = "The server remembers volume, latency and group per identifier, " +
+                                "so changing it starts from a clean slate; two clients sharing " +
+                                "one identifier fight over the same settings."
+                    )
+                ),
+                outro = "--volume, --mute and --latency go through the control channel, so the " +
+                        "server and every other app see them. Without a control channel --volume " +
+                        "and --mute fall back to a local trim, and --latency has nowhere to go."
+            ),
+            HelpBlock(
+                heading = "While listening",
+                intro = "Both sessions take single-letter commands on standard input, and both " +
+                        "answer 'wfas control' from another terminal.",
+                entries = listOf(
+                    HelpEntry(syntax = "q", brief = "Stop and exit. Also quit, stop."),
+                    HelpEntry(syntax = "v <0-100>", brief = "Set the volume."),
+                    HelpEntry(syntax = "m / u", brief = "Mute and unmute."),
+                    HelpEntry(syntax = "s", brief = "RTP: packets, loss and buffer. Snapcast: codec, buffer and sync error."),
+                    HelpEntry(syntax = "g", brief = "Snapcast only: the groups and clients of the installation."),
+                    HelpEntry(syntax = "l <ms>", brief = "Snapcast only: this client's latency.")
+                ),
+                outro = "--viz draws the spectrum analyser for either one, and 'wfas control " +
+                        "status' from another terminal reports what is being received, from " +
+                        "where, and how full the buffer is."
+            )
+        ),
+        examples = listOf(
+            "wfas rtp listen stream.sdp"            to "play the stream an SDP file describes",
+            "ffmpeg ... | wfas rtp listen -"        to "take the descriptor from a pipe",
+            "wfas rtp listen 239.255.0.1:9094"      to "join a multicast group directly",
+            "wfas rtp inspect stream.sdp"           to "read the descriptor without listening",
+            "wfas rtp save kitchen --rtp-address 239.255.0.1" to "remember it as 'kitchen'",
+            "wfas rtp listen kitchen --viz"         to "listen to it with the spectrum analyser",
+            "wfas snapcast discover"                to "find the Snapcast servers on this network",
+            "wfas snapcast listen"                  to "join the only server around",
+            "wfas snapcast mixer"                   to "play, and control every room from one screen",
+            "wfas snapcast mixer --no-audio"        to "control the house without playing here",
+            "wfas snapcast status --watch"          to "follow the whole installation live",
+            "wfas snapcast volume kitchen 40"       to "turn the kitchen down",
+            "wfas snapcast move kitchen Living"     to "put the kitchen in the living room group",
+            "wfas snapcast clients --json"          to "one JSON line per client, for scripts"
+        ),
+        seeAlso = listOf("protocols", "client", "runtime")
+    )
+
+    private const val TOPIC_KEYS_PLACEHOLDER = "start, server, client, protocols, receive, " +
+            "network, security, config, runtime, reference"
 
     private val REFERENCE = HelpTopic(
         key = "reference",
@@ -1132,7 +1489,7 @@ object CliHelpModel {
     )
 
     val topics: List<HelpTopic> = listOf(
-        START, SERVER, CLIENT, PROTOCOLS, NETWORK, SECURITY, CONFIG, RUNTIME, REFERENCE
+        START, SERVER, CLIENT, PROTOCOLS, RECEIVE, NETWORK, SECURITY, CONFIG, RUNTIME, REFERENCE
     )
 
     fun byKey(raw: String): HelpTopic? {

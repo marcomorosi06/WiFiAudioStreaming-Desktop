@@ -241,20 +241,28 @@ object IpcServer {
     private fun execute(cmd: ControlCommand?): String {
         val args = currentArgs
         return when (cmd) {
+            // Una sessione di ricezione RTP o Snapcast non passa da
+            // NetworkHandler: senza avvisarla, questi comandi risponderebbero
+            // "ok" senza fare niente. Si fanno entrambe le cose, cosi' un
+            // processo che sta facendo tutt'e due obbedisce da tutte le parti.
             is ControlCommand.Volume -> {
                 NetworkHandler_v1.setPlaybackOrCaptureVolume(cmd.value)
+                ExternalReceiver.onVolume?.invoke(cmd.value)
                 buildResponse("ok", mapOf("volume" to cmd.value))
             }
             is ControlCommand.Mute -> {
                 NetworkHandler_v1.isMicMuted.value = true
+                ExternalReceiver.onMute?.invoke(true)
                 buildResponse("ok", mapOf("muted" to true))
             }
             is ControlCommand.Unmute -> {
                 NetworkHandler_v1.isMicMuted.value = false
+                ExternalReceiver.onMute?.invoke(false)
                 buildResponse("ok", mapOf("muted" to false))
             }
             is ControlCommand.Stop -> {
                 runBlocking { NetworkHandler_v1.stopCurrentStream() }
+                ExternalReceiver.onStop?.invoke()
                 buildResponse("ok", mapOf("stopped" to true))
             }
             is ControlCommand.Status -> {
@@ -263,7 +271,10 @@ object IpcServer {
                 val dlnaOn = args.dlna || NetworkHandler_v1.dlnaActive()
                 val snapcastOn = args.snapcast || NetworkHandler_v1.snapcastActive()
                 val dlnaTargets = DlnaStatus.targets.value
+                val external = ExternalReceiver.statusFields?.invoke() ?: emptyMap()
                 buildResponse("ok", mapOf(
+                    "receiving" to ExternalReceiver.kind,
+                    "receiving_from" to ExternalReceiver.detail,
                     "mode"     to args.runMode.name.lowercase().removePrefix("cli_"),
                     "volume"   to NetworkHandler_v1.currentServerVolume,
                     "muted"    to NetworkHandler_v1.isMicMuted.value,
@@ -290,7 +301,7 @@ object IpcServer {
                     "wfas"     to WfasPolicy.mode.lowercase(),
                     "auth"     to currentSecurity().first.lowercase(),
                     "encrypted" to NetworkHandler_v1.sessionEncryptedLive.value
-                ))
+                ) + external)
             }
             is ControlCommand.DeepLink -> {
                 val ok = QrPairingState.submitDeepLink(cmd.uri)

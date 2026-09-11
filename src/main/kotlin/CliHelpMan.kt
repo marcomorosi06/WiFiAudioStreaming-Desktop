@@ -17,7 +17,9 @@ object CliHelpMan {
         "wfas transmits audio from one device (server) to one or more receivers (clients) on the " +
         "same local network using the WFAS v2 protocol. It also speaks RTP, HTTP, DLNA and " +
         "Snapcast as optional additional protocols, so receivers that know nothing about WFAS can " +
-        "play the same audio.\n" +
+        "play the same audio, and it speaks two of them in the other direction as well: " +
+        "'wfas rtp' listens to somebody else's RTP stream, and 'wfas snapcast' joins a Snapcast " +
+        "multiroom system as one of its clients.\n" +
         "\n" +
         "Run from a terminal with no arguments, wfas prints a short hint and exits. Run with no " +
         "arguments and no console, as happens on a double click, it opens the graphical " +
@@ -57,6 +59,20 @@ object CliHelpMan {
         "The --sdp flag generates an SDP descriptor based on the configured audio settings. The " +
         "payload type is L16 (raw PCM) over RTP. Most players, including VLC, ffplay and " +
         "GStreamer, support this format.",
+
+        "RTP and Snapcast also work in the receiving direction. 'wfas rtp listen' plays a stream " +
+        "produced by ffmpeg, VLC, a hardware sender or another wfas server, taking its " +
+        "description from an .sdp file, from standard input, from an address or from a source " +
+        "saved earlier. 'wfas snapcast listen' joins a Snapcast server as one of its clients, in " +
+        "sync with every other room. Saved sources and servers are the same entries the desktop " +
+        "application uses, app.rtpSources and app.snapcastServers in the configuration file.",
+
+        "The Snapcast control channel, port 1705 by default, is optional for playback and " +
+        "necessary for everything else: without it the audio still plays, but the volume of this " +
+        "machine cannot be changed from anywhere and the rest of the installation stays " +
+        "invisible. 'wfas snapcast status' reports whether it answered, and at which address it " +
+        "tried, because a refused connection, a timeout and a channel that drops after opening " +
+        "are three different problems.",
 
         "--auth-mode, --auth-key and --encrypt protect the native WFAS stream only. RTP, HTTP, " +
         "DLNA and Snapcast are standard protocols with no authentication and no encryption, so " +

@@ -1111,6 +1111,9 @@ static int   (*fn_pa_simple_read)  (void*, void*, size_t, int*) = NULL;
 static int   (*fn_pa_simple_write) (void*, const void*, size_t, int*) = NULL;
 static void  (*fn_pa_simple_free)  (void*)                      = NULL;
 static const char* (*fn_pa_strerror)(int)                       = NULL;
+/* Opzionale: se manca (libpulse molto vecchia) il motore ricade sul percorso
+ * bloccante storico invece di fallire. */
+static uint64_t (*fn_pa_simple_get_latency)(void*, int*)        = NULL;
 
 static int load_libpulse(void) {
     if (g_libpulse) return 1;
@@ -1134,6 +1137,7 @@ static int load_libpulse(void) {
     fn_pa_simple_write = dlsym(g_libpulse, "pa_simple_write");
     fn_pa_simple_free  = dlsym(g_libpulse, "pa_simple_free");
     fn_pa_strerror     = dlsym(g_libpulse, "pa_strerror");
+    fn_pa_simple_get_latency = dlsym(g_libpulse, "pa_simple_get_latency");
     if (!fn_pa_simple_new || !fn_pa_simple_read || !fn_pa_simple_write || !fn_pa_simple_free) {
         set_error("Failed to resolve symbols from libpulse-simple");
         dlclose(g_libpulse);
@@ -1149,11 +1153,46 @@ static volatile int       g_pa_initialized = 0;
 static volatile int       g_pa_stopping    = 0;
 static volatile int       g_pa_reading     = 0;
 
-/* ── Saved config (for stream recreation on drift) ────────────────────────── */
+/* ── Saved config (for stream recreation on error) ────────────────────────── */
 static int     g_pa_rate       = 48000;
 static int     g_pa_channels   = 2;
-static double  g_drift_ms      = 0.0;
-static int     g_drift_skips   = 0;
+static int     g_pa_frame_bytes = 4;      /* channels * sizeof(int16_t) */
+static int     g_pa_frag_frames = 240;    /* PA_FRAG_MS a g_pa_rate            */
+static int16_t *g_pa_scratch    = NULL;   /* buffer per lo scarto del backlog  */
+static size_t   g_pa_scratch_sz = 0;
+static int     g_pa_err_streak  = 0;      /* errori consecutivi di read        */
+static int     g_pa_read_n      = 0;      /* contatore per il campionamento    */
+static int     g_pa_lat_min     = INT32_MAX;  /* minimo di arretrato nella finestra */
+static int     g_pa_lat_n       = 0;      /* campioni raccolti nella finestra  */
+
+/* ── Politica di latenza ───────────────────────────────────────────────────────
+ * WASAPI in loopback tiene un ring da 200 ms e RISCRIVE i campioni piu' vecchi
+ * quando il consumatore resta indietro: su Windows l'arretrato si scarta da
+ * solo. pa_simple non lo fa — quello che non leggi resta in coda per sempre e
+ * diventa latenza permanente. Qui replichiamo quel comportamento a mano.
+ *
+ * DUE REGOLE, e la seconda e' quella che conta:
+ *
+ *  1. Tetto duro a HARD_MS: e' l'equivalente esatto del ring WASAPI che
+ *     sovrascrive. Scatta solo in emergenza.
+ *
+ *  2. Sfoltimento sul MINIMO di una finestra lunga. L'arretrato istantaneo
+ *     oscilla di continuo: reagire a ogni picco significa buttare audio buono
+ *     in continuazione — audio glitchato e CPU sprecata. Il *minimo* su ~2 s
+ *     invece e' l'arretrato che non se ne va da solo, cioe' latenza vera. Solo
+ *     quello viene scartato, al massimo una volta ogni finestra.
+ *
+ * La latenza si campiona una volta ogni PA_LAT_SAMPLE_EVERY read: ogni
+ * chiamata a pa_simple_* prende il lock del mainloop di PulseAudio, cioe' un
+ * handshake col thread del server. Sono la voce di costo dominante di questo
+ * percorso e vanno tenute al minimo indispensabile.
+ * ───────────────────────────────────────────────────────────────────────────*/
+#define PA_FRAG_MS              5
+#define PA_LAT_SAMPLE_EVERY     4   /* campiona la latenza ogni 4 read (~40 ms) */
+#define PA_TRIM_WINDOW         50   /* 50 campioni * 40 ms ≈ 2 s               */
+#define PA_BACKLOG_TARGET_MS   25   /* arretrato a cui si punta                */
+#define PA_BACKLOG_MARGIN_MS   15   /* isteresi: sotto target+margine non si tocca */
+#define PA_BACKLOG_HARD_MS    200   /* tetto duro, come il ring WASAPI         */
 
 /* ── Speaker mute / restore ───────────────────────────────────────────────── */
 static int  g_did_mute_sink      = 0;
@@ -1217,53 +1256,76 @@ static const char *get_default_monitor(void) {
     return NULL;
 }
 
-/* ── pulse_drain_stream — svuota i dati accumulati nel buffer PulseAudio ─────
- * Legge e scarta chunk finché pa_simple_read inizia a bloccarsi per il tempo
- * reale, ovvero siamo sincronizzati con l'audio "live".
- * ─────────────────────────────────────────────────────────────────────────── */
-static void pulse_drain_stream(void) {
-    if (!g_pa_stream) return;
-
-    /* Chunk piccolo (~10 ms) per un drain granulare */
-    uint32_t drain_bytes = (uint32_t)((uint64_t)g_pa_rate * g_pa_channels * 2 * 10 / 1000);
-    if (drain_bytes < 256) drain_bytes = 256;
-    double expected_ms = (double)drain_bytes
-                       / ((double)g_pa_rate * (double)g_pa_channels * 2.0) * 1000.0;
-
-    int16_t *tmp = (int16_t *)malloc(drain_bytes);
-    if (!tmp) return;
-
-    for (int i = 0; i < 120 && !g_pa_stopping; i++) {  /* max ~1.2 s di drain */
-        struct timespec t0, t1;
-        clock_gettime(CLOCK_MONOTONIC, &t0);
-        int err = 0;
-        if (fn_pa_simple_read(g_pa_stream, tmp, drain_bytes, &err) < 0) break;
-        clock_gettime(CLOCK_MONOTONIC, &t1);
-        double elapsed = (double)(t1.tv_sec - t0.tv_sec) * 1000.0
-                       + (double)(t1.tv_nsec - t0.tv_nsec) / 1e6;
-        if (elapsed >= expected_ms * 0.7 && i > 0) break;  /* sincronizzati con il live */
-    }
-    free(tmp);
-    if (!g_pa_stopping)
-        AE_LOG("[AudioEngine/Linux] Buffer iniziale svuotato.\n");
+/* ── Helper temporali ─────────────────────────────────────────────────────── */
+static double pa_ms_since(const struct timespec *t0) {
+    struct timespec t1;
+    clock_gettime(CLOCK_MONOTONIC, &t1);
+    return (double)(t1.tv_sec - t0->tv_sec) * 1000.0
+         + (double)(t1.tv_nsec - t0->tv_nsec) / 1e6;
 }
 
-/* ── pulse_flush_stream — ricrea il stream per azzerare latenza accumulata ── */
+/* ── pa_avail_frames — quanti frame sono gia' pronti da leggere ───────────────
+ * L'equivalente di IAudioCaptureClient_GetNextPacketSize su WASAPI.
+ * pa_simple imposta PA_STREAM_INTERPOLATE_TIMING, quindi la latenza viene
+ * interpolata in locale: la chiamata e' economica, niente round-trip.
+ * Restituisce -1 se libpulse e' troppo vecchia per esporre la funzione; i
+ * chiamanti in quel caso ricadono sul comportamento bloccante storico.
+ * ───────────────────────────────────────────────────────────────────────────*/
+static int pa_avail_frames(void) {
+    if (!fn_pa_simple_get_latency || !g_pa_stream || g_pa_rate <= 0) return -1;
+    int err = 0;
+    uint64_t usec = fn_pa_simple_get_latency(g_pa_stream, &err);
+    if (usec == (uint64_t)-1) return -1;
+    uint64_t frames = (usec * (uint64_t)g_pa_rate) / 1000000ULL;
+    if (frames > (uint64_t)INT32_MAX) return INT32_MAX;
+    return (int)frames;
+}
 
-static void pulse_flush_stream(void) {
-    if (g_pa_stopping) return;
+/* ── pulse_discard_frames — butta via N frame di audio vecchio ────────────────
+ * Una sola pa_simple_read verso lo scratch: i dati ci sono gia' (li abbiamo
+ * appena misurati), quindi non blocca. Se l'arretrato eccede lo scratch
+ * significa che qualcosa e' andato molto storto: flush secco.
+ * ───────────────────────────────────────────────────────────────────────────*/
+static void pulse_discard_frames(int frames) {
+    if (frames <= 0 || !g_pa_stream || !g_pa_scratch) return;
 
-    void *old = g_pa_stream;
-    g_pa_stream = NULL;
-    if (old) fn_pa_simple_free(old);
-    if (g_pa_stopping) return;
+    /* Si scarta SEMPRE leggendo. pa_simple_flush non e' un'alternativa: su uno
+     * stream di record libpulse la rifiuta, e un ramo che "scarta" senza
+     * scartare niente lascia l'arretrato dov'e' — in silenzio. Leggere e
+     * buttare e' una memcpy: costa nulla e funziona sempre.
+     * Il ciclo e' limitato perche' lo scratch copre il tetto duro (200 ms):
+     * per un arretrato di qualche secondo bastano pochi giri. */
+    const int max_per_read = (int)(g_pa_scratch_sz / (size_t)g_pa_frame_bytes);
+    if (max_per_read <= 0) return;
 
+    int dropped = 0;
+    for (int i = 0; i < 64 && dropped < frames && !g_pa_stopping; i++) {
+        int n = frames - dropped;
+        if (n > max_per_read) n = max_per_read;
+        int err = 0;
+        if (fn_pa_simple_read(g_pa_stream, g_pa_scratch,
+                              (size_t)n * (size_t)g_pa_frame_bytes, &err) < 0) {
+            AE_LOG("[AudioEngine/Linux] Scarto interrotto: %s\n",
+                   fn_pa_strerror ? fn_pa_strerror(err) : "?");
+            break;
+        }
+        dropped += n;
+    }
+
+    if (dropped > 0)
+        AE_LOG("[AudioEngine/Linux] Scartati %d ms di arretrato.\n",
+               dropped * 1000 / g_pa_rate);
+}
+
+/* ── pulse_open_stream — crea lo stream di cattura ───────────────────────────*/
+static int pulse_open_stream(void) {
     pa_sample_spec_t ss;
     ss.format   = PA_SAMPLE_S16LE;
     ss.rate     = (uint32_t)g_pa_rate;
     ss.channels = (uint8_t)g_pa_channels;
 
-    uint32_t frag = (uint32_t)((uint64_t)g_pa_rate * g_pa_channels * 2 * 5 / 1000);
+    uint32_t frag = (uint32_t)((uint64_t)g_pa_rate * g_pa_channels * 2
+                             * PA_FRAG_MS / 1000);
     if (frag < 256) frag = 256;
 
     pa_buffer_attr_t attr;
@@ -1274,22 +1336,90 @@ static void pulse_flush_stream(void) {
     attr.fragsize  = frag;
 
     int error = 0;
-    g_pa_stream = fn_pa_simple_new(
+    void *s = fn_pa_simple_new(
         NULL, "WiFi Audio Streaming", PA_STREAM_RECORD,
         g_monitor_name[0] ? g_monitor_name : NULL, "Loopback Capture",
         &ss, NULL, &attr, &error);
 
-    g_drift_ms    = 0.0;
-    g_drift_skips = 3;
-
-    if (g_pa_stream) {
-        pulse_drain_stream();
-        AE_LOG("[AudioEngine/Linux] Stream ricreato (drift azzerato).\n");
-    } else {
+    if (!s) {
         const char *msg = fn_pa_strerror ? fn_pa_strerror(error) : "unknown";
-        set_error("pa_simple_new (flush) failed: %s", msg);
-        g_pa_initialized = 0;
+        set_error("pa_simple_new failed: %s (device: %s)",
+                  msg, g_monitor_name[0] ? g_monitor_name : "default");
+        return 0;
     }
+
+    g_pa_stream      = s;
+    g_pa_frame_bytes = g_pa_channels * (int)sizeof(int16_t);
+    g_pa_frag_frames = (int)(frag / (uint32_t)g_pa_frame_bytes);
+    if (g_pa_frag_frames < 1) g_pa_frag_frames = 1;
+
+    /* Lo scratch deve reggere lo scarto piu' grande previsto, cioe' il tetto
+     * duro: ~38 KB a 48 kHz stereo. Cosi' un solo pa_simple_read basta sempre. */
+    size_t need = (size_t)(g_pa_rate * PA_BACKLOG_HARD_MS / 1000)
+                * (size_t)g_pa_frame_bytes;
+    if (g_pa_scratch_sz < need) {
+        int16_t *p = (int16_t *)realloc(g_pa_scratch, need);
+        if (p) { g_pa_scratch = p; g_pa_scratch_sz = need; }
+    }
+    return 1;
+}
+
+/* ── pulse_prime_stream — parti allineato al "live" ──────────────────────────*/
+static void pulse_prime_stream(void) {
+    if (!g_pa_stream) return;
+
+    g_pa_read_n  = 0;
+    g_pa_lat_min = INT32_MAX;
+    g_pa_lat_n   = 0;
+
+    if (fn_pa_simple_get_latency) {
+        /* Allineati al "live". Serve un ciclo, non un colpo solo: mentre
+         * scartiamo arriva altro audio, e all'avvio l'arretrato puo' essere
+         * grosso (pa_simple_new + il popen di pactl per il mute ci mettono il
+         * loro tempo, e intanto il server accoda). */
+        const int target = g_pa_rate * PA_BACKLOG_TARGET_MS / 1000;
+        for (int i = 0; i < 16 && !g_pa_stopping; i++) {
+            int avail = pa_avail_frames();
+            if (avail < 0 || avail <= target) break;
+            pulse_discard_frames(avail - target);
+        }
+        return;
+    }
+
+    /* libpulse senza introspezione: ricadiamo sul drain a tempo storico. */
+    uint32_t drain_bytes = (uint32_t)((uint64_t)g_pa_rate * g_pa_frame_bytes * 10 / 1000);
+    if (drain_bytes < 256) drain_bytes = 256;
+    double expected_ms = (double)drain_bytes
+                       / ((double)g_pa_rate * (double)g_pa_frame_bytes) * 1000.0;
+
+    int16_t *tmp = (int16_t *)malloc(drain_bytes);
+    if (!tmp) return;
+    for (int i = 0; i < 120 && !g_pa_stopping; i++) {
+        struct timespec t0;
+        clock_gettime(CLOCK_MONOTONIC, &t0);
+        int err = 0;
+        if (fn_pa_simple_read(g_pa_stream, tmp, drain_bytes, &err) < 0) break;
+        if (pa_ms_since(&t0) >= expected_ms * 0.7 && i > 0) break;
+    }
+    free(tmp);
+}
+
+/* ── pulse_recreate_stream — ricostruisce lo stream dopo un errore ───────────*/
+static int pulse_recreate_stream(void) {
+    if (g_pa_stopping) return 0;
+
+    void *old = g_pa_stream;
+    g_pa_stream = NULL;
+    if (old) fn_pa_simple_free(old);
+    if (g_pa_stopping) return 0;
+
+    if (!pulse_open_stream()) {
+        g_pa_initialized = 0;
+        return 0;
+    }
+    pulse_prime_stream();
+    AE_LOG("[AudioEngine/Linux] Stream ricreato.\n");
+    return 1;
 }
 
 /* ── pulse_start / pulse_read / pulse_stop ──────────────────────────────── */
@@ -1302,116 +1432,132 @@ static jboolean pulse_start(int sample_rate, int channels) {
         g_pa_stream = NULL;
     }
 
-    pa_sample_spec_t ss;
-    ss.format   = PA_SAMPLE_S16LE;
-    ss.rate     = (uint32_t)sample_rate;
-    ss.channels = (uint8_t)channels;
-
-    /* ~5 ms fragment for low latency; min 256 bytes */
-    uint32_t frag = (uint32_t)((uint64_t)sample_rate * channels * 2 * 5 / 1000);
-    if (frag < 256) frag = 256;
-
-    pa_buffer_attr_t attr;
-    attr.maxlength = frag * 8;
-    attr.tlength   = (uint32_t)-1;
-    attr.prebuf    = (uint32_t)-1;
-    attr.minreq    = (uint32_t)-1;
-    attr.fragsize  = frag;
+    g_pa_rate     = sample_rate;
+    g_pa_channels = channels > 0 ? channels : 2;
+    g_channels_req = g_pa_channels;   /* usato dal wrapper JNI */
 
     const char *device = get_default_monitor();
+    if (device && device != g_monitor_name)
+        snprintf(g_monitor_name, sizeof(g_monitor_name), "%s", device);
+    if (!device) g_monitor_name[0] = '\0';
 
-    int error = 0;
-    g_pa_stream = fn_pa_simple_new(
-        NULL, "WiFi Audio Streaming", PA_STREAM_RECORD,
-        device, "Loopback Capture",
-        &ss, NULL, &attr, &error);
+    g_pa_stopping  = 0;
+    g_pa_reading   = 0;
+    g_pa_err_streak = 0;
 
-    if (!g_pa_stream) {
-        const char *msg = fn_pa_strerror ? fn_pa_strerror(error) : "unknown";
-        set_error("pa_simple_new failed: %s (device: %s)",
-                  msg, device ? device : "default");
-        return JNI_FALSE;
-    }
+    if (!pulse_open_stream()) return JNI_FALSE;
 
     if (g_mute_render) linux_save_and_mute_sink();
 
-    g_pa_rate      = sample_rate;
-    g_pa_channels  = channels;
-    g_drift_ms     = 0.0;
-    g_drift_skips  = 3;
-    g_pa_stopping  = 0;
-    g_pa_reading   = 0;
     g_pa_initialized = 1;
 
-    /* Svuota l'audio accumulato da pa_simple_new + mute setup */
-    pulse_drain_stream();
-    AE_LOG("[AudioEngine/Linux] Started. %d ch, %d Hz, fragsize=%u B (~%u ms), device: %s\n",
-            channels, sample_rate, frag,
-            frag * 1000 / (uint32_t)(sample_rate * channels * 2),
-            device ? device : "default");
+    /* Svuota l'audio accumulato da pa_simple_new + setup del mute */
+    pulse_prime_stream();
+
+    AE_LOG("[AudioEngine/Linux] Started. %d ch, %d Hz, frag=%d frame (~%d ms), "
+           "tetto %d ms, target %d ms, introspezione=%s, device: %s\n",
+           g_pa_channels, g_pa_rate, g_pa_frag_frames,
+           g_pa_frag_frames * 1000 / g_pa_rate,
+           PA_BACKLOG_HARD_MS, PA_BACKLOG_TARGET_MS,
+           fn_pa_simple_get_latency ? "si" : "NO (fallback bloccante)",
+           g_monitor_name[0] ? g_monitor_name : "default");
     return JNI_TRUE;
 }
 
-static jboolean pulse_read(int16_t *buf, int num_stereo_samples) {
-    if (!g_pa_initialized || !g_pa_stream || g_pa_stopping) return JNI_FALSE;
+/* ── pulse_read ───────────────────────────────────────────────────────────────
+ * Semantica allineata a wasapi_read:
+ *   - restituisce il numero di FRAME scritti;
+ *   - 0  = niente audio (il chiamante puo' iniettare il mic);
+ *   - -1 = errore duro sullo stream.
+ *
+ * Costo per frame: una pa_simple_read, piu' una pa_simple_get_latency ogni
+ * PA_LAT_SAMPLE_EVERY giri. La singola read bloccante e' anche cio' che da' il
+ * passo al loop: il thread si parcheggia invece di girare a vuoto.
+ * ───────────────────────────────────────────────────────────────────────────*/
+static jint pulse_read(int16_t *buf, int num_frames) {
+    if (!g_pa_initialized || !g_pa_stream || g_pa_stopping) return 0;
+    if (!buf || num_frames <= 0) return 0;
+
     g_pa_reading = 1;
-    if (!g_pa_stream || g_pa_stopping) { g_pa_reading = 0; return JNI_FALSE; }
+    __sync_synchronize();
+    if (!g_pa_stream || g_pa_stopping) { g_pa_reading = 0; return 0; }
 
-    size_t bytes = (size_t)num_stereo_samples * 2 * sizeof(int16_t);
-    /* Durata attesa in ms per questa chunk a tempo reale */
-    double expected_ms = (double)bytes
-                       / ((double)g_pa_rate * (double)g_pa_channels * 2.0)
-                       * 1000.0;
-
-    struct timespec t0, t1;
-    clock_gettime(CLOCK_MONOTONIC, &t0);
-
-    int error = 0;
-    int rc = fn_pa_simple_read(g_pa_stream, buf, bytes, &error);
-
-    clock_gettime(CLOCK_MONOTONIC, &t1);
-
-    if (rc < 0) {
-        g_pa_reading = 0;
-        if (g_pa_stopping) return JNI_FALSE;
-        const char *msg = fn_pa_strerror ? fn_pa_strerror(error) : "unknown";
-        set_error("pa_simple_read failed: %s", msg);
-        return JNI_FALSE;
-    }
-
-    /* Drift detection: se pa_simple_read ha impiegato meno del 50% del tempo
-     * reale atteso, significa che il buffer aveva già dati accumulati
-     * (latenza in crescita). Accumulo il debito e quando supera 200 ms
-     * ricreo il stream per azzerare. g_pa_reading rimane 1 per proteggere
-     * pulse_flush_stream da pulse_stop concorrente. */
-    if (!g_pa_stopping) {
-        if (g_drift_skips > 0) {
-            g_drift_skips--;
-        } else {
-            double elapsed_ms = (double)(t1.tv_sec - t0.tv_sec) * 1000.0
-                              + (double)(t1.tv_nsec - t0.tv_nsec) / 1e6;
-            if (elapsed_ms < expected_ms * 0.5) {
-                g_drift_ms += expected_ms - elapsed_ms;
-                if (g_drift_ms > 200.0) {
-                    AE_LOG("[AudioEngine/Linux] Drift latenza %.0f ms — stream ricreato.\n",
-                        g_drift_ms);
-                    pulse_flush_stream();
-                }
-            } else {
-                g_drift_ms = 0.0;
-            }
+    /* ── 1. Campionamento dell'arretrato (raro) ─────────────────────────────*/
+    int avail = -1;
+    if (fn_pa_simple_get_latency) {
+        if (g_mic_enabled) {
+            /* Col mic attivo serve a ogni giro: e' l'unico modo di non restare
+             * bloccati su un sistema muto e lasciar passare il microfono. */
+            avail = pa_avail_frames();
+        } else if (++g_pa_read_n >= PA_LAT_SAMPLE_EVERY) {
+            g_pa_read_n = 0;
+            avail = pa_avail_frames();
         }
     }
 
+    if (avail >= 0) {
+        const int target = g_pa_rate * PA_BACKLOG_TARGET_MS / 1000;
+        const int margin = g_pa_rate * PA_BACKLOG_MARGIN_MS / 1000;
+        const int hard   = g_pa_rate * PA_BACKLOG_HARD_MS   / 1000;
+
+        if (avail >= hard) {
+            /* Tetto duro: qui WASAPI sovrascriverebbe il ring. */
+            pulse_discard_frames(avail - target);
+            g_pa_lat_min = INT32_MAX;
+            g_pa_lat_n   = 0;
+        } else {
+            if (avail < g_pa_lat_min) g_pa_lat_min = avail;
+            if (++g_pa_lat_n >= PA_TRIM_WINDOW) {
+                AE_LOG("[AudioEngine/Linux] arretrato minimo su ~2 s: %d ms "
+                       "(target %d ms)\n",
+                       g_pa_lat_min * 1000 / g_pa_rate, PA_BACKLOG_TARGET_MS);
+                /* Il minimo della finestra e' l'arretrato che non si riassorbe
+                 * da solo: quella e' latenza, non fluttuazione. */
+                if (g_pa_lat_min > target + margin)
+                    pulse_discard_frames(g_pa_lat_min - target);
+                g_pa_lat_min = INT32_MAX;
+                g_pa_lat_n   = 0;
+            }
+        }
+
+        if (g_mic_enabled && avail <= 0) { g_pa_reading = 0; return 0; }
+    }
+
+    /* ── 2. Una sola read bloccante del chunk intero ────────────────────────*/
+    size_t bytes = (size_t)num_frames * (size_t)g_pa_frame_bytes;
+    int err = 0;
+    if (fn_pa_simple_read(g_pa_stream, buf, bytes, &err) < 0) {
+        if (g_pa_stopping) { g_pa_reading = 0; return 0; }
+
+        const char *msg = fn_pa_strerror ? fn_pa_strerror(err) : "unknown";
+        g_pa_err_streak++;
+        /* Un errore isolato (sink cambiato, server riavviato) non deve uccidere
+         * lo streaming: ricostruiamo lo stream e riproviamo una volta. */
+        if (g_pa_err_streak <= 2 && pulse_recreate_stream()) {
+            AE_LOG("[AudioEngine/Linux] read fallita (%s) — stream ricreato.\n", msg);
+            err = 0;
+            if (g_pa_stream &&
+                fn_pa_simple_read(g_pa_stream, buf, bytes, &err) >= 0) {
+                g_pa_err_streak = 0;
+                g_pa_reading = 0;
+                return (jint)num_frames;
+            }
+        }
+        set_error("pa_simple_read failed: %s", msg);
+        g_pa_reading = 0;
+        return -1;
+    }
+
+    g_pa_err_streak = 0;
     g_pa_reading = 0;
-    return JNI_TRUE;
+    return (jint)num_frames;
 }
 
 static void pulse_stop(void) {
     if (!g_pa_initialized && !g_pa_stream) return;
     g_pa_stopping    = 1;
     g_pa_initialized = 0;
-    g_drift_ms       = 0.0;
+    __sync_synchronize();
 
     /* Wait for an in-progress read to finish (max ~500 ms). */
     for (int w = 0; g_pa_reading && w < 500; w++) usleep(1000);
@@ -1420,6 +1566,12 @@ static void pulse_stop(void) {
         fn_pa_simple_free(g_pa_stream);
         g_pa_stream = NULL;
     }
+    if (g_pa_scratch) {
+        free(g_pa_scratch);
+        g_pa_scratch    = NULL;
+        g_pa_scratch_sz = 0;
+    }
+    g_pa_err_streak = 0;
     linux_restore_sink_mute();
     g_pa_stopping = 0;
     AE_LOG("[AudioEngine/Linux] Stopped.\n");
@@ -1611,18 +1763,21 @@ Java_AudioEngine_nativeRead(JNIEnv *env, jobject thiz,
 
     jint result = 0;
     int stereo_frames = (int)num_samples / 2;
+    (void)stereo_frames;   /* usato solo dai rami Windows/macOS */
 
 #if defined(_WIN32)
     result = wasapi_read((int16_t *)buf, stereo_frames) * 2;
 #elif defined(__linux__)
+    /* Semantica allineata a Windows: pulse_read torna i FRAME scritti, anche
+     * parziali; 0 = niente audio entro il timeout (il ramo mic sotto puo'
+     * comunque iniettare il microfono); -1 = errore duro sullo stream.
+     * Il numero di frame richiesti usa i canali reali dello stream invece di
+     * assumere stereo. */
     {
         int ch = (g_channels_req > 0) ? g_channels_req : 2;
-        int want_shorts = stereo_frames * ch;
-        if (want_shorts > (int)num_samples) want_shorts = (int)num_samples;
-        if (pulse_read((int16_t *)buf, want_shorts / 2) == JNI_TRUE)
-            result = (want_shorts / 2) * 2;
-        else
-            result = -1;
+        int frames_req = (int)num_samples / ch;
+        jint got = pulse_read((int16_t *)buf, frames_req);
+        result = (got < 0) ? -1 : got * ch;
     }
 #elif defined(__APPLE__)
     result = mac_engine_read((int16_t *)buf, stereo_frames) * 2;
