@@ -1,153 +1,59 @@
 # Third-Party Software & Licenses — WiFi Audio Streaming (Desktop)
 
-This application is licensed under the **EUPL v1.2** (see `LICENSE.md`).
-It bundles and uses the third-party open-source components listed below. Each
-remains the property of its respective authors and is distributed under its own
-licence. We are grateful to all of these projects.
+Copyright (c) 2025-2026 Marco Morosi and contributors. The app is licensed
+under the **EUPL v1.2** (see `LICENSE.md`), except for the two sound files
+described below.
 
-> **WFAS v2 protocol (MIT):** the WiFi Audio Streaming wire protocol is this
-> project's own. A C reference implementation is published separately under the
-> **MIT License** (Copyright © 2026 Marco Morosi,
-> <https://github.com/marcomorosi06/wfas-protocol>) so anyone can adopt WFAS v2 freely,
-> e.g. on microcontrollers. It is not bundled in this app.
+This page summarises the licences of what the desktop packages contain. The
+complete, authoritative list — every component with its version, copyright and
+licence — is
+**[`src/main/resources/third_party_licenses.txt`](src/main/resources/third_party_licenses.txt)**,
+and the full text of every licence it names is in
+**[`src/main/resources/licenses/`](src/main/resources/licenses/)**
+([`SOURCES.txt`](src/main/resources/licenses/SOURCES.txt) records where each text
+was copied from). Both are inside the app: Settings → *Open-source licenses*,
+`wfas --licenses`, and the `licenses/` folder of the WiFiAudioStreaming jar.
 
-> ⚠️ **FFmpeg (LGPL) — important:** see the dedicated section below. FFmpeg is
-> distributed under the GNU LGPL v2.1 or later (some optional components may be
-> under the GPL). Its source code and the build scripts are publicly available
-> as required by that licence.
+## Not under the EUPL
 
----
+| File | Origin | Terms |
+|---|---|---|
+| `src/main/resources/raw/connection_sound.wav`, `src/main/resources/raw/disconnection_sound.wav` | Generated with ElevenLabs, free plan | Attribution "elevenlabs.io" required; no commercial use. Remove or replace them before any commercial redistribution. |
 
-## Summary table
+## Credits for the app's own content
 
-| Component | Version | Licence | Copyright |
-|---|---|---|---|
-| FFmpeg (native libs, via JavaCPP Presets) | 6.1.1 (preset 1.5.10) | **LGPL v2.1+** (some parts GPL — see note) | The FFmpeg developers |
-| JavaCV | 1.5.10 | Apache License 2.0 | Samuel Audet / Bytedeco |
-| JavaCPP | 1.5.10 | Apache License 2.0 (or GPLv2 + Classpath Exception) | Samuel Audet / Bytedeco |
-| Bytedeco FFmpeg preset | 1.5.10 | Apache License 2.0 (preset code) | Bytedeco |
-| JetBrains Compose Multiplatform (Desktop, Material 3, icons) | 1.7.3 | Apache License 2.0 | JetBrains s.r.o. and Google LLC |
-| Kotlin standard library | 2.1.0 | Apache License 2.0 | JetBrains s.r.o. |
-| kotlinx.coroutines | 1.9.0 | Apache License 2.0 | JetBrains s.r.o. |
-| Ktor (`ktor-network`, `ktor-network-tls`) | 3.0.3 | Apache License 2.0 | JetBrains s.r.o. |
-| ZXing Core | 3.5.3 | Apache License 2.0 | ZXing authors |
-| Bouncy Castle (`bcprov`, `bctls`, `bcpkix` jdk18on) | 1.78.1 | Bouncy Castle Licence (MIT-style) | The Legion of the Bouncy Castle Inc. |
-| dorkbox SystemTray (+ Utilities, OS, Collections, Executor, Updates) | 4.4 | Apache License 2.0 | dorkbox, llc |
-| Java Native Access (JNA, JNA Platform) | 5.13.0 | Apache License 2.0 / LGPL 2.1 (dual) | Timothy Wall and contributors |
-| SLF4J (`slf4j-nop`) | 2.0.9 | MIT License | QOS.ch Sàrl |
-| kotlinx-datetime / kotlinx-io (transitive) | — | Apache License 2.0 | JetBrains s.r.o. |
-| Java UUID Generator (transitive) | 4.2.0 | Apache License 2.0 | FasterXML, LLC |
+- **Tux**: the image of Tux in the app was generated with ChatGPT; Tux was
+  originally drawn by Larry Ewing (lewing@isc.tamu.edu) with The GIMP.
+- **WFAS v2 protocol**: the C reference implementation is published separately
+  under the MIT License ([`wfas-protocol`](https://github.com/marcomorosi06/wfas-protocol),
+  © 2026 Marco Morosi). It is not bundled in this app.
 
-Versions reflect `build.gradle.kts` at the time of writing; transitive
-dependencies inherit the licence of their project.
+## What the packages contain
 
----
+| Component | Licence |
+|---|---|
+| FFmpeg 6.1.1 (`org.bytedeco:ffmpeg:6.1.1-1.5.10`, no GPL components), separate shared libraries | **LGPL-3.0-or-later** (configured with `--enable-version3`; `libavutil` reports "LGPL version 3 or later") |
+| Compiled into FFmpeg: zlib, LAME, Speex, Opus, OpenCORE AMR, VisualOn AMR-WB, OpenSSL 3.2.0, OpenH264, libvpx, FreeType, libxml2, SRT, libwebp, libaom, SVT-AV1, nv-codec-headers, Vulkan-Headers; on Windows also mfx_dispatch, winpthreads and the GCC runtime | zlib, LGPL-2.0-or-later (LAME), BSD-2/BSD-3/BSD-3-Clear, Apache-2.0, FreeType License, MIT, MPL-2.0 (SRT), AOM Patent License 1.0, GCC Runtime Library Exception |
+| Separate libraries in the FFmpeg jar: alsa-lib 1.2.10 and Raspberry Pi userland (linux-arm64), libdrm (linux-x86_64) | LGPL-2.1-or-later, BSD-3-Clause, MIT |
+| JavaCPP, JavaCV, JavaCPP Presets 1.5.10 (Java bindings only for the presets other than FFmpeg) | Apache-2.0 or GPL-2.0 with Classpath Exception |
+| Skiko 0.8.18 with Skia m126 and HarfBuzz, FreeType, ICU 74, libjpeg-turbo, libpng, libwebp, Expat, zlib, Wuffs, piex, Adobe DNG SDK | Apache-2.0, BSD-3-Clause, MIT, FreeType License, Unicode License v3, IJG, libpng-2.0, zlib, DNG SDK License |
+| Kotlin, kotlinx (coroutines, datetime, io, serialization, atomicfu), Compose Multiplatform and the AndroidX libraries it uses, Ktor, ZXing, JNA (with libffi), dorkbox, Javassist, Java UUID Generator, JetBrains annotations | Apache-2.0 (JNA and Javassist used under Apache-2.0; libffi MIT; dorkbox include MIT, BSD-3-Clause and CC0 code) |
+| Bouncy Castle 1.78.1 | Bouncy Castle Licence (MIT) |
+| SLF4J 2.0.16 / 2.0.9 | MIT |
+| Java runtime: Eclipse Temurin 17.0.20+8 | GPL-2.0 with Classpath Exception (notices in the runtime's `legal` folder) |
+| AppImage type2-runtime 20251108 (`.AppImage` files only) with libfuse 3.15.0, squashfuse, Zstandard, zlib, musl, mimalloc | MIT, LGPL-2.1, BSD-2/BSD-3, zlib |
 
-## FFmpeg (LGPL v2.1 or later)
+## Source code
 
-This application uses **FFmpeg** (https://ffmpeg.org) for AAC/Opus audio
-encoding in the optional HTTP streaming server and, in the legacy capture path,
-for audio grabbing. The FFmpeg native libraries are **not** modified by us; they
-are obtained, unchanged, from the **JavaCPP Presets** project
-(https://github.com/bytedeco/javacpp-presets) and loaded dynamically at runtime
-as separate shared libraries (`avcodec`, `avformat`, `avutil`, …).
+Every release has, next to the packages,
+`wifi-audio-streaming-<version>-third-party-sources.tar`, made by
+[`scripts/package-third-party-sources.sh`](scripts/package-third-party-sources.sh):
+the JavaCPP Presets build scripts and patches with the source of FFmpeg and of
+every library compiled into it, the OpenJDK source of the bundled Eclipse
+Temurin runtime, and the source of the AppImage runtime with libfuse and
+squashfuse. The source of the app itself is this repository at the release tag.
 
-FFmpeg is free software licensed under the **GNU Lesser General Public License
-(LGPL) version 2.1 or later**. Depending on how the binaries were configured,
-some optional FFmpeg components may be licensed under the **GNU General Public
-License (GPL)**.
-
-In accordance with the LGPL:
-
-* **Copyright:** © the FFmpeg developers. FFmpeg is a trademark of Fabrice
-  Bellard, originator of the FFmpeg project.
-* **Source code:** the complete corresponding source of FFmpeg is available at
-  <https://ffmpeg.org/download.html>, and the exact build configuration and
-  scripts used to produce the bundled binaries are available from the JavaCPP
-  Presets project at <https://github.com/bytedeco/javacpp-presets/tree/master/ffmpeg>.
-* **A copy of the LGPL v2.1** is provided at <https://www.gnu.org/licenses/old-licenses/lgpl-2.1.html>
-  (and the GPL at <https://www.gnu.org/licenses/gpl-3.0.html>).
-* **Relinking (LGPL §6):** because FFmpeg is shipped as separate, dynamically
-  loaded shared libraries, users may replace them with their own (compatible)
-  build of FFmpeg.
-
-> 🔧 **Maintainer action — verify the exact FFmpeg licence of the shipped build.**
-> The JavaCPP Presets FFmpeg binaries may be built either as pure LGPL or with
-> GPL components enabled (e.g. x264/x265). If GPL components are included, the
-> combined distribution must be under a GPL-compatible licence — EUPL v1.2 is
-> one-way compatible with the GPL, but you should confirm this consciously.
-> You can check the actual licence at runtime via JavaCV:
-> `org.bytedeco.ffmpeg.global.avutil.avutil_license()` (returns e.g.
-> `"LGPL version 2.1 or later"` or `"GPL version 2 or later"`), and the build
-> options via `org.bytedeco.ffmpeg.global.avutil.av_version_info()`. Record the
-> result here once verified.
-
----
-
-## Apache License 2.0
-
-The following components are licensed under the Apache License, Version 2.0
-(<https://www.apache.org/licenses/LICENSE-2.0>):
-
-* JavaCV, JavaCPP and the Bytedeco FFmpeg preset — © Samuel Audet / Bytedeco
-* JetBrains Compose Multiplatform (Desktop, Material 3, Material Icons Extended) — © JetBrains s.r.o. and Google LLC
-* Kotlin standard library — © JetBrains s.r.o.
-* kotlinx.coroutines, kotlinx-datetime, kotlinx-io — © JetBrains s.r.o.
-* Ktor — © JetBrains s.r.o.
-* dorkbox SystemTray, Utilities, OS, Collections, Executor, Updates — © dorkbox, llc
-* Java Native Access (JNA) — © Timothy Wall and contributors (dual-licensed Apache 2.0 / LGPL 2.1; used here under Apache 2.0)
-* Java UUID Generator — © FasterXML, LLC
-* ZXing Core — © ZXing authors (<https://github.com/zxing/zxing>). Used both to
-  encode pairing invites (on screen and as terminal ASCII art) and to decode the
-  QR codes read from the webcam. The `javase` module is deliberately **not** a
-  dependency: the project supplies its own `LuminanceSource`, so no AWT-only
-  ZXing code is shipped.
-
-> A full copy of the Apache License 2.0 is distributed with each of these
-> projects and is reproduced at the URL above. Any `NOTICE` files shipped by
-> these projects are preserved in their respective JARs.
-
----
-
-## Bouncy Castle Licence
-
-Bouncy Castle (`bcprov-jdk18on`, `bctls-jdk18on`, `bcpkix-jdk18on` 1.78.1) is
-© 2000–2024 The Legion of the Bouncy Castle Inc. (<https://www.bouncycastle.org>)
-and is distributed under an MIT-style licence:
-
-```
-Copyright (c) 2000–2024 The Legion of the Bouncy Castle Inc. (https://www.bouncycastle.org)
-
-Permission is hereby granted, free of charge, to any person obtaining a copy of
-this software and associated documentation files (the "Software"), to deal in
-the Software without restriction, including without limitation the rights to
-use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies
-of the Software, and to permit persons to whom the Software is furnished to do
-so, subject to the following conditions:
-
-The above copyright notice and this permission notice shall be included in all
-copies or substantial portions of the Software.
-
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. ...
-```
-
----
-
-## MIT License
-
-SLF4J (`slf4j-nop` 2.0.9) is © 2004–2023 QOS.ch Sàrl and is distributed under
-the MIT License (<https://www.slf4j.org/license.html>).
-
----
-
-## How to regenerate this list
-
-The authoritative source is `build.gradle.kts`. After changing dependencies,
-update the table above. To dump the full resolved dependency tree (including
-transitive dependencies) run:
-
-```
-./gradlew dependencies --configuration runtimeClasspath
-```
+FFmpeg is loaded at run time from `ffmpeg-6.1.1-1.5.10-<platform>.jar` as
+separate shared libraries: you can replace them with your own build of FFmpeg
+6.1.1 (same file names and ABI) by replacing that jar with one that contains
+your libraries at the same paths.
