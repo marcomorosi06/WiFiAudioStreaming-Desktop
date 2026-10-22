@@ -1,0 +1,114 @@
+ - Utilities - Utilities for use within Java projects
+   [The Apache Software License, Version 2.0]
+   https://git.dorkbox.com/dorkbox/Utilities
+   Copyright 2023
+     Dorkbox LLC
+
+   Extra license information
+     - MersenneTwisterFast - 
+       [BSD 3-Clause License]
+       https://git.dorkbox.com/dorkbox/Utilities
+       Copyright 2003
+         Sean Luke
+         Michael Lecuyer (portions Copyright 1993
+
+     - FastThreadLocal - 
+       [BSD 3-Clause License]
+       https://git.dorkbox.com/dorkbox/Utilities
+       https://github.com/LWJGL/lwjgl3/blob/5819c9123222f6ce51f208e022cb907091dd8023/modules/core/src/main/java/org/lwjgl/system/FastThreadLocal.java
+       https://github.com/riven8192/LibStruct/blob/master/src/net/indiespot/struct/runtime/FastThreadLocal.java
+       Copyright 2014
+         Lightweight Java Game Library Project
+         Riven
+
+     - Retrofit - A type-safe HTTP client for Android and Java
+       [The Apache Software License, Version 2.0]
+       https://github.com/square/retrofit
+       Copyright 2020
+         Square, Inc
+
+     - Resource Listing - Listing the contents of a resource directory
+       [The Apache Software License, Version 2.0]
+       https://www.uofr.net/~greg/java/get-resource-listing.html
+       Copyright 2017
+         Greg Briggs
+
+     - CommonUtils - Common utility extension functions for kotlin
+       [The Apache Software License, Version 2.0]
+       https://www.pronghorn.tech 
+       Copyright 2017
+         Pronghorn Technology LLC
+         Dorkbox LLC
+
+     - Kotlin Coroutine CountDownLatch - 
+       [The Apache Software License, Version 2.0]
+       https://github.com/Kotlin/kotlinx.coroutines/issues/59
+       https://github.com/venkatperi/kotlin-coroutines-lib
+       Copyright 2018
+         Venkat Peri
+
+     - kotlinx.coroutines - Library support for Kotlin coroutines with multiplatform support
+       [The Apache Software License, Version 2.0]
+       https://github.com/Kotlin/kotlinx.coroutines
+       Copyright 2023
+         JetBrains s.r.o.
+
+     - Java Uuid Generator - A set of Java classes for working with UUIDs
+       [The Apache Software License, Version 2.0]
+       https://github.com/cowtowncoder/java-uuid-generator
+       Copyright 2023
+         Tatu Saloranta (tatu.saloranta@iki.fi)
+         Contributors. See source release-notes/CREDITS
+
+     - Kotlin - 
+       [The Apache Software License, Version 2.0]
+       https://github.com/JetBrains/kotlin
+       Copyright 2020
+         JetBrains s.r.o. and Kotlin Programming Language contributors
+       Kotlin Compiler, Test Data+Libraries, and Tools repository contain third-party code, to which different licenses may apply
+       See: https://github.com/JetBrains/kotlin/blob/master/license/README.md
+
+     - OS - Information about the system, Java runtime, OS, Window Manager, and Desktop Environment.
+       [The Apache Software License, Version 2.0]
+       https://git.dorkbox.com/dorkbox/OS
+       Copyright 2023
+         Dorkbox LLC
+
+       Extra license information
+         - Kotlin - 
+           [The Apache Software License, Version 2.0]
+           https://github.com/JetBrains/kotlin
+           Copyright 2020
+             JetBrains s.r.o. and Kotlin Programming Language contributors
+           Kotlin Compiler, Test Data+Libraries, and Tools repository contain third-party code, to which different licenses may apply
+           See: https://github.com/JetBrains/kotlin/blob/master/license/README.md
+
+         - Updates - Software Update Management
+           [The Apache Software License, Version 2.0]
+           https://git.dorkbox.com/dorkbox/Updates
+           Copyright 2021
+             Dorkbox LLC
+
+           Extra license information
+             - Kotlin - 
+               [The Apache Software License, Version 2.0]
+               https://github.com/JetBrains/kotlin
+               Copyright 2020
+                 JetBrains s.r.o. and Kotlin Programming Language contributors
+               Kotlin Compiler, Test Data+Libraries, and Tools repository contain third-party code, to which different licenses may apply
+               See: https://github.com/JetBrains/kotlin/blob/master/license/README.md
+
+     - Updates - Software Update Management
+       [The Apache Software License, Version 2.0]
+       https://git.dorkbox.com/dorkbox/Updates
+       Copyright 2021
+         Dorkbox LLC
+
+       Extra license information
+         - Kotlin - 
+           [The Apache Software License, Version 2.0]
+           https://github.com/JetBrains/kotlin
+           Copyright 2020
+             JetBrains s.r.o. and Kotlin Programming Language contributors
+           Kotlin Compiler, Test Data+Libraries, and Tools repository contain third-party code, to which different licenses may apply
+           See: https://github.com/JetBrains/kotlin/blob/master/license/README.md
