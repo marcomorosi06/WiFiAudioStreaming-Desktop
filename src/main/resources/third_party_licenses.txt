@@ -152,7 +152,8 @@ Skiko 0.8.18 (libskiko-<platform>, skiko-awt) ... Apache-2.0  licenses/skiko/
   ICU 74 ........................... Unicode License v3 licenses/icu/
   libjpeg-turbo 2.1.4 .............. IJG License, BSD-3-Clause and zlib
                                      License            licenses/libjpeg-turbo/
-  libpng 1.6.43 .................... libpng License v2  licenses/libpng/
+  libpng 1.6.43 .................... PNG Reference Library License v2
+                                     (v1 for older code) licenses/libpng/
   libwebp (commit 845d547) ......... BSD-3-Clause, with an additional
                                      patent grant       licenses/libwebp/
   Expat 2.5.0 ...................... MIT                licenses/expat/
@@ -162,8 +163,10 @@ Skiko 0.8.18 (libskiko-<platform>, skiko-awt) ... Apache-2.0  licenses/skiko/
   Adobe DNG SDK (commit c8d0c9b) ... DNG SDK License    licenses/dng-sdk/
 
   This software is based in part on the work of the Independent JPEG Group.
-  Portions of this software are copyright (c) The FreeType Project
-  (www.freetype.org). All rights reserved.
+  Portions of this software are copyright (c) 2023 The FreeType Project
+  (www.freetype.org). All rights reserved. [FreeType 2.13.2, in FFmpeg]
+  Portions of this software are copyright (c) 2024 The FreeType Project
+  (www.freetype.org). All rights reserved. [FreeType commit a464242, in Skia]
 
 
 4. JAVA AND KOTLIN LIBRARIES

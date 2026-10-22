@@ -1,0 +1,360 @@
+Where each licence text in this folder comes from
+=================================================
+
+Every file was copied verbatim from the upstream source at the version
+shipped in the app. For each file: upstream repository, ref, commit, path
+in the repository, and the SHA-256 of the file.
+
+alsa-lib/COPYING
+    https://github.com/alsa-project/alsa-lib  v1.2.10  commit f70653fda79742cd1ff93e7a521ae3a333d21882  COPYING
+    sha256 32434afcc8666ba060e111d715bfdb6c2d5dd8a35fa4d3ab8ad67d8f850d2f2b
+apache-2.0/LICENSE-2.0.txt
+    https://github.com/JetBrains/kotlin  v2.1.0  commit 5dd9cea66ee526f0251c9b1d2543229202622f6b  license/LICENSE.txt
+    sha256 cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30
+appimage-type2-runtime/LICENSE
+    https://github.com/AppImage/type2-runtime  20251108  commit dd6cebedcbddde9c82f89b011e8e1d40b6e43868  LICENSE
+    sha256 aa154fc9070614bbe7921f89db11efd1dba7a1f3a41685958110e2230f9c0ca1
+bouncycastle/LICENSE.html
+    https://github.com/bcgit/bc-java  r1rv78v1  commit ada71e4cf20c990e045a57ee1d42378d84050e03  LICENSE.html
+    sha256 edbbb10380b1271998b867a2e36b1cbee226e03d438726e1a91f80c5dde11849
+bytedeco-javacpp-presets/LICENSE.txt
+    https://github.com/bytedeco/javacpp-presets  1.5.10  commit e4d04dec6447ae154a05b140b145c580948f8273  LICENSE.txt
+    sha256 bd5f6b1276fd448f016115dcd4a39ee6f5e3ce32441a0cccdb9e6370e9df5434
+bytedeco-javacpp/LICENSE.txt
+    https://github.com/bytedeco/javacpp  1.5.10  commit 2559658a7a223965a6c5068863746f3df8acac9b  LICENSE.txt
+    sha256 bd5f6b1276fd448f016115dcd4a39ee6f5e3ce32441a0cccdb9e6370e9df5434
+bytedeco-javacv/LICENSE.txt
+    https://github.com/bytedeco/javacv  1.5.10  commit 12ddb8b1b099c0bbba0baae378c4ce1f121bef84  LICENSE.txt
+    sha256 bd5f6b1276fd448f016115dcd4a39ee6f5e3ce32441a0cccdb9e6370e9df5434
+compose-multiplatform/LICENSE.txt
+    https://github.com/JetBrains/compose-multiplatform  v1.7.3  commit 5615795d108d2a3810e9adf198c6a0c8b83ade09  LICENSE.txt
+    sha256 f9a85c61ba4fe8bacc300053b3384b5fc7d9f585a08dc7b9a465b7c0716c4f50
+dorkbox/Collections-2.4/LICENSE
+    copied from the root of the dorkbox jar shipped in the app
+    sha256 289ad0da08012169c29c011fbe925c610e94737cb3fab0f3f9461547435cf7b3
+dorkbox/Collections-2.4/LICENSE.Apachev2
+    copied from the root of the dorkbox jar shipped in the app
+    sha256 1b64c725684886157776ac3189536fb826a5ee3614321a589580243d92c2458e
+dorkbox/Collections-2.4/LICENSE.MIT
+    copied from the root of the dorkbox jar shipped in the app
+    sha256 a1701637c92e9286837e3b54bdf2495be5bfb2da3384c3659006c2df2eeda0c8
+dorkbox/Collections-2.4/LICENSE.blob
+    copied from the root of the dorkbox jar shipped in the app
+    sha256 0fe3d707572cc9aecdf0a7d2d36a85d8084714448ee61afb9b324d48a03945d7
+dorkbox/Desktop-1.1/LICENSE
+    copied from the root of the dorkbox jar shipped in the app
+    sha256 03050df57473f8a85258e5de356dc58fc27c327c45a45ad1b63a2cd42bf03340
+dorkbox/Desktop-1.1/LICENSE.Apachev2
+    copied from the root of the dorkbox jar shipped in the app
+    sha256 1b64c725684886157776ac3189536fb826a5ee3614321a589580243d92c2458e
+dorkbox/Desktop-1.1/LICENSE.CC0
+    copied from the root of the dorkbox jar shipped in the app
+    sha256 6d489af6292662d9e36d34ce49423784984a5f6e41d7b58f49b01264df59fa03
+dorkbox/Desktop-1.1/LICENSE.MIT
+    copied from the root of the dorkbox jar shipped in the app
+    sha256 a1701637c92e9286837e3b54bdf2495be5bfb2da3384c3659006c2df2eeda0c8
+dorkbox/Desktop-1.1/LICENSE.blob
+    copied from the root of the dorkbox jar shipped in the app
+    sha256 940688294c64df88a1859706e74629b2e606613b175e9829162196043f240e2b
+dorkbox/Executor-3.13/LICENSE
+    copied from the root of the dorkbox jar shipped in the app
+    sha256 868a0642e6dfc56c87538e3a5ec26795b08f1aa3f5b7c3cdd13f97b0397171c9
+dorkbox/Executor-3.13/LICENSE.Apachev2
+    copied from the root of the dorkbox jar shipped in the app
+    sha256 1b64c725684886157776ac3189536fb826a5ee3614321a589580243d92c2458e
+dorkbox/Executor-3.13/LICENSE.CC0
+    copied from the root of the dorkbox jar shipped in the app
+    sha256 6d489af6292662d9e36d34ce49423784984a5f6e41d7b58f49b01264df59fa03
+dorkbox/Executor-3.13/LICENSE.MIT
+    copied from the root of the dorkbox jar shipped in the app
+    sha256 a1701637c92e9286837e3b54bdf2495be5bfb2da3384c3659006c2df2eeda0c8
+dorkbox/Executor-3.13/LICENSE.blob
+    copied from the root of the dorkbox jar shipped in the app
+    sha256 bf03857ecde0a7fac66f2cc99850472e03d2b247f7541f0b8059776d95cbe3bc
+dorkbox/JNA-1.2/LICENSE
+    copied from the root of the dorkbox jar shipped in the app
+    sha256 93636caadbfa51221ebcb191efa6e20ea0182735bbcbb346c8e1b670b3239e4f
+dorkbox/JNA-1.2/LICENSE.Apachev2
+    copied from the root of the dorkbox jar shipped in the app
+    sha256 1b64c725684886157776ac3189536fb826a5ee3614321a589580243d92c2458e
+dorkbox/JNA-1.2/LICENSE.MIT
+    copied from the root of the dorkbox jar shipped in the app
+    sha256 a1701637c92e9286837e3b54bdf2495be5bfb2da3384c3659006c2df2eeda0c8
+dorkbox/JNA-1.2/LICENSE.blob
+    copied from the root of the dorkbox jar shipped in the app
+    sha256 b89ee00189f6db52489c473234648ca137c81231b907176daef6d74f2a1775d8
+dorkbox/OS-1.8/LICENSE
+    copied from the root of the dorkbox jar shipped in the app
+    sha256 e497b9e9a784ce09dd11141d7970545e42edd04ea9cbf75dd14a3ae50e316110
+dorkbox/OS-1.8/LICENSE.Apachev2
+    copied from the root of the dorkbox jar shipped in the app
+    sha256 1b64c725684886157776ac3189536fb826a5ee3614321a589580243d92c2458e
+dorkbox/OS-1.8/LICENSE.blob
+    copied from the root of the dorkbox jar shipped in the app
+    sha256 8a2a8371b7002bd8c760fd8197f59f076f0bb1e5a40a66dc5eb3db382cfbf94d
+dorkbox/SystemTray-4.4/LICENSE
+    copied from the root of the dorkbox jar shipped in the app
+    sha256 bfbda69ddad5876cae9b2cdb1eeb4c0ec4ae6d8577308beae604b79f2ebe8b86
+dorkbox/SystemTray-4.4/LICENSE.Apachev2
+    copied from the root of the dorkbox jar shipped in the app
+    sha256 1b64c725684886157776ac3189536fb826a5ee3614321a589580243d92c2458e
+dorkbox/SystemTray-4.4/LICENSE.BSD3
+    copied from the root of the dorkbox jar shipped in the app
+    sha256 bf4ff0ce1e8841722e85ca61fafbd116dda14a2c7418ffc1051c5f076493bc09
+dorkbox/SystemTray-4.4/LICENSE.CC0
+    copied from the root of the dorkbox jar shipped in the app
+    sha256 6d489af6292662d9e36d34ce49423784984a5f6e41d7b58f49b01264df59fa03
+dorkbox/SystemTray-4.4/LICENSE.MIT
+    copied from the root of the dorkbox jar shipped in the app
+    sha256 a1701637c92e9286837e3b54bdf2495be5bfb2da3384c3659006c2df2eeda0c8
+dorkbox/SystemTray-4.4/LICENSE.blob
+    copied from the root of the dorkbox jar shipped in the app
+    sha256 14ef582d2a919203822b3965b54ea63673cbc5aa73ebe407f014eb3e0fb4bead
+dorkbox/Updates-1.1/LICENSE
+    copied from the root of the dorkbox jar shipped in the app
+    sha256 ddd534aaa6444baddf8e6e81e1e02359bda594e468748c8a85e0335855346a2e
+dorkbox/Updates-1.1/LICENSE.Apachev2
+    copied from the root of the dorkbox jar shipped in the app
+    sha256 1b64c725684886157776ac3189536fb826a5ee3614321a589580243d92c2458e
+dorkbox/Updates-1.1/LICENSE.blob
+    copied from the root of the dorkbox jar shipped in the app
+    sha256 f3458dbd7cad6a3e8a755d86c7676cb4970f5294fda4f744cc8ce2f998c2e65a
+dorkbox/Utilities-1.46/LICENSE
+    copied from the root of the dorkbox jar shipped in the app
+    sha256 836f62ca31adfde8b83c1a3c6c69e3fde730210876c180926e0348371bebed6b
+dorkbox/Utilities-1.46/LICENSE.Apachev2
+    copied from the root of the dorkbox jar shipped in the app
+    sha256 1b64c725684886157776ac3189536fb826a5ee3614321a589580243d92c2458e
+dorkbox/Utilities-1.46/LICENSE.BSD3
+    copied from the root of the dorkbox jar shipped in the app
+    sha256 bf4ff0ce1e8841722e85ca61fafbd116dda14a2c7418ffc1051c5f076493bc09
+dorkbox/Utilities-1.46/LICENSE.blob
+    copied from the root of the dorkbox jar shipped in the app
+    sha256 ddbe494499542072fa82ea2ca4adbdb29ca92e9cbde1763a33090a00a4f4cea9
+expat/COPYING
+    https://github.com/libexpat/libexpat  commit 441f98d02deafd9b090aea568282b28f66a50e36  expat/COPYING
+    sha256 122f2c27000472a201d337b9b31f7eb2b52d091b02857061a8880371612d9534
+ffmpeg/COPYING.GPLv3
+    https://github.com/FFmpeg/FFmpeg  n6.1.1  commit e38092ef9395d7049f871ef4d5411eb410e283e0  COPYING.GPLv3
+    sha256 8ceb4b9ee5adedde47b31e975c1d90c73ad27b6b165a1dcd80c7c545eb65b903
+ffmpeg/COPYING.LGPLv3
+    https://github.com/FFmpeg/FFmpeg  n6.1.1  commit e38092ef9395d7049f871ef4d5411eb410e283e0  COPYING.LGPLv3
+    sha256 da7eabb7bafdf7d3ae5e9f223aa5bdc1eece45ac569dc21b3b037520b4464768
+ffmpeg/LICENSE.md
+    https://github.com/FFmpeg/FFmpeg  n6.1.1  commit e38092ef9395d7049f871ef4d5411eb410e283e0  LICENSE.md
+    sha256 cb48bf09a11f5fb576cddb0431c8f5ed0a60157a9ec942adffc13907cbe083f2
+freetype/FTL.TXT
+    https://github.com/freetype/freetype  VER-2-13-2  commit 920c5502cc3ddda88f6c7d85ee834ac611bb11cc  docs/FTL.TXT
+    identical to: https://github.com/freetype/freetype  commit a46424228f0998a72c715f32e18dca8a7a764c1f  docs/FTL.TXT
+    sha256 08c135755dd589039470f1fdbb400daaabaaa50d0b366d19cebff4d22986baa1
+freetype/LICENSE.TXT
+    https://github.com/freetype/freetype  VER-2-13-2  commit 920c5502cc3ddda88f6c7d85ee834ac611bb11cc  LICENSE.TXT
+    identical to: https://github.com/freetype/freetype  commit a46424228f0998a72c715f32e18dca8a7a764c1f  LICENSE.TXT
+    sha256 2e3bbb7d7c5c396368dd0853a790ec29ce5b8647163dde42a0493fb0d6556b2b
+harfbuzz/COPYING
+    https://github.com/harfbuzz/harfbuzz  commit b74a7ecc93e283d059df51ee4f46961a782bcdb8  COPYING
+    sha256 ba8f810f2455c2f08e2d56bb49b72f37fcf68f1f4fade38977cfd7372050ad64
+icu/LICENSE
+    https://github.com/unicode-org/icu  release-74-2  commit 2d029329c82c7792b985024b2bdab5fc7278fbc8  LICENSE
+    sha256 17510cf7a58b4879b887ec05a45d72cf1b73544dd9ec7e72f20110ed104229ee
+java-uuid-generator/LICENSE
+    copied from META-INF of the jar shipped in the app
+    sha256 b6e7f3020a3f69ed4373f5915fa80fd5f4f3270faef2ae725fa7342f38cafa94
+java-uuid-generator/NOTICE
+    copied from META-INF of the jar shipped in the app
+    sha256 02c379bb78c1da03130643ab62b5ad89b7b870a88e7d93bc667ca96037dd56af
+javassist/License.html
+    https://github.com/jboss-javassist/javassist  rel_3_29_2_ga  commit 049c06e9d6c8ebd737fc1124b811cb75568f6c6b  License.html
+    sha256 7f0b8dadfa3b7af523e2db7cc1d872e924ec8d6f7c9b8245721dc6692a64d324
+jetbrains-annotations/LICENSE.txt
+    https://github.com/JetBrains/java-annotations  23.0.0  commit 5d06c0c48e0a4fe44b2bc0d5d3e8b113c7a57de2  LICENSE.txt
+    sha256 8c1e966c7855fb54027bcaf6ebe7a43abe4785791e8cf9148c363761d493d097
+jna/AL2.0
+    https://github.com/java-native-access/jna  5.13.0  commit 4962fd7758493b7395e86578705d8a32f6238872  AL2.0
+    sha256 0d542e0c8804e39aa7f37eb00da5a762149dc682d7829451287e11b938e94594
+jna/LGPL2.1
+    https://github.com/java-native-access/jna  5.13.0  commit 4962fd7758493b7395e86578705d8a32f6238872  LGPL2.1
+    sha256 eea173a556abac0370461e57e12aab266894ea6be3874c2be05fd87871f75449
+jna/LICENSE
+    https://github.com/java-native-access/jna  5.13.0  commit 4962fd7758493b7395e86578705d8a32f6238872  LICENSE
+    sha256 521bb271ac56e0e29a1b1b688b94af17d00d378fc8e63478d8c8b2a7c4a229d0
+jna/libffi-LICENSE
+    https://github.com/java-native-access/jna  5.13.0  commit 4962fd7758493b7395e86578705d8a32f6238872  native/libffi/LICENSE
+    sha256 2c9c2acb9743e6b007b91350475308aee44691d96aa20eacef8e199988c8c388
+kotlin/NOTICE.txt
+    https://github.com/JetBrains/kotlin  v2.1.0  commit 5dd9cea66ee526f0251c9b1d2543229202622f6b  license/NOTICE.txt
+    sha256 0b09a83d3ef7795c7dec65e815866597c066c53898f2852a76599b8f5552941a
+kotlin/boost_LICENSE.txt
+    https://github.com/JetBrains/kotlin  v2.1.0  commit 5dd9cea66ee526f0251c9b1d2543229202622f6b  license/third_party/boost_LICENSE.txt
+    sha256 8d8291caf1cee26d23acf3eb67c9f9a2d58f1c681b16a4fbe8cbfb9e3c0b5a9b
+kotlin/guava_license.txt
+    https://github.com/JetBrains/kotlin  v2.1.0  commit 5dd9cea66ee526f0251c9b1d2543229202622f6b  license/third_party/guava_license.txt
+    sha256 cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30
+kotlin/gwt_license.txt
+    https://github.com/JetBrains/kotlin  v2.1.0  commit 5dd9cea66ee526f0251c9b1d2543229202622f6b  license/third_party/gwt_license.txt
+    sha256 cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30
+kotlinx-atomicfu/LICENSE.txt
+    https://github.com/Kotlin/kotlinx-atomicfu  0.23.2  commit 7e640bab1db140a398f735be97e3f07f97019ac0  LICENSE.txt
+    sha256 f4def61b03500df363b99b1781d37b345d335129d33e28d7193de2e6bdb33e96
+kotlinx-coroutines/LICENSE.txt
+    https://github.com/Kotlin/kotlinx.coroutines  1.9.0  commit d8d6f8f37978b8e202d93b34f23f101df9c5724d  LICENSE.txt
+    sha256 b1febe6399dffb10d19d35e7663ab16300c93cb0476a94115df1cc0097a8ffd8
+kotlinx-coroutines/NOTICE.txt
+    https://github.com/Kotlin/kotlinx.coroutines  1.9.0  commit d8d6f8f37978b8e202d93b34f23f101df9c5724d  license/NOTICE.txt
+    sha256 421d45acbd92670b4131621a28fcbb41ba0b747d3a336cb13fca38c0685426c4
+kotlinx-datetime/LICENSE.txt
+    https://github.com/Kotlin/kotlinx-datetime  v0.6.0  commit bc8adee2b9e3659e8e1c38fc09f3a4a1bdf85276  LICENSE.txt
+    sha256 cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30
+kotlinx-io/LICENSE
+    https://github.com/Kotlin/kotlinx-io  0.5.4  commit 1dae118ca5640a25e62b61f61a380c0b7dfa0617  LICENSE
+    sha256 9e29096c161f416b13ff13696307880761a7f43aee10ca2823f8ba17c708f4ed
+kotlinx-serialization/LICENSE.txt
+    https://github.com/Kotlin/kotlinx.serialization  v1.7.3  commit d4d066d72a9f92f06c640be5a36a22f75d0d7659  LICENSE.txt
+    sha256 c5accbbd8546e94c34aed24afe689a617627d18eed5a6c48277e48db57c23851
+ktor/LICENSE
+    https://github.com/ktorio/ktor  3.0.3  commit e18c901e4583a84c07140c32a1df173f55e5f12c  LICENSE
+    sha256 883b820629750db15375940d0581ea74bad8b685c8b0ef5b098c3cc631c74515
+lame/COPYING
+    https://github.com/rbrito/lame  lame3_100_with_psymodel_v3_99_5  commit 5af1d9d8ae0a1b1ffb8202e19b3e7a1b8712cdf2  COPYING
+    sha256 bfe4a52dc4645385f356a8e83cc54216a293e3b6f1cb4f79f5fc0277abf937fd
+lame/LICENSE
+    https://github.com/rbrito/lame  lame3_100_with_psymodel_v3_99_5  commit 5af1d9d8ae0a1b1ffb8202e19b3e7a1b8712cdf2  LICENSE
+    sha256 0b2c80d6f682d33e9e44ae56a15914fd17f40c29c1aa1146f4ad610fa55a3a33
+libaom/LICENSE
+    https://github.com/m-ab-s/aom  v3.8.0  commit b681eac83963950afc7be55df56c22fa5210aaa2  LICENSE
+    sha256 4764a286d8b2faeaf42f4418e7d7a28d58fc8fd4d00a3d0a7f44b0a4099de7f2
+libaom/PATENTS
+    https://github.com/m-ab-s/aom  v3.8.0  commit b681eac83963950afc7be55df56c22fa5210aaa2  PATENTS
+    sha256 661fb8e504744e95587b556b94a58343448300606a41bea8c7a9b97125696e61
+libdrm/LICENSE-xf86drm.c.txt
+    https://github.com/freedesktop-unofficial-mirror/mesa__drm  HEAD  commit 0d78b37b1cac304ce5e84d1207f0a43abd29c000  xf86drm.c (licence header only)
+    sha256 2c6cd40ad6584f081f95c01b67c13ee968cee011729eb5c4a3425e6df2c59d2b
+libfuse/LGPL2.txt
+    fuse-3.15.0.tar.xz (https://github.com/libfuse/libfuse/releases/tag/fuse-3.15.0, SHA-256 70589cfd5e1cff7ccd6ac91c86c01be340b227285c5e200baa284e401eea2ca0)
+    sha256 dc626520dcd53a22f727af3ee42c770e56c97a64fe3adb063799d8ab032fe551
+libfuse/LICENSE
+    fuse-3.15.0.tar.xz (https://github.com/libfuse/libfuse/releases/tag/fuse-3.15.0, SHA-256 70589cfd5e1cff7ccd6ac91c86c01be340b227285c5e200baa284e401eea2ca0)
+    sha256 b8832d9caaa075bbbd2aef24efa09f8b7ab66a832812d88c602da0c7b4397fad
+libjpeg-turbo/LICENSE.md
+    https://github.com/libjpeg-turbo/libjpeg-turbo  2.1.4  commit 8162eddf041e0be26f5c671bb6528723c55fed9d  LICENSE.md
+    sha256 ee1eaf194d5924b6360af8a6ba6a4e1554037091f7505943300cdeec65f1aebb
+libjpeg-turbo/README.ijg
+    https://github.com/libjpeg-turbo/libjpeg-turbo  2.1.4  commit 8162eddf041e0be26f5c671bb6528723c55fed9d  README.ijg
+    sha256 4b7b9f8c03bb8d60270dfd12684e70ab21e4abfd27e73905cd1a7c4cae6f5cdb
+libpng/LICENSE
+    https://github.com/pnggroup/libpng  v1.6.43  commit ed217e3e601d8e462f7fd1e04bed43ac42212429  LICENSE
+    sha256 7317e078e2d3b5d7ba5a6159e650945153262b44b76f6700f8e9edb261c5143e
+libvpx/LICENSE
+    https://github.com/webmproject/libvpx  v1.13.1  commit 10b9492dcf05b652e2e4b370e205bd605d421972  LICENSE
+    sha256 8267348d5af1262c11d1a08de2f5afc77457755f1ac658627dd9acf71011d615
+libvpx/PATENTS
+    https://github.com/webmproject/libvpx  v1.13.1  commit 10b9492dcf05b652e2e4b370e205bd605d421972  PATENTS
+    sha256 cc3273e0694ea5896145e0677699b53471b03ea43021ddc50e7923fbb9f5023c
+libwebp/COPYING
+    https://github.com/webmproject/libwebp  v1.3.2  commit ca332209cb5567c9b249c86788cb2dbf8847e760  COPYING
+    identical to: https://github.com/webmproject/libwebp  commit 845d5476a866141ba35ac133f856fa62f0b7445f  COPYING
+    sha256 5aec868f669e384a22372a4e8a1a6cd7d44c64cd451f960ca69cc170d1e13acf
+libwebp/PATENTS
+    https://github.com/webmproject/libwebp  v1.3.2  commit ca332209cb5567c9b249c86788cb2dbf8847e760  PATENTS
+    identical to: https://github.com/webmproject/libwebp  commit 845d5476a866141ba35ac133f856fa62f0b7445f  PATENTS
+    sha256 cc3273e0694ea5896145e0677699b53471b03ea43021ddc50e7923fbb9f5023c
+libxml2/Copyright
+    https://github.com/GNOME/libxml2  v2.9.12  commit b48e77cf4f6fa0792c5f4b639707a2b0675e461b  Copyright
+    sha256 c5c63674f8a83c4d2e385d96d1c670a03cb871ba2927755467017317878574bd
+mfx-dispatch/LICENSE
+    https://github.com/lu-zero/mfx_dispatch  1.35.1  commit 7e4d221c36c630c1250b23a5dfa15657bc04c10c  LICENSE
+    sha256 f03bff2bd2f916104d12d50caeaab41875086943ea8b88983eafa5d84890593c
+mimalloc/LICENSE
+    https://github.com/microsoft/mimalloc  v2.1.7  commit 8c532c32c3c96e5ba1f2283e032f69ead8add00f  LICENSE
+    sha256 19c99805e7a44a34b297a75d1edea9985e300066dfc024d5c99d4236d4573b5d
+musl/COPYRIGHT
+    https://github.com/kraj/musl  v1.2.5  commit 0784374d561435f7c787a555aeab8ede699ed298  COPYRIGHT
+    sha256 f9bc4423732350eb0b3f7ed7e91d530298476f8fec0c6c427a1c04ade22655af
+nv-codec-headers/LICENSE-nvEncodeAPI.h.txt
+    https://github.com/FFmpeg/nv-codec-headers  n12.1.14.0  commit 1889e62e2d35ff7aa9baca2bceb14f053785e6f1  include/ffnvcodec/nvEncodeAPI.h (licence header only)
+    sha256 d16e880f3cb8cad439b6d9d3ee898f4e588a5078ec2e3267806e13b1f7ea995b
+openh264/LICENSE
+    https://github.com/cisco/openh264  v2.4.0  commit 34a0d2d3e233e1764cc243c7c68ca46bb2479972  LICENSE
+    sha256 dd5c1c9668512530fa5a96e4c29ac4033d70a7eeb0eed7a42fddb6dd794ebdbb
+openssl/LICENSE.txt
+    https://github.com/openssl/openssl  openssl-3.2.0  commit cf2877791ce7508684109664f467c9e40987692f  LICENSE.txt
+    sha256 7d5450cb2d142651b8afa315b5f238efc805dad827d91ba367d8516bc9d49e7a
+opus/COPYING
+    https://github.com/xiph/opus  v1.3.1  commit e85ed7726db5d677c9c0677298ea0cb9c65bdd23  COPYING
+    sha256 8338ce8d922bb4416ce3dd1e5680173332435e3f0755007ac7801ccd674fe682
+piex/LICENSE
+    https://github.com/google/piex  v0.27  commit f1e15dd837c04347504149f71db67a78fbeddc73  LICENSE
+    sha256 58d1e17ffe5109a7ae296caafcadfdbe6a7d176f0bc4ab01e12a689b0499d8bd
+raspberrypi-userland/LICENCE
+    https://github.com/raspberrypi/userland  commit 96a7334ae9d5fc9db7ac92e59852377df63f1848  LICENCE
+    sha256 bee6f1249175683d8610651706e1aa7dffcbfd3f9c4c05bc1e5ab34f313c2db5
+skia/LICENSE
+    https://github.com/JetBrains/skia  commit 6bfb13368ba034a003c43f36aa2a5e63dc966508  LICENSE
+    sha256 5f787c1dee3c56547f09ccc2906ab5f5293c4d8dd6c8654e573216c38e908dbd
+skiko/LICENSE
+    https://github.com/JetBrains/skiko  v0.8.18  commit 6d73ad7f670db5fa49587a1c4caeb865f97e036e  LICENSE
+    sha256 c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4
+slf4j/LICENSE-slf4j-api-2.0.16.txt
+    copied from META-INF of the jar shipped in the app
+    sha256 4e7f90c86ab51278228bce153122f1d8df30149d13ce9ef524c8444a84c32dcc
+slf4j/LICENSE-slf4j-nop-2.0.9.txt
+    copied from META-INF of the jar shipped in the app
+    sha256 4e7f90c86ab51278228bce153122f1d8df30149d13ce9ef524c8444a84c32dcc
+speex/COPYING
+    https://github.com/xiph/speex  Speex-1.2.1  commit 5dceaaf3e23ee7fd17c80cb5f02a838fd6c18e01  COPYING
+    sha256 2654a4264b2bfe298dedc508748d140111840c315cc8eb646a3a68c13fa75b01
+squashfuse/LICENSE
+    https://github.com/vasi/squashfuse  0.5.2  commit 775b4cc72ab47641637897f11ce0da15d5c1f115  LICENSE
+    sha256 9e909cc8a8ba27b1a649c964cf9eda37de911f3138c2b64e6d2f01703904ac13
+srt/LICENSE
+    https://github.com/Haivision/srt  v1.5.3  commit 09f35c0f1743e23f514cb41444504a7faeacf89e  LICENSE
+    sha256 fab3dd6bdab226f1c08630b1dd917e11fcb4ec5e1e020e2c16f83a0a13863e85
+svt-av1/LICENSE.md
+    https://github.com/AOMediaCodec/SVT-AV1  v1.8.0  commit 59645eea34e2815b627b8293aa3af254eddd0d69  LICENSE.md
+    sha256 0acc2fcb27472bdc9aaf8b71f37055bbdac4f54671b7d922f241bd7fcd0dd3e6
+svt-av1/PATENTS.md
+    https://github.com/AOMediaCodec/SVT-AV1  v1.8.0  commit 59645eea34e2815b627b8293aa3af254eddd0d69  PATENTS.md
+    sha256 20678ab10402659106dc4c147c97b2a6e94b5c0695415e15a8f195ebc3547922
+vo-amrwbenc/COPYING
+    https://github.com/mstorsjo/vo-amrwbenc  v0.1.3  commit 080af7540562e4adfbd3312837fe5fc6771c4cd0  COPYING
+    sha256 8b3f1762349248d444ab9acbafe73941254e36e1064954da56bb9ddbd5873ddb
+vo-amrwbenc/NOTICE
+    https://github.com/mstorsjo/vo-amrwbenc  v0.1.3  commit 080af7540562e4adfbd3312837fe5fc6771c4cd0  NOTICE
+    sha256 e2ae60e14bece975eeab49210fcaf4ee529b77e6ca13e7d6556b6bb203897b31
+vulkan-headers/LICENSE.md
+    https://github.com/KhronosGroup/Vulkan-Headers  v1.3.268  commit 07ff4233bc69e573ae0a6b4b48ad16451ac4e37f  LICENSE.md
+    sha256 ac24e5ea920e4318e4d02c4086ae51f53cfb03feed06c18df1019e7ada1ec7bc
+winpthreads/COPYING
+    https://github.com/mingw-w64/mingw-w64  master  commit dbbc8e99d9b85408f2c0a5565cb689c44eef0650  mingw-w64-libraries/winpthreads/COPYING
+    sha256 63263614cdd29f2f93cba85e992f041b31f9fc7b4033692f31269489a8a1b177
+wuffs/LICENSE
+    https://github.com/google/wuffs-mirror-release-c  commit e3f919ccfe3ef542cfc983a82146070258fb57f8  LICENSE
+    sha256 cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30
+zlib/LICENSE
+    https://github.com/madler/zlib  v1.3.1  commit 51b7f2abdade71cd9bb0e7a373ef2610ec6f9daf  LICENSE
+    identical to: https://github.com/madler/zlib  commit 09155eaa2f9270dc4ed1fa13e2b4b2613e6e4851  LICENSE
+    sha256 845efc77857d485d91fb3e0b884aaa929368c717ae8186b66fe1ed2495753243
+zstd/LICENSE
+    https://github.com/facebook/zstd  v1.5.6  commit 794ea1b0afca0f020f4e57b6732332231fb23c70  LICENSE
+    sha256 7055266497633c9025b777c78eb7235af13922117480ed5c674677adc381c9d8
+zxing/LICENSE
+    https://github.com/zxing/zxing  zxing-3.5.3  commit f0f1a94439db0300ff0c4618f4e0a41aa630aeac  LICENSE
+    sha256 3f62881f0566227a24b12e5a754cc79f39aaa94883038e95c94812e1f50af42f
+zxing/NOTICE
+    https://github.com/zxing/zxing  zxing-3.5.3  commit f0f1a94439db0300ff0c4618f4e0a41aa630aeac  NOTICE
+    sha256 4db4b60aace29ec6c5c4f13ca9cac1930d3c0c54bcc67dceead0c10771120e66
+opencore-amr/LICENSE
+    opencore-amr-0.1.6.tar.gz (https://sourceforge.net/projects/opencore-amr/files/opencore-amr/opencore-amr-0.1.6.tar.gz/download, SHA-256 483eb4061088e2b34b358e47540b5d495a96cd468e361050fae615b1809dc4a1)  LICENSE
+    sha256 8b3f1762349248d444ab9acbafe73941254e36e1064954da56bb9ddbd5873ddb
+dng-sdk/LICENSE
+    https://android.googlesource.com/platform/external/dng_sdk  c8d0c9b1d16bfda56f15165d39e0ffa360a11123  LICENSE
+    sha256 012e875468ac2f9a2070ee25a950588afa2735b4b2d961f491e3d72c8f572306
+dng-sdk/NOTICE
+    https://android.googlesource.com/platform/external/dng_sdk  c8d0c9b1d16bfda56f15165d39e0ffa360a11123  NOTICE
+    sha256 b60660d2a5a3ee1a49366400e7e9b01c1872356d6f08942f095d356a44deb5f6
+dng-sdk/LICENSE.source_code
+    https://android.googlesource.com/platform/external/dng_sdk  c8d0c9b1d16bfda56f15165d39e0ffa360a11123  LICENSE.source_code
+    sha256 0c993758dd78dbb15ce6aae8aee79639b428d8ebeca6d416019939dc90fdc08f
+dng-sdk/LICENSE.technology
+    https://android.googlesource.com/platform/external/dng_sdk  c8d0c9b1d16bfda56f15165d39e0ffa360a11123  LICENSE.technology
+    sha256 4731d85e841e1d8b5dbf7e0ba07e0b524c012f9371db3508551f996cb40c8fe6
