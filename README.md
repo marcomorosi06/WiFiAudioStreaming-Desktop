@@ -280,7 +280,9 @@ This project is completely free and open-source. If it helped you, consider buyi
 
 # 📄 License
 
-This project is licensed under the **European Union Public Licence v1.2 (EUPL v1.2)**.
+Copyright (c) 2025-2026 Marco Morosi and contributors.
+
+This project is licensed under the **European Union Public Licence v1.2 (EUPL v1.2)**, except for the two sound files listed below.
 
 It started as a personal script. Then it grew. Then I rewrote the audio engine during exam season, which is when I realized I had become genuinely invested in it, and that the license deserved a second thought. MIT lets anyone take the code and close it off. EUPL does not.
 
@@ -289,7 +291,7 @@ It started as a personal script. Then it grew. Then I rewrote the audio engine d
 - Use it for commercial purposes
 
 **Key obligations:**
-- **Copyleft:** modified distributions must be released under the same EUPL license
+- **Copyleft:** modified distributions must be released under the EUPL (or, where its Article 5 allows it, under a compatible licence)
 - **Network copyleft:** if you run a modified version as a networked service, you must release the source
 - **Attribution:** retain all copyright and trademark notices
 
@@ -297,23 +299,27 @@ For the full legal text, see `LICENSE.md` or visit the [official EUPL website](h
 
 The **app** is EUPL, but the **WFAS v2 wire protocol** is not locked up: a C reference implementation is published separately under the permissive **MIT License** ([`wfas-protocol`](https://github.com/marcomorosi06/wfas-protocol), © 2026 Marco Morosi), so anyone — including embedded/firmware projects — can implement WFAS v2 freely. The copyleft protects this application; the protocol stays open.
 
+**Not under the EUPL: the sounds.** `src/main/resources/raw/connection_sound.wav` and `src/main/resources/raw/disconnection_sound.wav` were generated with [ElevenLabs](https://elevenlabs.io) on its free plan, whose terms require the attribution "elevenlabs.io" and do not allow commercial use. If you redistribute this app, or a work based on it, for a commercial purpose, remove or replace them. Sound effects: elevenlabs.io
+
+**Other credits.** The image of Tux in the app was generated with ChatGPT; Tux was originally drawn by Larry Ewing (lewing@isc.tamu.edu) with The GIMP.
+
 ---
 
 # 🧩 Third-Party Software & Licenses
 
-This application bundles and uses several open-source components, each under its
-own licence. The complete attribution list is in
-**[`THIRD_PARTY_LICENSES.md`](THIRD_PARTY_LICENSES.md)**, and is also available
-inside the app (Settings → *Open-source licenses*) and from the command line via
-`wfas --licenses`.
+The packages contain open-source components, each under its own licence. The
+complete list, with versions, copyrights and licences, is
+**[`src/main/resources/third_party_licenses.txt`](src/main/resources/third_party_licenses.txt)**;
+the full text of every licence it names is in
+[`src/main/resources/licenses/`](src/main/resources/licenses/). Both are inside the
+app too: Settings → *Open-source licenses*, or `wfas --licenses`.
+[`THIRD_PARTY_LICENSES.md`](THIRD_PARTY_LICENSES.md) summarises them.
 
-In particular, this software uses **[FFmpeg](https://ffmpeg.org)** for AAC/Opus
-audio encoding, distributed under the **GNU LGPL v2.1 or later** (some optional
-components may be under the GPL). The FFmpeg native libraries are unmodified and
-provided by the [JavaCPP Presets](https://github.com/bytedeco/javacpp-presets)
-project; their source is available at <https://ffmpeg.org/download.html>. See
-`THIRD_PARTY_LICENSES.md` for the full FFmpeg notice and relinking information.
-
-Other bundled components include JavaCV/JavaCPP, JetBrains Compose Multiplatform,
-Kotlin and kotlinx.coroutines, Ktor, Bouncy Castle, dorkbox SystemTray, JNA and
-SLF4J — see the full list for versions, copyrights and licences.
+In particular, the app uses **[FFmpeg](https://ffmpeg.org)** 6.1.1 for AAC/Opus
+audio encoding, as built by the [JavaCPP Presets](https://github.com/bytedeco/javacpp-presets)
+1.5.10 without GPL components: it is under the **GNU LGPL version 3 or later**,
+loaded at run time as separate shared libraries that you can replace. Every
+release has, next to the packages, `wifi-audio-streaming-<version>-third-party-sources.tar`:
+the source code of FFmpeg and of the libraries compiled into it, of the bundled
+Java runtime (Eclipse Temurin, GPL-2.0 with the Classpath Exception) and of the
+AppImage runtime, made by [`scripts/package-third-party-sources.sh`](scripts/package-third-party-sources.sh).
