@@ -1,46 +1,269 @@
-WiFi Audio Streaming (Desktop) - Third-Party Software & Licenses
-================================================================
+WiFi Audio Streaming (Desktop) - licences and third-party notices
+=================================================================
 
-This application is licensed under the EUPL v1.2.
-It uses the open-source components below, each under its own licence.
-Full details: THIRD_PARTY_LICENSES.md in the project repository.
+Copyright (c) 2025-2026 Marco Morosi and contributors.
 
-WFAS v2 protocol  (MIT License)
-  The WiFi Audio Streaming (WFAS) wire protocol is this project's own protocol;
-  its C reference implementation is released separately under the MIT License,
-  so anyone can adopt WFAS v2 freely (e.g. on microcontrollers).
-  Copyright (c) 2026 Marco Morosi.  https://github.com/marcomorosi06/wfas-protocol
+The source code of WiFi Audio Streaming is licensed under the European Union
+Public Licence v1.2 (EUPL-1.2), in LICENSE.md of the source repository:
+https://github.com/marcomorosi06/WiFiAudioStreaming-Desktop
 
-FFmpeg  (LGPL v2.1 or later; some components may be GPL)
-  Used for AAC/Opus encoding (HTTP server) and legacy audio capture.
-  Copyright (c) the FFmpeg developers.  https://ffmpeg.org
-  Native binaries are unmodified, provided by JavaCPP Presets
-  (https://github.com/bytedeco/javacpp-presets) and loaded dynamically.
-  FFmpeg source:  https://ffmpeg.org/download.html
-  LGPL v2.1 text: https://www.gnu.org/licenses/old-licenses/lgpl-2.1.html
+The app ships with the third-party components listed below. Each keeps its
+own licence. The full text of every licence named here is inside the app, in
+the folder "licenses/" next to this file (in the WiFiAudioStreaming jar);
+licenses/SOURCES.txt says where each text was copied from. The complete
+source code of the third-party components that require it is attached to
+every release as wifi-audio-streaming-<version>-third-party-sources.tar
+(section 8).
 
-Apache License 2.0  (https://www.apache.org/licenses/LICENSE-2.0)
-  JavaCV, JavaCPP, Bytedeco FFmpeg preset  (c) Samuel Audet / Bytedeco
-  JetBrains Compose Multiplatform           (c) JetBrains s.r.o. & Google LLC
-  Kotlin standard library                   (c) JetBrains s.r.o.
-  kotlinx.coroutines / kotlinx-datetime / kotlinx-io  (c) JetBrains s.r.o.
-  Ktor                                      (c) JetBrains s.r.o.
-  dorkbox SystemTray (and Utilities, OS, Collections, Executor, Updates)
-                                            (c) dorkbox, llc
-  Java Native Access (JNA)   (c) Timothy Wall and contributors
-                             (dual Apache-2.0 / LGPL-2.1; used as Apache-2.0)
-  Java UUID Generator        (c) FasterXML, LLC
-  ZXing Core                 (c) ZXing authors
-                             QR encoding for pairing invites, and decoding of the
-                             codes read from the webcam.  https://github.com/zxing/zxing
+This file describes the packages published after v1.2. Sections: 1 content
+of the app not under the EUPL, 2 FFmpeg, 3 graphics engine, 4 Java and
+Kotlin libraries, 5 Java runtime, 6 AppImage runtime, 7 patents, 8 source
+code.
 
-Bouncy Castle Licence (MIT-style)
-  bcprov / bctls / bcpkix (jdk18on)
-  Copyright (c) 2000-2024 The Legion of the Bouncy Castle Inc.
-  https://www.bouncycastle.org
 
-MIT License
-  SLF4J (slf4j-nop)  Copyright (c) 2004-2023 QOS.ch Sarl
-  https://www.slf4j.org/license.html
+1. CONTENT OF THE APP NOT UNDER THE EUPL, AND OTHER CREDITS
+-----------------------------------------------------------
 
-Each component remains the property of its respective authors. We thank them.
+Sounds (raw/connection_sound.wav, raw/disconnection_sound.wav)
+  Generated with ElevenLabs (elevenlabs.io) on its free plan. They are NOT
+  covered by the EUPL. ElevenLabs' terms for the free plan require the
+  attribution "elevenlabs.io" and do not allow commercial use. Anyone who
+  redistributes this app, or a work based on it, for a commercial purpose
+  must remove or replace these two files.
+  Sound effects: elevenlabs.io
+
+Tux
+  The image of Tux in the app was generated with ChatGPT. Tux was originally
+  drawn by Larry Ewing <lewing@isc.tamu.edu> with The GIMP.
+
+WFAS v2 protocol
+  The WiFi Audio Streaming wire protocol is this project's own. Its C
+  reference implementation is published separately under the MIT License
+  (Copyright (c) 2026 Marco Morosi, https://github.com/marcomorosi06/wfas-protocol)
+  and is not part of this app.
+
+
+2. FFMPEG (AAC/Opus encoding for the HTTP server, legacy audio capture)
+-----------------------------------------------------------------------
+
+FFmpeg 6.1.1, as built by the Bytedeco JavaCPP Presets 1.5.10
+(org.bytedeco:ffmpeg:6.1.1-1.5.10, the build without GPL components):
+libavcodec, libavformat, libavfilter, libavdevice, libavutil,
+libswresample, libswscale, and their JNI wrappers (libjni*).
+
+  Licence: GNU Lesser General Public License, version 3 or later
+  (LGPL-3.0-or-later). The build is configured with --enable-version3 and
+  without --enable-gpl or --enable-nonfree; libavutil reports
+  "LGPL version 3 or later" on every platform. The LGPL v3 is a set of
+  additional permissions on top of the GNU GPL v3, so both texts apply.
+  Copyright (c) the FFmpeg developers. FFmpeg is a trademark of Fabrice
+  Bellard, originator of the FFmpeg project.
+  Texts: licenses/ffmpeg/COPYING.LGPLv3, licenses/ffmpeg/COPYING.GPLv3,
+         licenses/ffmpeg/LICENSE.md
+
+  The FFmpeg libraries are separate shared libraries, loaded at run time
+  from the ffmpeg-6.1.1-1.5.10-<platform>.jar of the app. You may replace
+  them with your own build of FFmpeg 6.1.1 (same file names, same ABI) by
+  replacing that jar with one that contains your libraries at the same
+  paths.
+
+  Bytedeco built them with ffmpeg/cppbuild.sh of javacpp-presets 1.5.10,
+  which modifies some sources before building: FFmpeg (ffmpeg.patch,
+  ffmpeg-macosx.patch on macOS, and in-place edits), LAME (lame.patch),
+  OpenSSL (openssl-android.patch) and libvpx on linux-arm64
+  (libvpx-linux-arm.patch). The script and the patches are in the
+  third-party source archive (section 8). These libraries are compiled into
+  the FFmpeg libraries above:
+
+  zlib 1.3.1 ....................... zlib License       licenses/zlib/
+  LAME 3.100 ....................... LGPL-2.0-or-later  licenses/lame/
+  Speex 1.2.1 ...................... BSD-3-Clause       licenses/speex/
+  Opus 1.3.1 ....................... BSD-3-Clause       licenses/opus/
+  OpenCORE AMR 0.1.6 ............... Apache-2.0         licenses/opencore-amr/
+  VisualOn AMR-WB encoder 0.1.3 .... Apache-2.0         licenses/vo-amrwbenc/
+  OpenSSL 3.2.0 .................... Apache-2.0         licenses/openssl/
+  OpenH264 2.4.0 ................... BSD-2-Clause       licenses/openh264/
+  libvpx 1.13.1 .................... BSD-3-Clause, with an additional
+                                     patent grant       licenses/libvpx/
+  FreeType 2.13.2 .................. FreeType License   licenses/freetype/
+  libxml2 2.9.12 ................... MIT                licenses/libxml2/
+  SRT 1.5.3 ........................ MPL-2.0            licenses/srt/
+  libwebp 1.3.2 .................... BSD-3-Clause, with an additional
+                                     patent grant       licenses/libwebp/
+  libaom 3.8.0 ..................... BSD-2-Clause and Alliance for Open
+                                     Media Patent License 1.0
+                                                        licenses/libaom/
+  SVT-AV1 1.8.0 .................... BSD-3-Clause-Clear and Alliance for
+                                     Open Media Patent License 1.0
+                                                        licenses/svt-av1/
+  nv-codec-headers 12.1.14.0 ....... MIT (linux-x86_64, linux-arm64,
+                                     windows-x86_64)    licenses/nv-codec-headers/
+  Vulkan-Headers ................... Apache-2.0 (headers of the build
+                                     environment)       licenses/vulkan-headers/,
+                                                        licenses/apache-2.0/
+  Intel Media SDK dispatcher (mfx_dispatch) 1.35.1
+                                     BSD-3-Clause (windows-x86_64)
+                                                        licenses/mfx-dispatch/
+  mingw-w64 winpthreads ............ MIT and BSD-style (windows-x86_64)
+                                                        licenses/winpthreads/
+  GCC 11.3.0 runtime (libgcc, libstdc++; windows-x86_64)
+                                     GPL-3.0 with the GCC Runtime Library
+                                     Exception 3.1, which allows it in
+                                     programs under any licence
+
+  The source code of SRT (MPL-2.0) and of every library above is in the
+  third-party source archive of each release (section 8); the source of SRT
+  is also at https://github.com/Haivision/srt/tree/v1.5.3
+
+  The same jar also contains these separate libraries:
+  linux-arm64:
+    alsa-lib 1.2.10 (libasound.so.2) ......... LGPL-2.1-or-later
+                                               licenses/alsa-lib/
+    Raspberry Pi userland (libbcm_host.so, libvcos.so, libvchiq_arm.so),
+    commit 96a7334 ........................... BSD-3-Clause
+                                               licenses/raspberrypi-userland/
+  linux-x86_64:
+    libdrm (libdrm.so.2), as found in Bytedeco's build environment
+                                               MIT  licenses/libdrm/
+
+Bytedeco JavaCPP, JavaCV and JavaCPP Presets 1.5.10
+  Java code, JNI glue (libjnijavacpp) and the Java bindings of the presets
+  (artoolkitplus, flycapture, leptonica, libdc1394, libfreenect,
+  libfreenect2, librealsense, librealsense2, openblas, opencv, tesseract,
+  videoinput). These binding jars come with JavaCV and contain Java classes
+  only: none of the native libraries of those projects is in the app.
+  Licence: Apache-2.0, or GPL-2.0 with the Classpath Exception, at your
+  choice. Copyright (c) Samuel Audet and contributors.
+  Texts: licenses/bytedeco-javacpp/, licenses/bytedeco-javacv/,
+         licenses/bytedeco-javacpp-presets/
+
+
+3. GRAPHICS ENGINE (Compose for Desktop)
+----------------------------------------
+
+Skiko 0.8.18 (libskiko-<platform>, skiko-awt) ... Apache-2.0  licenses/skiko/
+  Copyright JetBrains s.r.o.
+  It contains Skia (JetBrains build m126-6bfb13368b, commit 6bfb133 of
+  https://github.com/JetBrains/skia), with these libraries compiled in:
+
+  Skia ............................. BSD-3-Clause       licenses/skia/
+  HarfBuzz (commit b74a7ec) ........ MIT ("Old MIT")    licenses/harfbuzz/
+  FreeType (commit a464242) ........ FreeType License   licenses/freetype/
+  ICU 74 ........................... Unicode License v3 licenses/icu/
+  libjpeg-turbo 2.1.4 .............. IJG License, BSD-3-Clause and zlib
+                                     License            licenses/libjpeg-turbo/
+  libpng 1.6.43 .................... libpng License v2  licenses/libpng/
+  libwebp (commit 845d547) ......... BSD-3-Clause, with an additional
+                                     patent grant       licenses/libwebp/
+  Expat 2.5.0 ...................... MIT                licenses/expat/
+  zlib 1.3.0.1 (Chromium) .......... zlib License       licenses/zlib/
+  Wuffs (commit e3f919c) ........... Apache-2.0         licenses/wuffs/
+  piex (commit bb217ac) ............ Apache-2.0         licenses/piex/
+  Adobe DNG SDK (commit c8d0c9b) ... DNG SDK License    licenses/dng-sdk/
+
+  This software is based in part on the work of the Independent JPEG Group.
+  Portions of this software are copyright (c) The FreeType Project
+  (www.freetype.org). All rights reserved.
+
+
+4. JAVA AND KOTLIN LIBRARIES
+----------------------------
+
+Unless noted, under the Apache License 2.0 (licenses/apache-2.0/LICENSE-2.0.txt),
+with each project's own copy, and its NOTICE where it has one, in
+licenses/<project>/.
+
+  Kotlin standard library 2.1.0 (and kotlin-stdlib-jdk7/jdk8 1.9.24)
+    Copyright JetBrains s.r.o. and respective authors and developers.
+    Contains code derived from GWT (Apache-2.0), Guava (Apache-2.0) and
+    Boost (Boost Software License 1.0) ........ licenses/kotlin/
+  kotlinx.coroutines 1.9.0 ..................... licenses/kotlinx-coroutines/
+  kotlinx-datetime 0.6.0 ....................... licenses/kotlinx-datetime/
+  kotlinx-io 0.5.4 ............................. licenses/kotlinx-io/
+  kotlinx.serialization 1.7.3 .................. licenses/kotlinx-serialization/
+  kotlinx-atomicfu 0.23.2 ...................... licenses/kotlinx-atomicfu/
+  JetBrains Java Annotations 23.0.0 ............ licenses/jetbrains-annotations/
+  Compose Multiplatform 1.7.3 (runtime, foundation, animation, ui,
+    material, material3, material icons core and extended), with the
+    AndroidX libraries it uses (annotation 1.8.0, collection 1.4.0,
+    arch core-common 2.2.0, lifecycle 2.8.4 and 2.8.5)
+    Copyright JetBrains s.r.o. and The Android Open Source Project
+                                                licenses/compose-multiplatform/
+  Ktor 3.0.3 (ktor-network, ktor-network-tls, ktor-io, ktor-http,
+    ktor-utils) ................................ licenses/ktor/
+  ZXing Core 3.5.3 (pairing QR codes: encoding, and decoding from the
+    webcam) .................................... licenses/zxing/
+  Java Native Access 5.13.0 (jna-jpms, jna-platform-jpms)
+    Apache-2.0 or LGPL-2.1-or-later, used here under Apache-2.0. Its native
+    library contains libffi (MIT) .............. licenses/jna/
+  dorkbox SystemTray 4.4, Utilities 1.46, Collections 2.4, Desktop 1.1,
+    Executor 3.13, JNA 1.2, OS 1.8, Updates 1.1
+    Copyright Dorkbox LLC. Each LICENSE lists the code it contains from
+    other projects, under Apache-2.0, MIT, BSD-3-Clause and CC0
+                                                licenses/dorkbox/
+  Javassist 3.29.2-GA (used by dorkbox)
+    MPL-1.1, LGPL-2.1-or-later or Apache-2.0, used here under Apache-2.0.
+    Copyright (C) 1999- Shigeru Chiba ......... licenses/javassist/
+  Java UUID Generator 4.2.0 .................... licenses/java-uuid-generator/
+  Bouncy Castle 1.78.1 (bcprov, bcpkix, bctls, bcutil): Bouncy Castle
+    Licence (MIT) .............................. licenses/bouncycastle/
+  SLF4J API 2.0.16 and SLF4J NOP 2.0.9: MIT .... licenses/slf4j/
+
+
+5. JAVA RUNTIME
+---------------
+
+The app comes with a Java runtime made by jlink/jpackage from Eclipse
+Temurin 17.0.20+8 (OpenJDK), with its launcher (libapplauncher). Its licence
+is the GNU General Public License, version 2, with the Classpath Exception.
+Its own legal notices are in the "legal" folder of the runtime in every
+package (lib/runtime/legal on Linux, runtime/legal on Windows,
+Contents/runtime/Contents/Home/legal on macOS). Its source code is in the
+third-party source archive of each release (section 8), and at
+https://github.com/adoptium/temurin17-binaries/releases/tag/jdk-17.0.20%2B8
+(OpenJDK17U-jdk-sources_17.0.20_8.tar.gz).
+
+
+6. APPIMAGE RUNTIME (the .AppImage files only)
+----------------------------------------------
+
+Each .AppImage starts with the AppImage type 2 runtime, release 20251108
+(https://github.com/AppImage/type2-runtime), statically linked with:
+
+  AppImage type2-runtime ........... MIT                licenses/appimage-type2-runtime/
+  libfuse 3.15.0 (library) ......... LGPL-2.1           licenses/libfuse/
+  squashfuse 0.5.2 ................. BSD-2-Clause       licenses/squashfuse/
+  Zstandard (Alpine Linux 3.21) .... BSD-3-Clause       licenses/zstd/
+  zlib (Alpine Linux 3.21) ......... zlib License       licenses/zlib/
+  musl libc (Alpine Linux 3.21) .... MIT                licenses/musl/
+  mimalloc (Alpine Linux 3.21) ..... MIT                licenses/mimalloc/
+
+  To use another libfuse, rebuild the runtime from its source (in the
+  third-party source archive) and repack the AppImage with
+  appimagetool --runtime-file.
+
+
+7. PATENTS
+----------
+
+Some of the codecs above may be covered by patents in some countries. The
+author of this app grants no patent licence beyond the patent grants that
+the licences listed here contain (libvpx, libwebp, libaom, SVT-AV1,
+Apache-2.0). In particular, Cisco's royalty-free licence for H.264 covers
+only the OpenH264 binaries that Cisco distributes, not the OpenH264 compiled
+into these FFmpeg libraries.
+
+
+8. SOURCE CODE
+--------------
+
+Each release on https://github.com/marcomorosi06/WiFiAudioStreaming-Desktop/releases
+has, next to the packages, the archive
+wifi-audio-streaming-<version>-third-party-sources.tar, with:
+  - the JavaCPP Presets 1.5.10 build scripts and patch, and the source of
+    FFmpeg 6.1.1 and of every library section 2 lists;
+  - the source of OpenJDK as built for Eclipse Temurin 17.0.20+8;
+  - the source of the AppImage runtime, libfuse 3.15.0 and squashfuse 0.5.2;
+  - SOURCES.txt: where every file in it comes from, with its SHA-256.
+It stays available for as long as that release is offered. The source of
+the app itself is the repository at the tag of the release.
