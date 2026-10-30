@@ -59,8 +59,8 @@ set(NATIVE_SOURCES audio_engine.c)
 
 if(APPLE)
     # Su macOS aggiungiamo il file Objective-C con ScreenCaptureKit
-    list(APPEND NATIVE_SOURCES audio_engine_mac.m)
-    set_source_files_properties(audio_engine_mac.m
+    list(APPEND NATIVE_SOURCES audio_engine_mac.m mac_application.m)
+    set_source_files_properties(audio_engine_mac.m mac_application.m
         PROPERTIES COMPILE_FLAGS "-fobjc-arc"
     )
 endif()
@@ -98,6 +98,7 @@ elseif(APPLE)
         "-framework CoreMedia"
         "-framework CoreFoundation"
         "-framework Foundation"
+        "-framework AppKit"
         "-framework AudioToolbox"
     )
     # macOS 12.3 minimo per ScreenCaptureKit
