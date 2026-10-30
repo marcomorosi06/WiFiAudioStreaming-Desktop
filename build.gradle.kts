@@ -406,6 +406,30 @@ tasks.named("check") {
     dependsOn(checkHelpCoverage)
 }
 
+// Compile this check separately: the existing test sources contain standalone
+// checks with duplicate top-level helpers and cannot be compiled together.
+val macInstallerCheck = sourceSets.create("macInstallerCheck")
+kotlin.sourceSets.named("macInstallerCheck") {
+    kotlin.srcDirs("src/main/kotlin", "src/macInstallerCheck/kotlin")
+    kotlin.include("CliPathInstaller.kt", "MacCliInstallerCheck.kt")
+}
+dependencies {
+    // The Compose compiler plugin is applied to every Kotlin compilation.
+    add(macInstallerCheck.implementationConfigurationName, compose.runtime)
+}
+
+val checkMacCliInstaller by tasks.registering(JavaExec::class) {
+    group = "verification"
+    description = "Checks CLI installer quoting; compiles AppleScript on macOS without executing it"
+    dependsOn("macInstallerCheckClasses")
+    classpath = macInstallerCheck.runtimeClasspath
+    mainClass.set("MacCliInstallerCheckKt")
+}
+
+tasks.named("check") {
+    dependsOn(checkMacCliInstaller)
+}
+
 tasks.register<Copy>("installManPage") {
     description = "Install wfas.1 man page to /usr/local/share/man/man1/"
     group       = "install"
