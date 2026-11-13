@@ -82,7 +82,8 @@ target_compile_options(audio_engine PRIVATE
 
 # ── Link per OS ───────────────────────────────────────────────────────────────
 if(WIN32)
-    target_link_libraries(audio_engine PRIVATE Ole32 Mmdevapi ksuser)
+    # Advapi32: registry, used to remember endpoint mute state (issue #35).
+    target_link_libraries(audio_engine PRIVATE Ole32 Mmdevapi ksuser Advapi32)
 
     set_target_properties(audio_engine PROPERTIES
         PREFIX ""

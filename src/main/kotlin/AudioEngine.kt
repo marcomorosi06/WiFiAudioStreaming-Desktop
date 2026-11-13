@@ -153,6 +153,7 @@ class AudioEngine(
 
         if (written < 0) {
             lastError = nativeGetError().ifEmpty { "Error in nativeRead" }
+            AppDebug.log("[AudioEngine] capture stopped: $lastError")
             return@withContext null
         }
 

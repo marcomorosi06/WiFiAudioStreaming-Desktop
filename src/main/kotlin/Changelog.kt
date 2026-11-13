@@ -111,8 +111,8 @@ object Changelog {
             version = "1.2.1",
             date = Bilingual("November 2026", "Novembre 2026"),
             headline = Bilingual(
-                "Fixes for running in the background and for macOS, contributed by Matt Cribbs.",
-                "Correzioni per l'uso in background e per macOS, con il contributo di Matt Cribbs."
+                "Fixes for running in the background and for macOS, contributed by Matt Cribbs, and for silent streams on Windows.",
+                "Correzioni per l'uso in background e per macOS, con il contributo di Matt Cribbs, e per gli streaming muti su Windows."
             ),
             items = listOf(
                 ChangelogItem(
@@ -140,6 +140,16 @@ object Changelog {
                         "If you cancel the key request during automatic connection, the app stops asking for that server until you connect to it yourself.",
                         "Se annulli la richiesta della chiave durante la connessione automatica, l'app smette di chiederla per quel server fino alla tua prossima connessione manuale."
                     )
+                ),
+                ChangelogItem(
+                    icon = Icons.Outlined.GraphicEq,
+                    title = Bilingual("No more silent streams on Windows", "Niente piu' streaming muti su Windows"),
+                    body = Bilingual(
+                        "On some Windows audio devices, muting the speakers while streaming also silenced the stream, and it stayed silent even after a restart. The app now notices it, keeps those speakers unmuted and remembers the device.",
+                        "Su alcuni dispositivi audio di Windows, silenziare gli altoparlanti durante lo streaming rendeva muto anche lo streaming, e restava muto anche dopo un riavvio. Ora l'app se ne accorge, lascia attivi quegli altoparlanti e si ricorda del dispositivo."
+                    ),
+                    linkLabel = Bilingual("See the report on GitHub", "Vedi la segnalazione su GitHub"),
+                    linkUrl = "https://github.com/marcomorosi06/WiFiAudioStreaming-Desktop/issues/35"
                 )
             )
         ),

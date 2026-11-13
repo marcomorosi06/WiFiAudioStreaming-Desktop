@@ -251,6 +251,92 @@ static int                   g_did_mute_endpoint = 0;
 static volatile LONG         g_atexit_registered = 0;
 static volatile LONG         g_safety_net_ran = 0;
 
+/* -- Endpoint mute bookkeeping -----------------------------------------------
+ * The render endpoint is muted while streaming so the audio is not heard
+ * twice. Two problems with that (GitHub issue #35):
+ *
+ * 1. On some devices (reported with Realtek on the generic Microsoft driver,
+ *    and in VMs) a muted endpoint also silences the loopback capture, so the
+ *    stream goes silent. This is detected at runtime by a short probe and
+ *    remembered per device, so the endpoint is not muted there again.
+ * 2. If the process dies before restoring, Windows keeps the endpoint muted
+ *    across reboots and the next start took that mute for the user's own and
+ *    never undid it. A marker records which endpoint WFAS muted, so the
+ *    leftover is recognized and restored.
+ *
+ * Both live under HKCU, which is per user and needs no elevation. */
+#define AE_REG_KEY        L"Software\\WiFiAudioStreaming\\AudioEngine"
+#define AE_REG_NOMUTE_KEY L"Software\\WiFiAudioStreaming\\AudioEngine\\MuteSilencesLoopback"
+#define AE_REG_MARKER     L"MutedEndpoint"
+
+static wchar_t g_mute_dev_id[512];
+
+/* Mute probe: when the stream has been silent for a while with the endpoint
+ * muted, unmute briefly. Sound that appears only while unmuted, and stops again
+ * once re-muted, means the mute silences the loopback on this device. */
+enum { MP_IDLE = 0, MP_UNMUTED = 1, MP_REMUTED = 2 };
+#define MP_FIRST_WAIT_MS 3000ULL
+#define MP_MAX_WAIT_MS   30000ULL
+#define MP_WINDOW_MS     500ULL
+/* Audio captured before a mute change can still be queued: ignore it. */
+#define MP_GRACE_MS      150ULL
+
+static int       g_mp_state      = MP_IDLE;
+static ULONGLONG g_mp_t0         = 0;
+static ULONGLONG g_mp_last_sound = 0;
+static ULONGLONG g_mp_wait_ms    = MP_FIRST_WAIT_MS;
+
+static int reg_read_str(const wchar_t *subkey, const wchar_t *name, wchar_t *out, DWORD out_chars) {
+    DWORD bytes = out_chars * (DWORD)sizeof(wchar_t);
+    out[0] = L'\0';
+    return RegGetValueW(HKEY_CURRENT_USER, subkey, name, RRF_RT_REG_SZ,
+                        NULL, out, &bytes) == ERROR_SUCCESS;
+}
+
+static void reg_write_value(const wchar_t *subkey, const wchar_t *name, DWORD type,
+                            const void *data, DWORD bytes) {
+    HKEY key = NULL;
+    if (RegCreateKeyExW(HKEY_CURRENT_USER, subkey, 0, NULL, 0, KEY_SET_VALUE,
+                        NULL, &key, NULL) != ERROR_SUCCESS) return;
+    RegSetValueExW(key, name, 0, type, (const BYTE *)data, bytes);
+    RegCloseKey(key);
+}
+
+static void reg_delete_value(const wchar_t *subkey, const wchar_t *name) {
+    HKEY key = NULL;
+    if (RegOpenKeyExW(HKEY_CURRENT_USER, subkey, 0, KEY_SET_VALUE, &key) != ERROR_SUCCESS) return;
+    RegDeleteValueW(key, name);
+    RegCloseKey(key);
+}
+
+static int marker_is(const wchar_t *dev_id) {
+    wchar_t marker[512];
+    return dev_id[0] && reg_read_str(AE_REG_KEY, AE_REG_MARKER, marker, 512)
+           && wcscmp(marker, dev_id) == 0;
+}
+
+static void marker_set(const wchar_t *dev_id) {
+    if (!dev_id[0]) return;
+    reg_write_value(AE_REG_KEY, AE_REG_MARKER, REG_SZ, dev_id,
+                    (DWORD)((wcslen(dev_id) + 1) * sizeof(wchar_t)));
+}
+
+static void marker_clear(void) {
+    reg_delete_value(AE_REG_KEY, AE_REG_MARKER);
+}
+
+static int mute_silences_loopback(const wchar_t *dev_id) {
+    DWORD v = 0, bytes = sizeof(v);
+    return dev_id[0] && RegGetValueW(HKEY_CURRENT_USER, AE_REG_NOMUTE_KEY, dev_id,
+                                     RRF_RT_REG_DWORD, NULL, &v, &bytes) == ERROR_SUCCESS
+           && v != 0;
+}
+
+static void remember_mute_silences_loopback(const wchar_t *dev_id) {
+    DWORD one = 1;
+    if (dev_id[0]) reg_write_value(AE_REG_NOMUTE_KEY, dev_id, REG_DWORD, &one, sizeof(one));
+}
+
 static int16_t float_to_s16(float f) {
     int32_t v = (int32_t)(f * 32768.0f);
     if (v >  32767) v =  32767;
@@ -372,15 +458,42 @@ static void safety_net_restore_mute(void) {
 }
 
 static void atexit_safety_handler(void) {
+    int had_mute = g_did_mute_endpoint && g_endpoint_volume && !g_safety_net_ran;
     safety_net_restore_mute();
+    /* Registry calls are safe here, unlike in DllMain: drop the marker once
+     * the endpoint has been given back. */
+    if (had_mute) marker_clear();
     if (g_endpoint_volume) {
         IUnknown_Release((IUnknown *)g_endpoint_volume);
         g_endpoint_volume = NULL;
     }
 }
 
+static void mute_probe_reset(void) {
+    g_mp_state      = MP_IDLE;
+    g_mp_last_sound = GetTickCount64();
+    g_mp_wait_ms    = MP_FIRST_WAIT_MS;
+}
+
+static void register_safety_net(void) {
+    g_safety_net_ran = 0;
+    if (InterlockedCompareExchange(&g_atexit_registered, 1, 0) == 0) {
+        atexit(atexit_safety_handler);
+    }
+}
+
 static void mute_render_endpoint(IMMDevice *device) {
     if (!device) return;
+
+    g_mute_dev_id[0] = L'\0';
+    {
+        wchar_t *id = NULL;
+        if (SUCCEEDED(IMMDevice_GetId(device, &id)) && id) {
+            wcsncpy(g_mute_dev_id, id, 511);
+            g_mute_dev_id[511] = L'\0';
+            CoTaskMemFree(id);
+        }
+    }
 
     HRESULT hr = IMMDevice_Activate(
         device,
@@ -404,7 +517,32 @@ static void mute_render_endpoint(IMMDevice *device) {
         g_had_prev_mute_state = 0;
     }
 
+    int leftover = marker_is(g_mute_dev_id);
+
+    if (mute_silences_loopback(g_mute_dev_id)) {
+        /* Muting would silence the capture on this device: leave it audible.
+         * A mute left behind by an earlier run is given back now. */
+        AE_LOG("[AudioEngine] Mute silences loopback on this device: not muting it.\n");
+        if (leftover && g_had_prev_mute_state && prev) {
+            IAudioEndpointVolume_SetMute(g_endpoint_volume, FALSE, NULL);
+            AE_LOG("[AudioEngine] Restored a mute left by a previous run.\n");
+        }
+        if (leftover) marker_clear();
+        g_did_mute_endpoint = 0;
+        return;
+    }
+
     if (g_had_prev_mute_state && prev) {
+        if (leftover) {
+            /* Muted by a previous run that died before restoring it: it is
+             * ours, so it must be undone when this session stops. */
+            AE_LOG("[AudioEngine] Endpoint muted by a previous run, taking it over.\n");
+            g_prev_mute_state = FALSE;
+            g_did_mute_endpoint = 1;
+            mute_probe_reset();
+            register_safety_net();
+            return;
+        }
         AE_LOG("[AudioEngine] Endpoint already muted, leaving as-is.\n");
         g_did_mute_endpoint = 0;
         return;
@@ -413,12 +551,10 @@ static void mute_render_endpoint(IMMDevice *device) {
     hr = IAudioEndpointVolume_SetMute(g_endpoint_volume, TRUE, NULL);
     if (SUCCEEDED(hr)) {
         g_did_mute_endpoint = 1;
-        g_safety_net_ran = 0;
+        marker_set(g_mute_dev_id);
+        mute_probe_reset();
         AE_LOG("[AudioEngine] Render endpoint muted to avoid double playback.\n");
-
-        if (InterlockedCompareExchange(&g_atexit_registered, 1, 0) == 0) {
-            atexit(atexit_safety_handler);
-        }
+        register_safety_net();
     } else {
         fprintf(stderr, "[AudioEngine] SetMute(TRUE) failed: 0x%08lX\n", hr);
         g_did_mute_endpoint = 0;
@@ -428,11 +564,15 @@ static void mute_render_endpoint(IMMDevice *device) {
 static void restore_render_endpoint_mute(void) {
     if (!g_endpoint_volume) return;
 
-    if (g_did_mute_endpoint && g_had_prev_mute_state) {
-        HRESULT hr = IAudioEndpointVolume_SetMute(g_endpoint_volume, g_prev_mute_state, NULL);
+    if (g_did_mute_endpoint) {
+        /* Same target as the safety net: if the previous state could not be
+         * read, give the endpoint back unmuted rather than leave it muted. */
+        BOOL target = g_had_prev_mute_state ? g_prev_mute_state : FALSE;
+        HRESULT hr = IAudioEndpointVolume_SetMute(g_endpoint_volume, target, NULL);
         if (SUCCEEDED(hr)) {
+            marker_clear();
             AE_LOG("[AudioEngine] Endpoint mute restored to %s.\n",
-                    g_prev_mute_state ? "muted" : "unmuted");
+                    target ? "muted" : "unmuted");
         } else {
             fprintf(stderr, "[AudioEngine] SetMute restore failed: 0x%08lX\n", hr);
         }
@@ -444,6 +584,77 @@ static void restore_render_endpoint_mute(void) {
     g_endpoint_volume = NULL;
     g_did_mute_endpoint = 0;
     g_had_prev_mute_state = 0;
+}
+
+static int packet_has_sound(const BYTE *data, UINT32 frames, DWORD flags) {
+    if (!data || (flags & AUDCLNT_BUFFERFLAGS_SILENT) || !g_mix_format) return 0;
+    size_t bytes = (size_t)frames * g_mix_format->nBlockAlign;
+    for (size_t i = 0; i < bytes; i++) {
+        if (data[i] != 0) return 1;
+    }
+    return 0;
+}
+
+/* Called from the capture thread for every packet (heard = it carried sound)
+ * and once per read with heard = 0, so the timers advance without packets. */
+static void mute_probe_step(int heard) {
+    if (!g_did_mute_endpoint || !g_endpoint_volume) return;
+    ULONGLONG now = GetTickCount64();
+
+    switch (g_mp_state) {
+    case MP_IDLE:
+        if (heard) {
+            g_mp_last_sound = now;
+            g_mp_wait_ms = MP_FIRST_WAIT_MS;
+            return;
+        }
+        if (now - g_mp_last_sound < g_mp_wait_ms) return;
+        if (SUCCEEDED(IAudioEndpointVolume_SetMute(g_endpoint_volume, FALSE, NULL))) {
+            g_mp_state = MP_UNMUTED;
+            g_mp_t0 = now;
+            AE_LOG("[AudioEngine] Silent while muted: probing with the endpoint unmuted.\n");
+        } else {
+            g_mp_last_sound = now;
+        }
+        return;
+
+    case MP_UNMUTED:
+        if (heard && now - g_mp_t0 >= MP_GRACE_MS) {
+            /* Sound appeared once unmuted: mute again and see if it stops. */
+            IAudioEndpointVolume_SetMute(g_endpoint_volume, TRUE, NULL);
+            g_mp_state = MP_REMUTED;
+            g_mp_t0 = now;
+            return;
+        }
+        if (now - g_mp_t0 >= MP_WINDOW_MS) {
+            /* Silent even unmuted: nothing is playing. Back off and retry later. */
+            IAudioEndpointVolume_SetMute(g_endpoint_volume, TRUE, NULL);
+            g_mp_state = MP_IDLE;
+            g_mp_last_sound = now;
+            g_mp_wait_ms = (g_mp_wait_ms * 2 > MP_MAX_WAIT_MS) ? MP_MAX_WAIT_MS : g_mp_wait_ms * 2;
+        }
+        return;
+
+    case MP_REMUTED:
+        if (heard && now - g_mp_t0 >= MP_GRACE_MS) {
+            /* Sound while muted: the loopback works here, the audio simply
+             * started during the probe. Keep the mute. */
+            mute_probe_reset();
+            return;
+        }
+        if (now - g_mp_t0 >= MP_WINDOW_MS) {
+            /* Sound only while unmuted: muting silences the loopback on this
+             * device. Leave it unmuted for good and remember the device. */
+            if (SUCCEEDED(IAudioEndpointVolume_SetMute(g_endpoint_volume, FALSE, NULL))) {
+                g_did_mute_endpoint = 0;
+                marker_clear();
+                remember_mute_silences_loopback(g_mute_dev_id);
+                AE_LOG("[AudioEngine] Mute silences loopback on this device: leaving it unmuted.\n");
+            }
+            g_mp_state = MP_IDLE;
+        }
+        return;
+    }
 }
 
 BOOL WINAPI DllMain(HINSTANCE hinst, DWORD reason, LPVOID reserved) {
@@ -563,6 +774,9 @@ static jint wasapi_read(int16_t *out, int num_stereo_samples) {
 
     int wait_count = 0;
     const int max_wait_ms = g_mic_enabled ? 20 : 2000;
+    int failed = 0;
+
+    mute_probe_step(0);
 
     if (g_pending_len > 0 && num_stereo_samples > 0) {
         int take = (g_pending_len < num_stereo_samples) ? g_pending_len : num_stereo_samples;
@@ -579,12 +793,19 @@ static jint wasapi_read(int16_t *out, int num_stereo_samples) {
     while (written < num_stereo_samples && !g_stopping) {
         UINT32 packet_size = 0;
         hr = IAudioCaptureClient_GetNextPacketSize(g_capture_client, &packet_size);
-        if (FAILED(hr)) break;
+        if (FAILED(hr)) {
+            /* E.g. AUDCLNT_E_DEVICE_INVALIDATED: the stream will not recover.
+             * Report it instead of returning silence forever. */
+            set_error("Loopback capture failed (GetNextPacketSize): 0x%08lX", hr);
+            failed = 1;
+            break;
+        }
 
         if (packet_size == 0) {
             if (wait_count >= max_wait_ms) break;
             Sleep(1);
             wait_count++;
+            if ((wait_count % 50) == 0) mute_probe_step(0);
             continue;
         }
         wait_count = 0;
@@ -594,7 +815,12 @@ static jint wasapi_read(int16_t *out, int num_stereo_samples) {
         DWORD  flags       = 0;
 
         hr = IAudioCaptureClient_GetBuffer(g_capture_client, &pData, &frames_available, &flags, NULL, NULL);
-        if (FAILED(hr)) break;
+        if (FAILED(hr)) {
+            set_error("Loopback capture failed (GetBuffer): 0x%08lX", hr);
+            failed = 1;
+            break;
+        }
+        if (g_did_mute_endpoint) mute_probe_step(packet_has_sound(pData, frames_available, flags));
 
         if (!need_resample) {
             UINT32 f;
@@ -693,6 +919,8 @@ static jint wasapi_read(int16_t *out, int num_stereo_samples) {
     }
 
     g_reading = 0;
+    /* Hand over what was captured before the failure; the next call fails again. */
+    if (failed && written == 0) return -1;
     return (jint)written;
 }
 
@@ -1766,7 +1994,10 @@ Java_AudioEngine_nativeRead(JNIEnv *env, jobject thiz,
     (void)stereo_frames;   /* usato solo dai rami Windows/macOS */
 
 #if defined(_WIN32)
-    result = wasapi_read((int16_t *)buf, stereo_frames) * 2;
+    {
+        jint got = wasapi_read((int16_t *)buf, stereo_frames);
+        result = (got < 0) ? -1 : got * 2;
+    }
 #elif defined(__linux__)
     /* Semantica allineata a Windows: pulse_read torna i FRAME scritti, anche
      * parziali; 0 = niente audio entro il timeout (il ramo mic sotto puo'
