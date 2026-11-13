@@ -13,6 +13,7 @@
 # =================================================================
 # Mantiene i metadati di Kotlin, essenziali per la reflection.
 -keep class kotlin.Metadata { *; }
+-keep class MacApplication { *; }
 -keepclassmembers class kotlin.** { @kotlin.Metadata <methods>; }
 -keepclassmembers enum * { *; }
 -keepclassmembers class ** implements java.io.Serializable {

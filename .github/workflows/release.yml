@@ -77,6 +77,10 @@ jobs:
         if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y cmake build-essential
 
+      - name: Check macOS CLI installer quoting
+        if: runner.os == 'macOS'
+        run: ./gradlew checkMacCliInstaller
+
       # Windows: nessun installer, solo l'app impacchettata. Le altre piattaforme
       # producono anche i formati nativi (dmg / deb / rpm).
       - name: Build Packages (Windows)

@@ -347,18 +347,35 @@ object CliPathInstaller {
         }
     }
 
+    internal fun macInstallScript(exePath: String): String {
+        // Shell quoting and AppleScript string quoting are separate layers.
+        val quotedPath = "'" + exePath.replace("'", "'\"'\"'") + "'"
+        val cmd = "/bin/mkdir -p /usr/local/bin && /bin/ln -sf $quotedPath $macSymlinkTarget"
+        val escapedCommand = cmd.replace("\\", "\\\\").replace("\"", "\\\"")
+        // Standard Additions runs a noninteractive system shell and displays the
+        // macOS authorization dialog. Never inject commands into a user's shell
+        // (which may start a multiplexer or other interactive startup programs).
+        return "do shell script \"$escapedCommand\" with administrator privileges"
+    }
+
     private fun installMac(): InstallResult {
         val exePath = ProcessHandle.current().info().command().orElse(null)
             ?: return InstallResult.Failure("Cannot determine executable path")
 
-        val cmd = "sudo ln -sf \"$exePath\" $macSymlinkTarget"
-
-        runCatching {
-            val script = "tell application \"Terminal\" to do script \"$cmd\""
-            ProcessBuilder("osascript", "-e", script).start()
-        }.onSuccess { return InstallResult.TerminalLaunched }
-         .onFailure { return InstallResult.Failure("Cannot open Terminal: ${it.message}") }
-
-        return InstallResult.TerminalLaunched
+        return runCatching {
+            val process = ProcessBuilder("/usr/bin/osascript", "-e", macInstallScript(exePath))
+                .redirectErrorStream(true)
+                .start()
+            val output = process.inputStream.bufferedReader().use { it.readText() }.trim()
+            val exitCode = process.waitFor()
+            if (exitCode != 0) {
+                InstallResult.Failure("CLI installation failed (osascript exit $exitCode): $output")
+            } else if (File(macSymlinkTarget).exists() &&
+                File(macSymlinkTarget).canonicalFile == File(exePath).canonicalFile) {
+                InstallResult.Success
+            } else {
+                InstallResult.Failure("CLI installation did not create the expected link: $macSymlinkTarget")
+            }
+        }.getOrElse { InstallResult.Failure("Cannot install CLI: ${it.message}") }
     }
 }

@@ -5155,6 +5155,21 @@ fun startGuiApplication(cliArgs: CliArgs) = application {
         windowState.isMinimized = false
     }
 
+    // Keep Dock policy outside Window so start-minimized works before first show.
+    LaunchedEffect(isWindowVisible) {
+        MacApplication.setWindowVisible(isWindowVisible)
+    }
+    DisposableEffect(Unit) {
+        val desktop = if (System.getProperty("os.name").lowercase().contains("mac") &&
+            java.awt.Desktop.isDesktopSupported()) java.awt.Desktop.getDesktop() else null
+        val canReopen = desktop?.isSupported(java.awt.Desktop.Action.APP_EVENT_REOPENED) == true
+        val reopenListener = java.awt.desktop.AppReopenedListener { showAndRaise() }
+        if (canReopen) desktop?.addAppEventListener(reopenListener)
+        onDispose {
+            if (canReopen) desktop?.removeAppEventListener(reopenListener)
+        }
+    }
+
     // Se l'avvio era "minimizzato nella tray" ma la tray non si e' materializzata,
     // la finestra torna visibile: meglio una finestra non richiesta che un
     // processo senza interfaccia.
@@ -5239,6 +5254,172 @@ fun startGuiApplication(cliArgs: CliArgs) = application {
         }
     }
 
+    // Connection management must run even before a hidden window is first composed.
+    LaunchedEffect(appSettings.securityMode, appSettings.authKey, appSettings.encryptionEnabled) {
+        NetworkHandler_v1.configureSecurity(appSettings.securityMode, appSettings.authKey, appSettings.encryptionEnabled)
+        // Anche il canale di controllo locale segue la stessa sicurezza:
+        // attivare la modalita' KEY dalle impostazioni deve chiudere
+        // 'wfas control' a chi la chiave non ce l'ha, subito e non al
+        // prossimo avvio.
+        IpcServer.applySecurity(appSettings.securityMode, appSettings.authKey)
+    }
+    var authRequestPeer by remember { mutableStateOf<String?>(null) }
+    val authDecision = remember { java.util.concurrent.atomic.AtomicReference<kotlinx.coroutines.CompletableDeferred<Boolean>?>(null) }
+    LaunchedEffect(Unit) {
+        NetworkHandler_v1.onAuthRequest = { peer ->
+            val def = kotlinx.coroutines.CompletableDeferred<Boolean>()
+            authDecision.set(def)
+            authRequestPeer = peer
+            runCatching { kotlinx.coroutines.runBlocking { def.await() } }.getOrDefault(false)
+        }
+    }
+    var keyRequestWrong by remember { mutableStateOf<Boolean?>(null) }
+    val keyDecision = remember { java.util.concurrent.atomic.AtomicReference<kotlinx.coroutines.CompletableDeferred<String?>?>(null) }
+    LaunchedEffect(Unit) {
+        NetworkHandler_v1.onKeyRequest = { wrong ->
+            if (!NetworkHandler_v1.clientKeyPromptAllowed) {
+                AppDebug.log("[CLIENT] key requested but prompting is disabled for this attempt")
+                null
+            } else {
+                val def = kotlinx.coroutines.CompletableDeferred<String?>()
+                keyDecision.set(def)
+                showAndRaise()
+                keyRequestWrong = wrong
+                runCatching { def.await() }.getOrNull()
+            }
+        }
+    }
+
+    val clientDisconnectKeys = remember {
+        setOf(
+            "status_server_disconnected",
+            "status_server_no_response",
+            "status_handshake_failed",
+            "status_protocol_incompatible",
+            "status_server_silent_maybe_outdated",
+            "status_server_busy",
+            "status_unauthorized",
+            "status_unsupported_format"
+        )
+    }
+
+    val clientStatusHandler: (key: String, args: Array<out Any>) -> Unit = { key, args ->
+        connectionStatus = if (args.isEmpty()) Strings.get(key) else Strings.get(key, *args)
+        if (key in clientDisconnectKeys) {
+            scope.launch {
+                NetworkHandler_v1.stopCurrentStream()
+                isStreaming = false
+                connectionStatus = Strings.get("status_inactive")
+                if (!isServer) {
+                    NetworkHandler_v1.beginDeviceDiscovery { hostname, serverInfo ->
+                        if (serverInfo.lastSeen == 0L) {
+                            discoveredDevices.remove(hostname)
+                        } else {
+                            discoveredDevices[hostname] = serverInfo
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    LaunchedEffect(Unit) {
+        if (appSettings.autoConnectClientEnabled) {
+            isServer = false
+            discoveredDevices.clear(); NetworkHandler_v1.forgetDiscoveredAddresses()
+            NetworkHandler_v1.beginDeviceDiscovery { hostname, serverInfo ->
+                discoveredDevices[hostname] = serverInfo
+            }
+        }
+    }
+
+    LaunchedEffect(isStreaming) {
+        if (!isStreaming) {
+            lastDisconnectTime = System.currentTimeMillis()
+        }
+    }
+
+    LaunchedEffect(
+        isServer, appSettings.autoConnectClientEnabled, appSettings.autoConnectIps,
+        selectedOutputDevice, streamingPort, micPort, appSettings.autoConnectIntervalSec,
+        appSettings.autoConnectRetryDelaySec
+    ) {
+        if (isServer || !appSettings.autoConnectClientEnabled || selectedOutputDevice == null) return@LaunchedEffect
+        val targets = appSettings.activeAutoConnectTargets()
+        if (targets.isEmpty()) return@LaunchedEffect
+
+        val defaultPort = streamingPort.toIntOrNull() ?: 9090
+        val mic = micPort.toIntOrNull() ?: 9092
+        val retryMs = appSettings.autoConnectRetryDelaySec.coerceAtLeast(0) * 1000L
+        val intervalMs = (appSettings.autoConnectIntervalSec.coerceAtLeast(1) * 1000L)
+
+        while (isActive) {
+            val currentTime = System.currentTimeMillis()
+            val canReconnect = (currentTime - lastDisconnectTime) >= retryMs
+
+            if (!isStreaming && canReconnect) {
+                for (target in targets) {
+                    if (target.ip.isBlank() || isStreaming) continue
+
+                    // Ogni voce puo' avere la sua porta: due server sulla
+                    // stessa rete non sono obbligati a condividerla.
+                    val port = target.port ?: defaultPort
+                    val knownServer = discoveredDevices.values.find { it.ip == target.ip }
+                    val isOnline = knownServer != null || NetworkHandler_v1.pingServerUnicast(target.ip, port)
+                    if (!isOnline) continue
+
+                    // La chiave arriva dalla custodia di sistema, non dal
+                    // file di configurazione. Se la voce dichiara di
+                    // averne una ma la custodia non la restituisce
+                    // (keyring chiuso, profilo copiato altrove) si salta:
+                    // tentare senza chiave finirebbe comunque in un
+                    // rifiuto, ma dopo aver annunciato la nostra presenza.
+                    val storedKey = target.resolveKey()
+                    if (target.hasKey && storedKey == null) {
+                        AppDebug.log("[AUTOCONNECT] key for ${target.displayName()} not available in ${SecretVault.label}, skipping")
+                        connectionStatus = Strings.get("auto_connect_key_locked", target.displayName())
+                        continue
+                    }
+
+                    NetworkHandler_v1.clientPresharedKey = storedKey.orEmpty()
+                    NetworkHandler_v1.clientKeyFromInvite = false
+                    NetworkHandler_v1.expectedMcastEpoch = null
+                    // Senza chiave salvata la finestra si apre solo se
+                    // l'utente ha scelto di essere interrotto.
+                    NetworkHandler_v1.clientKeyPromptAllowed =
+                        appSettings.autoConnectPromptForKey
+
+                    val targetServer = knownServer ?: ServerInfo(target.ip, false, port, null)
+                    isStreaming = true
+                    connectionStatus = Strings.get("auto_connect_connecting", target.displayName())
+
+                    NetworkHandler_v1.endDeviceDiscovery()
+                    NetworkHandler_v1.launchClientInstance(
+                        audioSettings, targetServer, selectedOutputDevice!!,
+                        sendMicrophone, selectedClientMic, mic,
+                        appSettings.connectionSoundEnabled,
+                        appSettings.disconnectionSoundEnabled,
+                        onAudioFrame = vizSink,
+                        onStatusUpdate = clientStatusHandler
+                    )
+                    break
+                }
+            }
+            delay(intervalMs)
+        }
+    }
+    LaunchedEffect(Unit) {
+        while (isActive) {
+            val now = System.currentTimeMillis()
+            // Rimuove i server che non si sentono da più di 12 secondi
+            val toRemove = discoveredDevices.filter { now - it.value.lastSeen > 12000L || it.value.lastSeen == 0L }.keys
+            if (toRemove.isNotEmpty()) {
+                toRemove.forEach { discoveredDevices.remove(it) }
+            }
+            delay(5000)
+        }
+    }
+
     Window(
         onCloseRequest = hideOrQuit,
         state      = windowState,
@@ -5285,39 +5466,6 @@ fun startGuiApplication(cliArgs: CliArgs) = application {
                     forceNewKey = forceNewKey
                 ) { next -> appSettings = next }
                 QrPairingState.invite.value
-            }
-        }
-        LaunchedEffect(appSettings.securityMode, appSettings.authKey, appSettings.encryptionEnabled) {
-            NetworkHandler_v1.configureSecurity(appSettings.securityMode, appSettings.authKey, appSettings.encryptionEnabled)
-            // Anche il canale di controllo locale segue la stessa sicurezza:
-            // attivare la modalita' KEY dalle impostazioni deve chiudere
-            // 'wfas control' a chi la chiave non ce l'ha, subito e non al
-            // prossimo avvio.
-            IpcServer.applySecurity(appSettings.securityMode, appSettings.authKey)
-        }
-        var authRequestPeer by remember { mutableStateOf<String?>(null) }
-        val authDecision = remember { java.util.concurrent.atomic.AtomicReference<kotlinx.coroutines.CompletableDeferred<Boolean>?>(null) }
-        LaunchedEffect(Unit) {
-            NetworkHandler_v1.onAuthRequest = { peer ->
-                val def = kotlinx.coroutines.CompletableDeferred<Boolean>()
-                authDecision.set(def)
-                authRequestPeer = peer
-                runCatching { kotlinx.coroutines.runBlocking { def.await() } }.getOrDefault(false)
-            }
-        }
-        var keyRequestWrong by remember { mutableStateOf<Boolean?>(null) }
-        val keyDecision = remember { java.util.concurrent.atomic.AtomicReference<kotlinx.coroutines.CompletableDeferred<String?>?>(null) }
-        LaunchedEffect(Unit) {
-            NetworkHandler_v1.onKeyRequest = { wrong ->
-                if (!NetworkHandler_v1.clientKeyPromptAllowed) {
-                    AppDebug.log("[CLIENT] key requested but prompting is disabled for this attempt")
-                    null
-                } else {
-                    val def = kotlinx.coroutines.CompletableDeferred<String?>()
-                    keyDecision.set(def)
-                    keyRequestWrong = wrong
-                    runCatching { def.await() }.getOrNull()
-                }
             }
         }
         val customColor = appSettings.customThemeColor?.toULong()?.let { Color(it) }
@@ -5374,19 +5522,6 @@ fun startGuiApplication(cliArgs: CliArgs) = application {
                         }
                     )
                 }
-                val clientDisconnectKeys = remember {
-                    setOf(
-                        "status_server_disconnected",
-                        "status_server_no_response",
-                        "status_handshake_failed",
-                        "status_protocol_incompatible",
-                        "status_server_silent_maybe_outdated",
-                        "status_server_busy",
-                        "status_unauthorized",
-                        "status_unsupported_format"
-                    )
-                }
-
                 val protocolMismatch by NetworkHandler_v1.protocolMismatch.collectAsState()
                 if (protocolMismatch != null) {
                     val mm = protocolMismatch!!
@@ -5455,26 +5590,6 @@ fun startGuiApplication(cliArgs: CliArgs) = application {
                 // in servizio: il divieto vale solo per il tentativo automatico
                 // che lo ha impostato.
                 val allowKeyPrompt: () -> Unit = { NetworkHandler_v1.clientKeyPromptAllowed = true }
-
-                val clientStatusHandler: (key: String, args: Array<out Any>) -> Unit = { key, args ->
-                    connectionStatus = if (args.isEmpty()) Strings.get(key) else Strings.get(key, *args)
-                    if (key in clientDisconnectKeys) {
-                        scope.launch {
-                            NetworkHandler_v1.stopCurrentStream()
-                            isStreaming = false
-                            connectionStatus = Strings.get("status_inactive")
-                            if (!isServer) {
-                                NetworkHandler_v1.beginDeviceDiscovery { hostname, serverInfo ->
-                                    if (serverInfo.lastSeen == 0L) {
-                                        discoveredDevices.remove(hostname)
-                                    } else {
-                                        discoveredDevices[hostname] = serverInfo
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
 
                 LaunchedEffect(Unit) {
                     if (appSettings.autoStartServer && isServer) {
@@ -5562,16 +5677,6 @@ fun startGuiApplication(cliArgs: CliArgs) = application {
                             } else {
                                 connectionStatus = if (args.isEmpty()) key else String.format(key, *args)
                             }
-                        }
-                    }
-                }
-
-                LaunchedEffect(Unit) {
-                    if (appSettings.autoConnectClientEnabled) {
-                        isServer = false
-                        discoveredDevices.clear(); NetworkHandler_v1.forgetDiscoveredAddresses()
-                        NetworkHandler_v1.beginDeviceDiscovery { hostname, serverInfo ->
-                            discoveredDevices[hostname] = serverInfo
                         }
                     }
                 }
@@ -5680,88 +5785,6 @@ fun startGuiApplication(cliArgs: CliArgs) = application {
                     }
                 }
 
-                LaunchedEffect(isStreaming) {
-                    if (!isStreaming) {
-                        lastDisconnectTime = System.currentTimeMillis()
-                    }
-                }
-
-                LaunchedEffect(isServer, appSettings.autoConnectClientEnabled, appSettings.autoConnectIps, selectedOutputDevice) {
-                    if (isServer || !appSettings.autoConnectClientEnabled || selectedOutputDevice == null) return@LaunchedEffect
-                    val targets = appSettings.activeAutoConnectTargets()
-                    if (targets.isEmpty()) return@LaunchedEffect
-
-                    val defaultPort = streamingPort.toIntOrNull() ?: 9090
-                    val mic = micPort.toIntOrNull() ?: 9092
-                    val retryMs = appSettings.autoConnectRetryDelaySec.coerceAtLeast(0) * 1000L
-                    val intervalMs = (appSettings.autoConnectIntervalSec.coerceAtLeast(1) * 1000L)
-
-                    while (isActive) {
-                        val currentTime = System.currentTimeMillis()
-                        val canReconnect = (currentTime - lastDisconnectTime) >= retryMs
-
-                        if (!isStreaming && canReconnect) {
-                            for (target in targets) {
-                                if (target.ip.isBlank() || isStreaming) continue
-
-                                // Ogni voce puo' avere la sua porta: due server sulla
-                                // stessa rete non sono obbligati a condividerla.
-                                val port = target.port ?: defaultPort
-                                val knownServer = discoveredDevices.values.find { it.ip == target.ip }
-                                val isOnline = knownServer != null || NetworkHandler_v1.pingServerUnicast(target.ip, port)
-                                if (!isOnline) continue
-
-                                // La chiave arriva dalla custodia di sistema, non dal
-                                // file di configurazione. Se la voce dichiara di
-                                // averne una ma la custodia non la restituisce
-                                // (keyring chiuso, profilo copiato altrove) si salta:
-                                // tentare senza chiave finirebbe comunque in un
-                                // rifiuto, ma dopo aver annunciato la nostra presenza.
-                                val storedKey = target.resolveKey()
-                                if (target.hasKey && storedKey == null) {
-                                    AppDebug.log("[AUTOCONNECT] key for ${target.displayName()} not available in ${SecretVault.label}, skipping")
-                                    connectionStatus = Strings.get("auto_connect_key_locked", target.displayName())
-                                    continue
-                                }
-
-                                NetworkHandler_v1.clientPresharedKey = storedKey.orEmpty()
-                                NetworkHandler_v1.clientKeyFromInvite = false
-                                NetworkHandler_v1.expectedMcastEpoch = null
-                                // Senza chiave salvata la finestra si apre solo se
-                                // l'utente ha scelto di essere interrotto.
-                                NetworkHandler_v1.clientKeyPromptAllowed =
-                                    appSettings.autoConnectPromptForKey
-
-                                val targetServer = knownServer ?: ServerInfo(target.ip, false, port, null)
-                                isStreaming = true
-                                connectionStatus = Strings.get("auto_connect_connecting", target.displayName())
-
-                                NetworkHandler_v1.endDeviceDiscovery()
-                                NetworkHandler_v1.launchClientInstance(
-                                    audioSettings, targetServer, selectedOutputDevice!!,
-                                    sendMicrophone, selectedClientMic, mic,
-                                    appSettings.connectionSoundEnabled,
-                                    appSettings.disconnectionSoundEnabled,
-                                    onAudioFrame = vizSink,
-                                    onStatusUpdate = clientStatusHandler
-                                )
-                                break
-                            }
-                        }
-                        delay(intervalMs)
-                    }
-                }
-                LaunchedEffect(Unit) {
-                    while (isActive) {
-                        val now = System.currentTimeMillis()
-                        // Rimuove i server che non si sentono da più di 12 secondi
-                        val toRemove = discoveredDevices.filter { now - it.value.lastSeen > 12000L || it.value.lastSeen == 0L }.keys
-                        if (toRemove.isNotEmpty()) {
-                            toRemove.forEach { discoveredDevices.remove(it) }
-                        }
-                        delay(5000)
-                    }
-                }
                 Column(Modifier.fillMaxSize()) {
                     Box(Modifier.fillMaxSize()) {
                         AppContent(
