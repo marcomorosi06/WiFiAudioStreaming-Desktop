@@ -284,8 +284,6 @@ Copyright (c) 2025-2026 Marco Morosi and contributors.
 
 This project is licensed under the **European Union Public Licence v1.2 (EUPL v1.2)**, except for the two sound files listed below.
 
-It started as a personal script. Then it grew. Then I rewrote the audio engine during exam season, which is when I realized I had become genuinely invested in it, and that the license deserved a second thought. MIT lets anyone take the code and close it off. EUPL does not.
-
 **You are free to:**
 - Use, modify, and distribute the software
 - Use it for commercial purposes
