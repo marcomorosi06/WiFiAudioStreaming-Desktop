@@ -4659,7 +4659,11 @@ private fun runInteractiveSetup(isHeadless: Boolean): SetupAction {
     val options = mutableListOf<Option>()
     if (!isHeadless) options += Option("Open GUI", SetupAction.GUI)
     val alreadyInstalled = CliPathInstaller.isInstalled()
-    val pathDetail = if (CliPathInstaller.isWindows) "" else "  (~/.local/bin/wfas + man wfas)"
+    val pathDetail = when {
+        CliPathInstaller.isWindows -> ""
+        CliPathInstaller.isMac     -> "  (/usr/local/bin/wfas, asks for your password)"
+        else                       -> "  (~/.local/bin/wfas + man wfas)"
+    }
     options += Option(
         (if (alreadyInstalled) "Reinstall wfas to PATH" else "Add wfas to PATH") + pathDetail,
         SetupAction.DONE
@@ -4681,8 +4685,8 @@ private fun runInteractiveSetup(isHeadless: Boolean): SetupAction {
                 println("  ✓  Done.\n     Restart your terminal and run: wfas --help\n     Then try: man wfas")
             is CliPathInstaller.InstallResult.Failure ->
                 System.err.println("  ✗  ${result.reason}")
-            is CliPathInstaller.InstallResult.TerminalLaunched ->
-                println("  ✓  Terminal launched for installation.")
+            is CliPathInstaller.InstallResult.Cancelled ->
+                println("  Installation cancelled.")
         }
         println()
         return SetupAction.EXIT
@@ -5216,25 +5220,22 @@ fun startGuiApplication(cliArgs: CliArgs) = application {
             val trayMode = cliArgs.trayMode ?: appSettings.linuxTray
             AppDebug.log("[TRAY] ${LinuxTray.describe(trayMode)}")
 
+            var toggleItem: dorkbox.systemTray.MenuItem? = null
             val created = LinuxTray.install(trayMode, iconUrl, "WiFi Audio Streaming") { linuxTray ->
-                val toggleItem = dorkbox.systemTray.MenuItem(Strings.get("tray_show_window"))
-
-                toggleItem.setCallback {
-                    isWindowVisible = !isWindowVisible
-                    if (isWindowVisible) {
-                        windowState.isMinimized = false
-                        toggleItem.text = Strings.get("tray_hide_window")
-                    } else {
-                        toggleItem.text = Strings.get("tray_show_window")
-                    }
+                val item = dorkbox.systemTray.MenuItem(Strings.get("tray_show_window"))
+                // The label is kept in sync below, from the window state.
+                item.setCallback {
+                    if (isWindowVisible) isWindowVisible = false
+                    else showAndRaise()
                 }
+                toggleItem = item
 
                 val quitItem = dorkbox.systemTray.MenuItem(Strings.get("tray_quit")) {
                     linuxTray.shutdown()
                     performQuit()
                 }
 
-                linuxTray.menu.add(toggleItem)
+                linuxTray.menu.add(item)
                 linuxTray.menu.add(dorkbox.systemTray.Separator())
                 linuxTray.menu.add(quitItem)
             }
@@ -5244,6 +5245,13 @@ fun startGuiApplication(cliArgs: CliArgs) = application {
             if (created) {
                 launch {
                     CaptureMonitor.active.collect { LinuxTray.reflectCapture(it) }
+                }
+                // The window is also shown by the key prompt and hidden by
+                // closing it, not only from this menu: follow its real state.
+                launch {
+                    snapshotFlow { isWindowVisible }.collect { visible ->
+                        toggleItem?.text = Strings.get(if (visible) "tray_hide_window" else "tray_show_window")
+                    }
                 }
             }
 
@@ -5275,17 +5283,31 @@ fun startGuiApplication(cliArgs: CliArgs) = application {
     }
     var keyRequestWrong by remember { mutableStateOf<Boolean?>(null) }
     val keyDecision = remember { java.util.concurrent.atomic.AtomicReference<kotlinx.coroutines.CompletableDeferred<String?>?>(null) }
+    // Auto-connect targets ("ip:port") whose key prompt the user cancelled.
+    // They are still retried, but without prompting, until the next manual
+    // connection: a server that keeps rejecting us must not keep raising the
+    // window and stealing focus.
+    val keyPromptDeclined = remember { java.util.concurrent.ConcurrentHashMap.newKeySet<String>() }
+    // Target of the auto-connect attempt in progress; null for manual connections.
+    val autoConnectAttempt = remember { java.util.concurrent.atomic.AtomicReference<String?>(null) }
     LaunchedEffect(Unit) {
         NetworkHandler_v1.onKeyRequest = { wrong ->
             if (!NetworkHandler_v1.clientKeyPromptAllowed) {
                 AppDebug.log("[CLIENT] key requested but prompting is disabled for this attempt")
                 null
             } else {
+                val attempt = autoConnectAttempt.get()
                 val def = kotlinx.coroutines.CompletableDeferred<String?>()
                 keyDecision.set(def)
                 showAndRaise()
                 keyRequestWrong = wrong
-                runCatching { def.await() }.getOrNull()
+                val answer = runCatching { def.await() }.getOrNull()
+                // The client treats a blank key like Cancel.
+                if (answer.isNullOrBlank() && attempt != null) {
+                    keyPromptDeclined.add(attempt)
+                    AppDebug.log("[AUTOCONNECT] key prompt cancelled for $attempt, not asking again until a manual connection")
+                }
+                answer
             }
         }
     }
@@ -5324,7 +5346,12 @@ fun startGuiApplication(cliArgs: CliArgs) = application {
     }
 
     LaunchedEffect(Unit) {
-        if (appSettings.autoConnectClientEnabled) {
+        // With both options on, the auto-started server wins, as it did before
+        // this block moved out of Window: switching to client mode here would
+        // run before the auto-start check and keep the server from starting.
+        if (appSettings.autoConnectClientEnabled && appSettings.autoStartServer) {
+            AppDebug.log("[AUTOCONNECT] skipped at startup: auto-start server takes precedence")
+        } else if (appSettings.autoConnectClientEnabled) {
             isServer = false
             discoveredDevices.clear(); NetworkHandler_v1.forgetDiscoveredAddresses()
             NetworkHandler_v1.beginDeviceDiscovery { hostname, serverInfo ->
@@ -5339,17 +5366,25 @@ fun startGuiApplication(cliArgs: CliArgs) = application {
         }
     }
 
+    // The port fields change on every keystroke: restart the auto-connect loop
+    // only once the value has settled, never on a half-typed port.
+    var autoConnectPorts by remember { mutableStateOf(streamingPort to micPort) }
+    LaunchedEffect(streamingPort, micPort) {
+        delay(1500)
+        autoConnectPorts = streamingPort to micPort
+    }
+
     LaunchedEffect(
         isServer, appSettings.autoConnectClientEnabled, appSettings.autoConnectIps,
-        selectedOutputDevice, streamingPort, micPort, appSettings.autoConnectIntervalSec,
+        selectedOutputDevice, autoConnectPorts, appSettings.autoConnectIntervalSec,
         appSettings.autoConnectRetryDelaySec
     ) {
         if (isServer || !appSettings.autoConnectClientEnabled || selectedOutputDevice == null) return@LaunchedEffect
         val targets = appSettings.activeAutoConnectTargets()
         if (targets.isEmpty()) return@LaunchedEffect
 
-        val defaultPort = streamingPort.toIntOrNull() ?: 9090
-        val mic = micPort.toIntOrNull() ?: 9092
+        val defaultPort = autoConnectPorts.first.toIntOrNull() ?: 9090
+        val mic = autoConnectPorts.second.toIntOrNull() ?: 9092
         val retryMs = appSettings.autoConnectRetryDelaySec.coerceAtLeast(0) * 1000L
         val intervalMs = (appSettings.autoConnectIntervalSec.coerceAtLeast(1) * 1000L)
 
@@ -5386,8 +5421,11 @@ fun startGuiApplication(cliArgs: CliArgs) = application {
                     NetworkHandler_v1.expectedMcastEpoch = null
                     // Senza chiave salvata la finestra si apre solo se
                     // l'utente ha scelto di essere interrotto.
+                    // A target whose prompt was cancelled is not asked again.
+                    val attemptId = "${target.ip}:$port"
+                    autoConnectAttempt.set(attemptId)
                     NetworkHandler_v1.clientKeyPromptAllowed =
-                        appSettings.autoConnectPromptForKey
+                        appSettings.autoConnectPromptForKey && attemptId !in keyPromptDeclined
 
                     val targetServer = knownServer ?: ServerInfo(target.ip, false, port, null)
                     isStreaming = true
@@ -5589,7 +5627,13 @@ fun startGuiApplication(cliArgs: CliArgs) = application {
                 // Ogni connessione avviata a mano riporta la finestra della chiave
                 // in servizio: il divieto vale solo per il tentativo automatico
                 // che lo ha impostato.
-                val allowKeyPrompt: () -> Unit = { NetworkHandler_v1.clientKeyPromptAllowed = true }
+                // A manual connection also forgets the targets whose prompt was
+                // cancelled during auto-connect.
+                val allowKeyPrompt: () -> Unit = {
+                    autoConnectAttempt.set(null)
+                    keyPromptDeclined.clear()
+                    NetworkHandler_v1.clientKeyPromptAllowed = true
+                }
 
                 LaunchedEffect(Unit) {
                     if (appSettings.autoStartServer && isServer) {
@@ -5769,6 +5813,8 @@ fun startGuiApplication(cliArgs: CliArgs) = application {
                             } ?: return@LaunchedEffect
 
                             connectionStatus = "Connecting to ${serverInfo.ip}..."
+                            // Requested explicitly on the command line: same as a manual connection.
+                            allowKeyPrompt()
                             NetworkHandler_v1.endDeviceDiscovery()
                             NetworkHandler_v1.launchClientInstance(
                                 audioSettings, serverInfo, selectedOutputDevice!!,

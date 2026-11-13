@@ -43,3 +43,34 @@ bin/
 
 ### Mac OS ###
 .DS_Store
+._*
+
+### Windows ###
+Thumbs.db
+desktop.ini
+
+### Native engine built locally by copyNativeLib ###
+# The Windows DLL in native/windows/ is tracked on purpose: do not ignore it.
+src/main/resources/native/linux/
+src/main/resources/native/macos/
+
+### Patches and merge leftovers ###
+*.patch
+*.diff
+*.orig
+*.rej
+*.mbox
+
+### Python ###
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+### Editors and temp files ###
+*.swp
+*.swo
+*~
+*.tmp
+*.log
+local.properties

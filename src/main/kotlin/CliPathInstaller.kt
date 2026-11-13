@@ -29,8 +29,9 @@ object CliPathInstaller {
     private val WINDOWS_VM_OPTIONS = listOf("-XX:UseAVX=2")
 
     sealed class InstallResult {
-        object Success          : InstallResult()
-        object TerminalLaunched : InstallResult()
+        object Success   : InstallResult()
+        /** The user dismissed the macOS administrator prompt: not an error. */
+        object Cancelled : InstallResult()
         data class Failure(val reason: String) : InstallResult()
     }
 
@@ -197,10 +198,12 @@ object CliPathInstaller {
         }
         isLinux -> wfasScriptFile().exists()
         else    -> {
+            // Same canonical comparison used by installMac() to verify the link,
+            // so a fresh install is never reported as missing.
             val link = File(macSymlinkTarget)
-            if (!link.exists()) false
-            else runCatching { link.canonicalPath }.getOrNull() ==
-                    ProcessHandle.current().info().command().orElse(null)
+            val exe = ProcessHandle.current().info().command().orElse(null)
+            if (!link.exists() || exe == null) false
+            else runCatching { link.canonicalFile == File(exe).canonicalFile }.getOrDefault(false)
         }
     }
 
@@ -347,10 +350,21 @@ object CliPathInstaller {
         }
     }
 
+    private fun shellQuote(s: String): String = "'" + s.replace("'", "'\"'\"'") + "'"
+
+    /**
+     * The link command run as root. -n (BSD alias of -h) never follows an
+     * existing link at the destination: without it, a symlink to a directory
+     * at /usr/local/bin/wfas (user-writable with Homebrew on Intel Macs) would
+     * make root create the new link inside that directory instead of
+     * replacing it. "--" ends option parsing before the path.
+     */
+    internal fun macLinkCommand(exePath: String, target: String = macSymlinkTarget): String =
+        "/bin/ln -sfn -- ${shellQuote(exePath)} ${shellQuote(target)}"
+
     internal fun macInstallScript(exePath: String): String {
         // Shell quoting and AppleScript string quoting are separate layers.
-        val quotedPath = "'" + exePath.replace("'", "'\"'\"'") + "'"
-        val cmd = "/bin/mkdir -p /usr/local/bin && /bin/ln -sf $quotedPath $macSymlinkTarget"
+        val cmd = "/bin/mkdir -p /usr/local/bin && " + macLinkCommand(exePath)
         val escapedCommand = cmd.replace("\\", "\\\\").replace("\"", "\\\"")
         // Standard Additions runs a noninteractive system shell and displays the
         // macOS authorization dialog. Never inject commands into a user's shell
@@ -368,7 +382,10 @@ object CliPathInstaller {
                 .start()
             val output = process.inputStream.bufferedReader().use { it.readText() }.trim()
             val exitCode = process.waitFor()
-            if (exitCode != 0) {
+            if (exitCode != 0 && output.contains("(-128)")) {
+                // errAEUserCanceled: Cancel was pressed in the password dialog.
+                InstallResult.Cancelled
+            } else if (exitCode != 0) {
                 InstallResult.Failure("CLI installation failed (osascript exit $exitCode): $output")
             } else if (File(macSymlinkTarget).exists() &&
                 File(macSymlinkTarget).canonicalFile == File(exePath).canonicalFile) {

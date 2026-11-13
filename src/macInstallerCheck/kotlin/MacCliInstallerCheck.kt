@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2026 Marco Morosi
+ * Copyright (c) 2026 Marco Morosi and contributors
  *
  * Licensed under the EUPL, Version 1.2 or – as soon they will be approved by
  * the European Commission - subsequent versions of the EUPL (the "Licence");
@@ -17,7 +17,10 @@
 
 import java.nio.file.Files
 
-/** Checks both quoting layers without installing a link or launching Terminal. */
+/**
+ * Checks both quoting layers and the link flags without touching
+ * /usr/local/bin or asking for administrator rights.
+ */
 fun main() {
     val paths = listOf(
         "/Applications/WiFi Audio Streaming.app/Contents/MacOS/WiFi Audio Streaming",
@@ -44,11 +47,11 @@ fun main() {
                 decoded.append(literal[i++])
             } else decoded.append(ch)
         }
-        check(decoded.startsWith("/bin/mkdir -p /usr/local/bin && /bin/ln -sf "))
+        check(decoded.startsWith("/bin/mkdir -p /usr/local/bin && /bin/ln -sfn -- "))
         if (shell != null) {
             // Replace the installation operation with printf: verify the shell sees
             // exactly one executable argument, with no expansion or execution.
-            val args = decoded.toString().substringAfter("/bin/ln -sf ")
+            val args = decoded.toString().substringAfter("/bin/ln -sfn -- ")
             val proc = ProcessBuilder(shell).start()
             proc.outputStream.bufferedWriter().use { it.write("printf '%s\\000' $args\n") }
             val output = proc.inputStream.readBytes().toString(Charsets.UTF_8)
@@ -68,6 +71,35 @@ fun main() {
                 dir.deleteRecursively()
             }
         }
+        if (shell != null) checkLinkDoesNotFollowExistingLink(shell, path)
     }
     println("macOS CLI installer quoting checks passed")
+}
+
+/**
+ * Runs the real link command against a scratch destination that is already a
+ * symlink to a directory. The link must be replaced in place; nothing may be
+ * created inside the directory it pointed to.
+ */
+private fun checkLinkDoesNotFollowExistingLink(shell: String, exePath: String) {
+    val dir = Files.createTempDirectory("wfas-ln-check").toFile()
+    try {
+        val decoy = dir.resolve("decoy").apply { mkdirs() }
+        val dest = dir.resolve("wfas").toPath()
+        Files.createSymbolicLink(dest, decoy.toPath())
+        val proc = ProcessBuilder(shell).redirectErrorStream(true).start()
+        proc.outputStream.bufferedWriter().use {
+            it.write(CliPathInstaller.macLinkCommand(exePath, dest.toString()) + "\n")
+        }
+        val output = proc.inputStream.bufferedReader().readText()
+        check(proc.waitFor() == 0) { output }
+        check(decoy.list().isNullOrEmpty()) { "ln followed the existing link into its directory" }
+        check(Files.isSymbolicLink(dest)) { "Destination is no longer a symlink" }
+        check(Files.readSymbolicLink(dest).toString() == exePath) { "Symlink does not point to the executable" }
+    } finally {
+        // Remove the link itself first: deleteRecursively() would otherwise
+        // walk into whatever it points to.
+        Files.deleteIfExists(dir.resolve("wfas").toPath())
+        dir.deleteRecursively()
+    }
 }

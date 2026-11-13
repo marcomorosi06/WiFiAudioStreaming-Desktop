@@ -888,39 +888,53 @@ fun WelcomeScreen(
                                         Text(stringResource("cli_install_success_title"))
                                     }
                                 }
-                                is CliPathInstaller.InstallResult.TerminalLaunched -> {
-                                    FilledTonalButton(
-                                        onClick = {},
-                                        enabled = false,
-                                        modifier = Modifier.fillMaxWidth()
-                                    ) {
-                                        Icon(Icons.Outlined.OpenInNew, contentDescription = null, modifier = Modifier.size(18.dp))
-                                        Spacer(Modifier.width(8.dp))
-                                        Text(stringResource("cli_install_terminal_title"))
-                                    }
-                                }
                                 is CliPathInstaller.InstallResult.Failure -> {
                                     OutlinedButton(
-                                        onClick = { cliInstallResult = CliPathInstaller.install() },
+                                        enabled = !cliInstalling,
+                                        // install() can block on the macOS password
+                                        // dialog: never run it on the UI thread.
+                                        onClick = {
+                                            welcomeScope.launch(Dispatchers.IO) {
+                                                cliInstalling = true
+                                                try {
+                                                    cliInstallResult = CliPathInstaller.install()
+                                                        .takeUnless { it is CliPathInstaller.InstallResult.Cancelled }
+                                                } finally {
+                                                    cliInstalling = false
+                                                }
+                                            }
+                                        },
                                         modifier = Modifier.fillMaxWidth(),
                                         colors = ButtonDefaults.outlinedButtonColors(
                                             contentColor = MaterialTheme.colorScheme.error
                                         ),
                                         border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.error)
                                     ) {
-                                        Icon(Icons.Outlined.ErrorOutline, contentDescription = null, modifier = Modifier.size(18.dp))
+                                        if (cliInstalling) {
+                                            CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp)
+                                        } else {
+                                            Icon(Icons.Outlined.ErrorOutline, contentDescription = null, modifier = Modifier.size(18.dp))
+                                        }
                                         Spacer(Modifier.width(8.dp))
                                         Text(stringResource("cli_install_failure_title"))
                                     }
                                 }
+                                // A cancelled password dialog is mapped back to null
+                                // above, so this state is never stored; listed only
+                                // to keep the when exhaustive.
+                                is CliPathInstaller.InstallResult.Cancelled,
                                 null -> {
                                     OutlinedButton(
                                         enabled = !cliInstalling,
                                         onClick = {
                                             welcomeScope.launch(Dispatchers.IO) {
                                                 cliInstalling = true
-                                                cliInstallResult = CliPathInstaller.install()
-                                                cliInstalling = false
+                                                try {
+                                                    cliInstallResult = CliPathInstaller.install()
+                                                        .takeUnless { it is CliPathInstaller.InstallResult.Cancelled }
+                                                } finally {
+                                                    cliInstalling = false
+                                                }
                                             }
                                         },
                                         modifier = Modifier.fillMaxWidth()
@@ -1136,34 +1150,26 @@ fun SettingsScreen(
         )
     }
 
-    if (cliInstallResult != null) {
-        val result = cliInstallResult!!
+    val shownCliResult = cliInstallResult
+    // A cancelled password dialog needs no feedback, so it never opens this dialog.
+    if (shownCliResult != null && shownCliResult !is CliPathInstaller.InstallResult.Cancelled) {
+        val failure = shownCliResult as? CliPathInstaller.InstallResult.Failure
         AlertDialog(
             onDismissRequest = { cliInstallResult = null },
             icon = {
                 Icon(
-                    if (result is CliPathInstaller.InstallResult.Failure) Icons.Default.Error
-                    else Icons.Default.CheckCircle,
+                    if (failure != null) Icons.Default.Error else Icons.Default.CheckCircle,
                     contentDescription = null
                 )
             },
             title = {
                 Text(
-                    when (result) {
-                        is CliPathInstaller.InstallResult.Success          -> stringResource("cli_install_success_title")
-                        is CliPathInstaller.InstallResult.TerminalLaunched -> stringResource("cli_install_terminal_title")
-                        is CliPathInstaller.InstallResult.Failure          -> stringResource("cli_install_failure_title")
-                    }
+                    if (failure != null) stringResource("cli_install_failure_title")
+                    else stringResource("cli_install_success_title")
                 )
             },
             text = {
-                Text(
-                    when (result) {
-                        is CliPathInstaller.InstallResult.Success          -> stringResource("cli_install_success_body")
-                        is CliPathInstaller.InstallResult.TerminalLaunched -> stringResource("cli_install_terminal_body")
-                        is CliPathInstaller.InstallResult.Failure          -> result.reason
-                    }
-                )
+                Text(failure?.reason ?: stringResource("cli_install_success_body"))
             },
             confirmButton = {
                 TextButton(onClick = { cliInstallResult = null }) { Text(stringResource("ok")) }
@@ -1563,12 +1569,16 @@ fun SettingsScreen(
                                                 onClick = {
                                                     settingsScope.launch(Dispatchers.IO) {
                                                         cliInstalling = true
-                                                        val result = CliPathInstaller.install()
-                                                        cliInstallResult = result
-                                                        if (result is CliPathInstaller.InstallResult.Success) {
-                                                            cliIsInstalled = true
+                                                        try {
+                                                            val result = CliPathInstaller.install()
+                                                            cliInstallResult = result
+                                                                .takeUnless { it is CliPathInstaller.InstallResult.Cancelled }
+                                                            if (result is CliPathInstaller.InstallResult.Success) {
+                                                                cliIsInstalled = true
+                                                            }
+                                                        } finally {
+                                                            cliInstalling = false
                                                         }
-                                                        cliInstalling = false
                                                     }
                                                 }
                                             ) {
