@@ -875,7 +875,9 @@ object NetworkHandler_v1 {
 
     // ── Device enumeration ────────────────────────────────────────────────────
     fun allMixers(): List<Mixer.Info> =
-        runCatching { AudioSystem.getMixerInfo().toList() }.getOrDefault(emptyList())
+        runCatching { AudioSystem.getMixerInfo().toList() }
+            .onFailure { AppDebug.log("[AUDIO] Java Sound device enumeration failed: $it") }
+            .getOrDefault(emptyList())
 
     fun isPortMixer(info: Mixer.Info): Boolean = info.name.startsWith("Port", ignoreCase = true)
 
@@ -4694,7 +4696,29 @@ private fun runInteractiveSetup(isHeadless: Boolean): SetupAction {
     return selected.action
 }
 
+/**
+ * Binds Java Sound to the system ALSA library before anything loads FFmpeg
+ * (issues #22 and #31).
+ *
+ * On linux-arm the Bytedeco FFmpeg jar preloads its own libasound.so.2, built
+ * with the configuration paths of Bytedeco's build machine, which do not exist
+ * on the user's system. Whichever libasound.so.2 is loaded first is the one
+ * the dynamic linker hands to Java Sound's libjsound: when FFmpeg came first,
+ * Java Sound could not read alsa.conf and saw no device at all, while
+ * 'wfas devices', which exits before FFmpeg loads, listed them correctly.
+ *
+ * Initializing Java Sound first loads the system libasound.so.2; FFmpeg then
+ * resolves libasound.so.2 to that same, already loaded, library.
+ */
+private fun bindJavaSoundToSystemAlsa() {
+    if (!System.getProperty("os.name").lowercase().contains("linux")) return
+    runCatching { AudioSystem.getMixerInfo() }
+}
+
 fun main(args: Array<String>) {
+    // Must run before anything touches FFmpeg/JavaCPP: see the function above.
+    bindJavaSoundToSystemAlsa()
+
     System.setOut(java.io.PrintStream(System.out, true, "UTF-8"))
     System.setErr(java.io.PrintStream(System.err, true, "UTF-8"))
 
