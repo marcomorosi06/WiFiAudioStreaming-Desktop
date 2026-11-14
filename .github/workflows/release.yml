@@ -33,7 +33,10 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [windows-latest, ubuntu-latest, macos-latest, ubuntu-24.04-arm]
+        # macos-latest is Apple Silicon (arm64). macos-15-intel builds the
+        # Intel (x86_64) packages (issue #34); GitHub retires its Intel macOS
+        # runners in fall 2027, together with the macOS 15 image.
+        os: [windows-latest, ubuntu-latest, macos-latest, macos-15-intel, ubuntu-24.04-arm]
     runs-on: ${{ matrix.os }}
 
     # Minimal token permissions for the job. Everything not defined here is dropped

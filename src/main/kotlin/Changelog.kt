@@ -108,52 +108,6 @@ object Changelog {
 
     val entries: List<ChangelogEntry> = listOf(
         ChangelogEntry(
-            version = "1.2.1",
-            date = Bilingual("November 2026", "Novembre 2026"),
-            headline = Bilingual(
-                "Fixes for running in the background and for macOS, contributed by Matt Cribbs, and for silent streams on Windows.",
-                "Correzioni per l'uso in background e per macOS, con il contributo di Matt Cribbs, e per gli streaming muti su Windows."
-            ),
-            items = listOf(
-                ChangelogItem(
-                    icon = Icons.Outlined.Computer,
-                    title = Bilingual("Works properly from the tray", "Funziona bene anche dalla tray"),
-                    body = Bilingual(
-                        "If the app starts minimized to the tray, automatic connection to your servers now starts right away instead of waiting for you to open the window. On macOS the app leaves the Dock while its window is hidden, and opening the app again brings the window back.",
-                        "Se l'app parte ridotta nella tray, la connessione automatica ai tuoi server ora parte subito, senza aspettare che tu apra la finestra. Su macOS l'app esce dal Dock mentre la finestra resta nascosta, e riaprendo l'app torna la sua finestra."
-                    ),
-                    linkLabel = Bilingual("See the contribution on GitHub", "Vedi il contributo su GitHub"),
-                    linkUrl = "https://github.com/marcomorosi06/WiFiAudioStreaming-Desktop/pull/37"
-                ),
-                ChangelogItem(
-                    icon = Icons.Outlined.Terminal,
-                    title = Bilingual("Easier wfas setup on macOS", "Installazione di wfas su macOS semplificata"),
-                    body = Bilingual(
-                        "Adding the wfas command to the PATH now asks for your password in the standard macOS dialog, without opening a Terminal window.",
-                        "Per aggiungere il comando wfas al PATH ora basta inserire la password nella finestra standard di macOS, senza aprire il Terminale."
-                    )
-                ),
-                ChangelogItem(
-                    icon = Icons.Outlined.Lock,
-                    title = Bilingual("Fewer key requests", "Meno richieste della chiave"),
-                    body = Bilingual(
-                        "If you cancel the key request during automatic connection, the app stops asking for that server until you connect to it yourself.",
-                        "Se annulli la richiesta della chiave durante la connessione automatica, l'app smette di chiederla per quel server fino alla tua prossima connessione manuale."
-                    )
-                ),
-                ChangelogItem(
-                    icon = Icons.Outlined.GraphicEq,
-                    title = Bilingual("No more silent streams on Windows", "Niente piu' streaming muti su Windows"),
-                    body = Bilingual(
-                        "On some Windows audio devices, muting the speakers while streaming also silenced the stream, and it stayed silent even after a restart. The app now notices it, keeps those speakers unmuted and remembers the device.",
-                        "Su alcuni dispositivi audio di Windows, silenziare gli altoparlanti durante lo streaming rendeva muto anche lo streaming, e restava muto anche dopo un riavvio. Ora l'app se ne accorge, lascia attivi quegli altoparlanti e si ricorda del dispositivo."
-                    ),
-                    linkLabel = Bilingual("See the report on GitHub", "Vedi la segnalazione su GitHub"),
-                    linkUrl = "https://github.com/marcomorosi06/WiFiAudioStreaming-Desktop/issues/35"
-                )
-            )
-        ),
-        ChangelogEntry(
             version = "1.2",
             date = Bilingual("August 2026", "Agosto 2026"),
             headline = Bilingual(
