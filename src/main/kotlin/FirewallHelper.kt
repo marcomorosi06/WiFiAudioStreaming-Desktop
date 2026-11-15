@@ -89,9 +89,19 @@ object FirewallHelper {
         !out.contains("No rules match", ignoreCase = true) && out.contains(name)
     }.getOrDefault(false)
 
+    // Inside a single-quoted PowerShell string the only special character is the
+    // quote, written twice; PowerShell also accepts the typographic single quotes
+    // as delimiters, so they are doubled too. This string runs elevated.
+    private fun psQuote(s: String): String = buildString(s.length + 4) {
+        for (c in s) {
+            append(c)
+            if (c == '\'' || c == '\u2018' || c == '\u2019' || c == '\u201A' || c == '\u201B') append(c)
+        }
+    }
+
     private fun applyElevated(ports: List<Int>, tcpPorts: List<Int>) {
         val exe = ProcessHandle.current().info().command().orElse(null)
-        val exeEsc = exe?.replace("'", "''")
+        val exeEsc = exe?.let { psQuote(it) }
         val portList = ports.joinToString(",")
         val script = buildString {
             appendLine("netsh advfirewall firewall delete rule name=$RULE_PORT dir=in 2>\$null | Out-Null")

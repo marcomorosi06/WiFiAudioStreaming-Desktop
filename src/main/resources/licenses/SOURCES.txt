@@ -15,8 +15,8 @@ appimage-type2-runtime/LICENSE
     https://github.com/AppImage/type2-runtime  20251108  commit dd6cebedcbddde9c82f89b011e8e1d40b6e43868  LICENSE
     sha256 aa154fc9070614bbe7921f89db11efd1dba7a1f3a41685958110e2230f9c0ca1
 bouncycastle/LICENSE.html
-    https://github.com/bcgit/bc-java  r1rv78v1  commit ada71e4cf20c990e045a57ee1d42378d84050e03  LICENSE.html
-    sha256 edbbb10380b1271998b867a2e36b1cbee226e03d438726e1a91f80c5dde11849
+    https://github.com/bcgit/bc-java  r1rv86  commit eacda831fbe15b272933e40841d8b0827b556fae  LICENSE.html
+    sha256 afaf5bd0b0d869dc86b71711e1b775b204948634c9710a35a9a70d1613a2ab14
 bytedeco-javacpp-presets/LICENSE.txt
     https://github.com/bytedeco/javacpp-presets  1.5.10  commit e4d04dec6447ae154a05b140b145c580948f8273  LICENSE.txt
     sha256 bd5f6b1276fd448f016115dcd4a39ee6f5e3ce32441a0cccdb9e6370e9df5434

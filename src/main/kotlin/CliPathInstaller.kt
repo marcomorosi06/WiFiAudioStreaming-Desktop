@@ -98,7 +98,7 @@ object CliPathInstaller {
     private fun isInWindowsUserPath(dir: String): Boolean {
         val ps = """
             ${'$'}cur = [Environment]::GetEnvironmentVariable('PATH', 'User')
-            if ((${'$'}cur -split ';') -contains '$dir') { exit 0 } else { exit 1 }
+            if ((${'$'}cur -split ';') -contains '${psQuote(dir)}') { exit 0 } else { exit 1 }
         """.trimIndent()
         return runCatching {
             ProcessBuilder("powershell", "-NoProfile", "-NonInteractive", "-Command", ps)
@@ -272,7 +272,7 @@ object CliPathInstaller {
 
         val dir = wfasDir.absolutePath
         val psAddPath = """
-            ${'$'}dir = '$dir'
+            ${'$'}dir = '${psQuote(dir)}'
             ${'$'}scope = 'User'
             ${'$'}cur = [Environment]::GetEnvironmentVariable('PATH', ${'$'}scope)
             ${'$'}entries = (${'$'}cur -split ';') | Where-Object { ${'$'}_ -ne ${'$'}dir -and ${'$'}_ -ne '' }
@@ -347,6 +347,17 @@ object CliPathInstaller {
             runCatching {
                 if (f.exists() && !f.readText().contains(manBase)) f.appendText(exportLine)
             }
+        }
+    }
+
+    // Inside a single-quoted PowerShell string the only special character is the
+    // quote, written twice; PowerShell also accepts the typographic single quotes
+    // as delimiters, so they are doubled too. A profile path such as
+    // C:\Users\O'Brien would otherwise end the string early and run the rest.
+    private fun psQuote(s: String): String = buildString(s.length + 4) {
+        for (c in s) {
+            append(c)
+            if (c == '\'' || c == '\u2018' || c == '\u2019' || c == '\u201A' || c == '\u201B') append(c)
         }
     }
 

@@ -207,6 +207,9 @@ object LinuxTray {
         }
 
         val sni = statusNotifierAvailable()
+        // Again here, right before the first dorkbox class loads: main() may not
+        // be the entry point (tests, embedding), and the call is idempotent.
+        DorkboxUpdates.disable()
         tune(preferAppIndicator = sni)
 
         // Il marcatore vive solo per la durata della creazione: se il processo

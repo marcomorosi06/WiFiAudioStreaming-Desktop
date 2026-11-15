@@ -12,6 +12,9 @@ concurrency:
   group: build-${{ github.ref }}
   cancel-in-progress: true
 
+# Actions are pinned to a commit: a tag can be moved to other code after the
+# fact, a commit cannot. The comment names the tag each SHA was resolved from
+# (2026-11-15); update both together.
 env:
   # The Java runtime bundled in every package. Pinned, so that the source code
   # the "sources" job attaches (OpenJDK17U-jdk-sources_<version>) is exactly the
@@ -45,11 +48,13 @@ jobs:
 
     steps:
       - name: Checkout Repository
-        uses: actions/checkout@v6
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
 
       # Java 17 (Eclipse Temurin, exact version): jpackage bundles it in the packages
       - name: Setup Java 17
-        uses: actions/setup-java@v5
+        uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5
         with:
           distribution: 'temurin'
           java-version: ${{ env.TEMURIN_VERSION }}
@@ -68,7 +73,7 @@ jobs:
 
       # Establish isolated Gradle build environment with security validation
       - name: Setup Gradle
-        uses: gradle/actions/setup-gradle@v6
+        uses: gradle/actions/setup-gradle@8da46b539cd8fe6ab27ca75128919a18d757604c # v6
         with:
           validate-wrappers: true # Verifies integrity of the wrapper file to prevent malicious dependency injection
           cache-provider: basic   # Abides by standard open-source caching rules
@@ -169,7 +174,7 @@ jobs:
 
       # Upload built binaries as artifacts for later use in the release job
       - name: Upload Desktop Artifacts
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
         with:
           name: desktop-artifacts-${{ matrix.os }}
           path: |
@@ -192,7 +197,9 @@ jobs:
       contents: read
     steps:
       - name: Checkout Repository
-        uses: actions/checkout@v6
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
 
       - name: Pack the sources
         shell: bash
@@ -204,7 +211,7 @@ jobs:
           mv "$RUNNER_TEMP/$name" "sources-out/$name"
 
       - name: Upload the source archive
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
         with:
           name: third-party-sources
           path: sources-out/*.tar
@@ -226,11 +233,13 @@ jobs:
 
     steps:
       - name: Checkout Repository
-        uses: actions/checkout@v6
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
 
       # Aggregate the outputs from every matrix configuration into one directory
       - name: Download All Artifacts
-        uses: actions/download-artifact@v7
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
         with:
           path: ./release-assets
           pattern: desktop-artifacts-*
@@ -238,14 +247,14 @@ jobs:
 
       # The third-party source archive goes in the same release as the packages
       - name: Download the Third-Party Source Archive
-        uses: actions/download-artifact@v7
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
         with:
           name: third-party-sources
           path: ./release-assets
 
       # Generates Sigstore-backed build certificates asserting where and how your desktop binaries were built
       - name: Generate Build Provenance Attestation
-        uses: actions/attest-build-provenance@v3
+        uses: actions/attest-build-provenance@977bb373ede98d70efdf65b84cb5f73e068dcc2a # v3
         with:
           subject-path: |
             ./release-assets/**/*.deb

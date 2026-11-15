@@ -153,7 +153,9 @@ object SnapcastWire {
     fun readString(payload: ByteArray, offset: Int = 0): String {
         if (payload.size < offset + 4) return ""
         val length = getI32(payload, offset)
-        if (length < 0 || offset + 4 + length > payload.size) return ""
+        // Long arithmetic: a length near Int.MAX_VALUE wraps an Int sum negative
+        // and would slip past the bound into an out-of-range read.
+        if (length < 0 || offset.toLong() + 4L + length.toLong() > payload.size) return ""
         return String(payload, offset + 4, length, Charsets.UTF_8)
     }
 

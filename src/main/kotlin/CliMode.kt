@@ -682,6 +682,15 @@ private suspend fun runCliServer(rawArgs: CliArgs, settings: AllSettings) {
     }
     viz?.start()
 
+    // The key and the encryption stop at WFAS: say so before the same audio goes
+    // out over the other protocols. On stderr, so that --json output on stdout
+    // stays machine-readable; a warning, not a prompt, so scripts keep working.
+    val unprotected = UnprotectedProtocols.of(args.rtp, args.http, args.dlna, args.snapcast)
+    if (UnprotectedProtocols.needsWarning(args.authMode, unprotected)) {
+        if (args.json) jsonLine("event" to "warning", "message" to UnprotectedProtocols.cliWarning(unprotected))
+        else err(yellow("!") + " " + UnprotectedProtocols.cliWarning(unprotected))
+    }
+
     NetworkHandler_v1.configureSecurity(args.authMode, args.authKey, args.encrypt)
     // 'wfas pair invite' da un altro terminale chiede l'invito a questo
     // processo, perche' e' qui che vive la chiave. Solo con --qr: su un server

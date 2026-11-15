@@ -17,7 +17,9 @@
 
 import java.io.File
 import java.nio.file.Files
+import java.nio.file.LinkOption
 import java.nio.file.attribute.PosixFilePermission
+import java.nio.file.attribute.PosixFilePermissions
 import java.security.SecureRandom
 import javax.crypto.Mac
 import javax.crypto.spec.SecretKeySpec
@@ -99,12 +101,51 @@ object IpcAuth {
             val user = System.getProperty("user.name")?.replace(Regex("[^A-Za-z0-9_.-]"), "_") ?: "user"
             File(System.getProperty("java.io.tmpdir"), "wfas-$user")
         }
-        if (!base.isDirectory) {
-            runCatching { base.mkdirs() }
-            lockDownDir(base)
-        }
-        return base
+        // In a shared temp directory the name is predictable, so another account
+        // can create it first and own it: then it is not used. The fallback lives
+        // in the home directory, which nobody else can write to. Server and
+        // client run the same checks, so they always agree on the place.
+        return secureDirOrNull(base)
+            ?: secureDirOrNull(File(System.getProperty("user.home"), ".cache/wfas/run"))
+            ?: base
     }
+
+    // Ownership and mode bits are only meaningful on POSIX file systems. On
+    // Windows the temp directory is per-user already, and files created by an
+    // administrator are owned by the Administrators group, not the account, so
+    // an owner check there would reject the app's own files.
+    private val posix: Boolean =
+        runCatching { java.nio.file.FileSystems.getDefault().supportedFileAttributeViews().contains("posix") }
+            .getOrDefault(false)
+
+    private val GROUP_OTHER = setOf(
+        PosixFilePermission.GROUP_READ, PosixFilePermission.GROUP_WRITE, PosixFilePermission.GROUP_EXECUTE,
+        PosixFilePermission.OTHERS_READ, PosixFilePermission.OTHERS_WRITE, PosixFilePermission.OTHERS_EXECUTE
+    )
+
+    /**
+     * The directory, created if missing, when it is a real directory (not a
+     * link) owned by this account and closed to everyone else; null otherwise.
+     * Permissions a little too open on a directory we own are tightened; one
+     * owned by someone else is never trusted, whatever its permissions.
+     */
+    private fun secureDirOrNull(dir: File): File? = runCatching {
+        if (!dir.exists()) {
+            dir.mkdirs()
+            lockDownDir(dir)
+        }
+        val path = dir.toPath()
+        if (!posix) return@runCatching dir.takeIf { it.isDirectory }
+        if (Files.isSymbolicLink(path) || !Files.isDirectory(path, LinkOption.NOFOLLOW_LINKS)) return@runCatching null
+        if (!ownedByCurrentUser(dir)) return@runCatching null
+        val perms = runCatching { Files.getPosixFilePermissions(path, LinkOption.NOFOLLOW_LINKS) }.getOrNull()
+        if (perms != null && perms.any { it in GROUP_OTHER }) {
+            lockDownDir(dir)
+            val after = Files.getPosixFilePermissions(path, LinkOption.NOFOLLOW_LINKS)
+            if (after.any { it in GROUP_OTHER }) return@runCatching null
+        }
+        dir
+    }.getOrNull()
 
     /** The legacy location, read only to detect outdated instances. */
     fun legacyDir(): File = File(System.getProperty("java.io.tmpdir"))
@@ -128,7 +169,18 @@ object IpcAuth {
         // would leave a window, however narrow, in which the token is readable by everyone.
         runCatching {
             f.parentFile?.let { if (!it.isDirectory) it.mkdirs(); lockDownDir(it) }
-            if (!f.exists()) f.createNewFile()
+            // Created fresh and exclusively, owner-only from the first byte. A file
+            // already there under this name (a reused pid) can only be ours, since
+            // runtimeDir() hands out a directory nobody else can write to.
+            val path = f.toPath()
+            Files.deleteIfExists(path)
+            try {
+                Files.createFile(path, PosixFilePermissions.asFileAttribute(
+                    setOf(PosixFilePermission.OWNER_READ, PosixFilePermission.OWNER_WRITE)
+                ))
+            } catch (_: UnsupportedOperationException) {
+                Files.createFile(path)
+            }
             lockDownFile(f)
             f.writeText(
                 buildString {
@@ -184,7 +236,10 @@ object IpcAuth {
                     runCatching { f.delete() }
                     continue
                 }
-                if (legacy && !ownedByCurrentUser(f)) continue
+                // A session file only counts if this account wrote it: the
+                // client is about to send its token and proofs to the port named
+                // inside.
+                if ((legacy || posix) && !ownedByCurrentUser(f)) continue
                 found += s
             }
         }

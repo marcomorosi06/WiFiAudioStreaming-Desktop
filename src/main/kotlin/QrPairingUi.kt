@@ -627,6 +627,10 @@ fun QrPairingBar(
             else "qr_pairing_deeplink_confirm_body_unicast",
             confirmKey = "qr_pairing_deeplink_confirm_connect",
             dismissKey = "qr_pairing_deeplink_confirm_ignore",
+            // A link can come from anywhere: say when it points off the local network.
+            notes = listOfNotNull(
+                if (!NetAddr.isLocalScope(payload.ip)) Strings.get("qr_pairing_public_ip") else null
+            ),
             onConfirm = {
                 QrPairingState.confirmPending()?.let {
                     QrPairingState.prepareClientForPairing(it)
@@ -701,6 +705,7 @@ fun QrSimpleDialog(
     dismissKey: String? = null,
     titleArg: String? = null,
     destructive: Boolean = false,
+    notes: List<String> = emptyList(),
     onConfirm: () -> Unit,
     onDismiss: () -> Unit
 ) {
@@ -711,7 +716,7 @@ fun QrSimpleDialog(
         title = {
             Text(if (titleArg != null) Strings.get(titleKey, titleArg) else Strings.get(titleKey))
         },
-        text = { Text(Strings.get(bodyKey)) },
+        text = { Text((listOf(Strings.get(bodyKey)) + notes).joinToString("\n\n")) },
         confirmButton = {
             Button(
                 onClick = onConfirm,

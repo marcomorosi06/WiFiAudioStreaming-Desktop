@@ -119,7 +119,7 @@ object SnapcastControlModel {
         return SnapServerStatus(
             groups = groups,
             streams = streams,
-            serverName = srv.field("host").stringAt("name") ?: "",
+            serverName = Ansi.printable(srv.field("host").stringAt("name") ?: ""),
             serverVersion = srv.field("snapserver").stringAt("version") ?: ""
         )
     }
@@ -128,7 +128,7 @@ object SnapcastControlModel {
         val id = g.stringAt("id") ?: return null
         return SnapGroupInfo(
             id = id,
-            name = g.stringAt("name") ?: "",
+            name = Ansi.printable(g.stringAt("name") ?: ""),
             muted = g.boolAt("muted") ?: false,
             streamId = g.stringAt("stream_id") ?: "",
             clients = g.field("clients").asArray().mapNotNull { parseClient(it) }
@@ -143,8 +143,8 @@ object SnapcastControlModel {
         val snapclient = c.field("snapclient")
         return SnapClientInfo(
             id = id,
-            name = config.stringAt("name") ?: "",
-            hostName = host.stringAt("name") ?: "",
+            name = Ansi.printable(config.stringAt("name") ?: ""),
+            hostName = Ansi.printable(host.stringAt("name") ?: ""),
             ip = host.stringAt("ip") ?: "",
             connected = c.boolAt("connected") ?: false,
             volumePercent = volume.intAt("percent") ?: 100,
@@ -183,7 +183,8 @@ object SnapcastControlModel {
 
             "Client.OnNameChanged" -> {
                 val id = params.stringAt("id") ?: return null
-                val name = params.stringAt("name") ?: return null
+                // Names come from the server and end up on the terminal.
+                val name = Ansi.printable(params.stringAt("name") ?: return null)
                 mapClients { if (it.id == id) it.copy(name = name) else it }
             }
 
@@ -208,7 +209,7 @@ object SnapcastControlModel {
 
             "Group.OnNameChanged" -> {
                 val id = params.stringAt("id") ?: return null
-                val name = params.stringAt("name") ?: return null
+                val name = Ansi.printable(params.stringAt("name") ?: return null)
                 current.copy(groups = current.groups.map { if (it.id == id) it.copy(name = name) else it })
             }
 

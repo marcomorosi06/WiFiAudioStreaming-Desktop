@@ -202,6 +202,8 @@ private class DlnaClient(
     var alive: Boolean = true
 }
 
+private const val MAX_DLNA_HANDLERS = 16
+
 class DlnaMediaServer(
     private val scope: CoroutineScope,
     private val port: Int,
@@ -215,6 +217,7 @@ class DlnaMediaServer(
     }
 
     private val clients = CopyOnWriteArrayList<DlnaClient>()
+    private val activeHandlers = java.util.concurrent.atomic.AtomicInteger(0)
     private val pcmQueue = ArrayBlockingQueue<ByteArray>(12)
 
     @Volatile
@@ -306,7 +309,18 @@ class DlnaMediaServer(
                     }
                     break
                 }
-                owner.launch(Dispatchers.IO) { handle(socket, owner) }
+                // Renderers cannot authenticate, so the port is open to the
+                // network: bound the requests in flight so one host cannot pile
+                // up handlers (each streaming one may also hold an encoder).
+                if (activeHandlers.incrementAndGet() > MAX_DLNA_HANDLERS) {
+                    activeHandlers.decrementAndGet()
+                    DlnaDiagnostics.record("media", "connection refused: $MAX_DLNA_HANDLERS requests already in flight")
+                    runCatching { socket.close() }
+                    continue
+                }
+                owner.launch(Dispatchers.IO) {
+                    try { handle(socket, owner) } finally { activeHandlers.decrementAndGet() }
+                }
             }
         } finally {
             runCatching { serverSocket.close() }

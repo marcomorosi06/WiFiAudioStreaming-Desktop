@@ -379,7 +379,7 @@ object DlnaHttp {
                 requestMethod = "GET"
                 connectTimeout = DlnaConst.CONNECT_TIMEOUT_MS
                 readTimeout = timeoutMs
-                instanceFollowRedirects = true
+                instanceFollowRedirects = false
                 setRequestProperty("User-Agent", DlnaConst.USER_AGENT)
                 setRequestProperty("Accept", "*/*")
                 setRequestProperty("Connection", "close")
@@ -498,7 +498,14 @@ object DlnaDeviceParser {
         val services = DlnaXml.descendants(deviceElement, "service").mapNotNull { service ->
             val type = DlnaXml.childText(service, "serviceType") ?: return@mapNotNull null
             val control = DlnaXml.childText(service, "controlURL") ?: return@mapNotNull null
-            type to DlnaService(type, resolve(baseUrl, control) ?: return@mapNotNull null)
+            val resolved = resolve(baseUrl, control) ?: return@mapNotNull null
+            // URLBase and controlURL come from the device itself: a control URL on
+            // another host would have this app POST to wherever the description says.
+            if (!DlnaUrls.sameHost(resolved, location)) {
+                DlnaDiagnostics.record("desc", "ignored control URL $resolved: not on the host of $location")
+                return@mapNotNull null
+            }
+            type to DlnaService(type, resolved)
         }
 
         fun pick(kind: String): DlnaService? =
@@ -511,9 +518,10 @@ object DlnaDeviceParser {
 
         val udn = DlnaXml.childText(deviceElement, "UDN")?.removePrefix("uuid:")?.trim()
             ?: location
-        val friendly = DlnaXml.childText(deviceElement, "friendlyName").orEmpty()
-        val manufacturer = DlnaXml.childText(deviceElement, "manufacturer").orEmpty()
-        val model = DlnaXml.childText(deviceElement, "modelName").orEmpty()
+        // These come from the device: printed by the CLI, so made printable.
+        val friendly = Ansi.printable(DlnaXml.childText(deviceElement, "friendlyName").orEmpty())
+        val manufacturer = Ansi.printable(DlnaXml.childText(deviceElement, "manufacturer").orEmpty())
+        val model = Ansi.printable(DlnaXml.childText(deviceElement, "modelName").orEmpty())
         val host = runCatching { URI(location).host }.getOrNull().orEmpty()
 
         DlnaDiagnostics.record(
@@ -541,6 +549,42 @@ object DlnaDeviceParser {
         if (trimmed.startsWith("http://", true) || trimmed.startsWith("https://", true)) trimmed
         else URI(base).resolve(if (trimmed.startsWith("/")) trimmed else "/$trimmed").toString()
     }.getOrNull()
+}
+
+/**
+ * Checks on the URLs a renderer hands out. They come from the network, so they
+ * are only followed when they are plain http(s) on the device that sent them:
+ * otherwise any host on the LAN could make this app send requests elsewhere.
+ */
+object DlnaUrls {
+    private fun hostOf(url: String): String? = runCatching {
+        val uri = URI(url.trim())
+        val scheme = uri.scheme?.lowercase()
+        if (scheme != "http" && scheme != "https") return@runCatching null
+        uri.host?.removeSurrounding("[", "]")?.substringBefore('%')?.ifBlank { null }
+    }.getOrNull()
+
+    private fun literal(host: String): InetAddress? {
+        // Never resolves a name: only literal addresses are compared.
+        val looksLiteral = host.contains(':') || host.all { it.isDigit() || it == '.' }
+        if (!looksLiteral) return null
+        return runCatching { InetAddress.getByName(host) }.getOrNull()
+    }
+
+    fun isOnHost(url: String, sender: InetAddress): Boolean {
+        val host = hostOf(url) ?: return false
+        val address = literal(host) ?: return false
+        return address.address.contentEquals(sender.address)
+    }
+
+    fun sameHost(url: String, other: String): Boolean {
+        val a = hostOf(url) ?: return false
+        val b = hostOf(other) ?: return false
+        if (a.equals(b, ignoreCase = true)) return true
+        val la = literal(a) ?: return false
+        val lb = literal(b) ?: return false
+        return la.address.contentEquals(lb.address)
+    }
 }
 
 object DlnaSsdp {
@@ -625,6 +669,10 @@ object DlnaSsdp {
                 val text = String(packet.data, 0, packet.length, Charsets.UTF_8)
                 val headers = parseHeaders(text)
                 val location = headers["location"] ?: continue
+                if (!DlnaUrls.isOnHost(location, packet.address)) {
+                    DlnaDiagnostics.record("ssdp", "ignored $location: not on ${packet.address.hostAddress}")
+                    continue
+                }
                 val searchTarget = headers["st"] ?: headers["nt"] ?: ""
                 val server = headers["server"] ?: ""
                 val interesting = searchTarget.contains("MediaRenderer", true) ||

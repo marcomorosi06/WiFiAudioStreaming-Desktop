@@ -86,13 +86,14 @@ https://private-user-images.githubusercontent.com/229497341/628825916-c36bb746-a
   Peers running an incompatible protocol version are rejected immediately during the handshake with a clear error, instead of hanging silently.
 
 - **Security & Encryption**
-  Optionally gate who can connect (**Off**, **Ask** to approve each device, or **Key** for a pre-shared password checked via mutual HMAC-SHA256 challenge-response) and encrypt the audio end-to-end with **ChaCha20-Poly1305** (per-packet AEAD, anti-replay, keys derived via HKDF). Works for both unicast and multicast; no PKI required. See [`WFAS_PROTOCOL.md`](WFAS_PROTOCOL.md) §7–8.
+  Optionally gate who can connect (**Off**, **Ask** to approve each device, or **Key** for a pre-shared password checked via mutual HMAC-SHA256 challenge-response) and encrypt the audio end-to-end with **ChaCha20-Poly1305** (per-packet AEAD, anti-replay, keys derived via HKDF). Encryption is on by default in Key mode. Works for both unicast and multicast; no PKI required. See [`WFAS_PROTOCOL.md`](WFAS_PROTOCOL.md) §7–8.
+  The key, QR pairing and encryption protect **WFAS only**: RTP, HTTP, DLNA and Snapcast carry the same audio without encryption and without a key, to anyone on the network. When a key is set and one of them is enabled, the app asks before starting the server (and the CLI prints a warning).
 
 - **Firewall Assistant**
   On Windows, the app can create the required inbound firewall rule automatically with one click. On Linux, it detects `ufw` or `firewalld` and shows the exact command to open the required ports.
 
 - **Automatic Update Checker**
-  Optionally checks GitHub for new releases on startup, or on demand, with release notes and a direct download link shown right in the app.
+  Checks GitHub for new releases on startup (on by default; you can turn it off on the welcome screen, in Settings, or with `wfas --auto-check-update off`), or on demand, with release notes and a direct download link shown right in the app. The check is a single request to `api.github.com` for the latest release tag; see [`PRIVACY_POLICY.md`](PRIVACY_POLICY.md).
 
 - **Command-Line Interface (`wfas`)**
   A full headless daemon and control tool, installable to your system's PATH during first-run setup: start a server or client, run `wfas control volume 75` or `wfas control mute` against a running instance, manage configuration profiles with `wfas config`, and fix Windows Firewall with `wfas firewall allow`. Add `--json` to almost any command for scripting. Run `wfas --viz` for a real-time ASCII audio visualizer, with theming (`--viz rainbow`) and a `--groove` mode that highlights melody over raw bass. Run `wfas --debug` for a live-updating table of UDP packets and internal state. See `wfas --help` or the man page for the full command reference.
@@ -119,6 +120,8 @@ Users and integrators are responsible for evaluating whether WFAS's security pro
 The WFAS protocol and its reference implementations are provided under the terms of their respective open-source licenses. No additional security guarantees are implied beyond those explicitly documented by the protocol and implementation.
 
 Security issues should be reported to the project maintainers so they can be investigated and addressed in future releases.
+
+What the app sends, stores and to whom is described in [`PRIVACY_POLICY.md`](PRIVACY_POLICY.md).
 
 ---
 

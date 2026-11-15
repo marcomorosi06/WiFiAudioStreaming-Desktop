@@ -27,6 +27,27 @@ object PendingDeepLink {
             arg.startsWith("https://${WfasPairingUri.APPLINK_HOST}${WfasPairingUri.APPLINK_PATH_IT}", ignoreCase = true)
 }
 
+/** Writing values into freedesktop .desktop files. */
+object DesktopEntry {
+    /**
+     * A path as one quoted Exec argument. Inside the quotes `"`, `` ` ``, `$`
+     * and `\` take a backslash; the file format then reads `\` as an escape
+     * of its own, so backslashes are doubled once more, and `%` is a field
+     * code, written `%%`. A path with any of these would otherwise run as
+     * something else, or not at all.
+     */
+    fun execQuote(path: String): String {
+        val quoted = buildString {
+            for (c in path) {
+                if (c == '"' || c == '`' || c == '$' || c == '\\') append('\\')
+                append(c)
+            }
+        }
+        val stored = quoted.replace("\\", "\\\\").replace("%", "%%").filterNot { it == '\n' || it == '\r' }
+        return "\"" + stored + "\""
+    }
+}
+
 object ProtocolRegistrar {
 
     private val os = System.getProperty("os.name").lowercase()
@@ -145,7 +166,7 @@ object ProtocolRegistrar {
             [Desktop Entry]
             Type=Application
             Name=WiFi Audio Streaming
-            Exec="$exe" %u
+            Exec=${DesktopEntry.execQuote(exe)} %u
             Terminal=false
             NoDisplay=true
             MimeType=x-scheme-handler/$SCHEME;

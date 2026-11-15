@@ -357,7 +357,7 @@ class SnapcastServiceIndex(private val ttlMs: Long = 20_000L) {
             val (port, target) = service
             val ip = ipOf(target) ?: continue
             val ref = SnapcastServerRef(
-                name = SnapcastDns.instanceLabel(instance),
+                name = Ansi.printable(SnapcastDns.instanceLabel(instance)),
                 host = ip,
                 streamPort = port,
                 // Se il servizio di controllo non e' stato annunciato si ricade

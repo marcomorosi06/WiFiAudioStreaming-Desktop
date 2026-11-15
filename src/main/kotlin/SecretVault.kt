@@ -208,18 +208,26 @@ object SecretVault {
 
         fun usable(): Boolean = File("/usr/bin/security").canExecute()
 
+        // Account names are built by the app (fixed names, random refs); only
+        // this alphabet is passed to the command parser below.
+        private val SAFE_NAME = Regex("[A-Za-z0-9._-]{1,128}")
+
         override fun store(name: String, value: String): Boolean {
-            // -U updates in place if the entry exists. The value goes on the
-            // argv, which is the least elegant part of this backend: it is only
-            // visible to the same user, already outside the threat model, but
-            // stdin would still be preferable if the tool took it here.
-            val code = exec(
-                listOf(
-                    "/usr/bin/security", "add-generic-password",
-                    "-U", "-s", SERVICE, "-a", name, "-w", value
-                )
-            ).first
-            return code == 0
+            if (!SAFE_NAME.matches(name)) return false
+            // The password never goes on the argument list: there it is readable
+            // by every account on the Mac through ps for as long as the process
+            // runs. It goes on standard input instead, as one command of
+            // `security -i`, hex-encoded with -X so that no quote, space or
+            // backslash in a passphrase can be misread by the command parser.
+            // -U updates the item in place if it exists.
+            val hex = value.toByteArray(Charsets.UTF_8).joinToString("") { "%02x".format(it) }
+            exec(
+                listOf("/usr/bin/security", "-i"),
+                stdin = "add-generic-password -U -s $SERVICE -a $name -X $hex\n"
+            )
+            // Interactive mode does not report the inner command's status in its
+            // exit code, so success is judged by reading the value back.
+            return load(name) == value
         }
 
         override fun load(name: String): String? {

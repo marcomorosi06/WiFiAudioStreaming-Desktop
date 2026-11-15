@@ -45,6 +45,39 @@ object NetAddr {
         }
     }
 
+    /**
+     * True for addresses that stay on a local network: private and CGNAT IPv4,
+     * link-local, loopback, multicast, and IPv6 unique-local. Only used to warn
+     * the user, never to refuse: VPN and other topologies are legitimate.
+     * Never resolves a name.
+     */
+    fun isLocalScope(value: String?): Boolean {
+        if (!isLiteralAddress(value)) return false
+        val bare = value.orEmpty().trim().removeSurrounding("[", "]").substringBefore('%')
+        val address = runCatching { InetAddress.getByName(bare) }.getOrNull() ?: return false
+        if (address.isLoopbackAddress || address.isLinkLocalAddress || address.isSiteLocalAddress ||
+            address.isAnyLocalAddress || address.isMulticastAddress
+        ) return true
+        val b = address.address
+        return when (address) {
+            is Inet4Address -> (b[0].toInt() and 0xFF) == 100 && (b[1].toInt() and 0xC0) == 0x40
+            is Inet6Address -> (b[0].toInt() and 0xFE) == 0xFC
+            else -> false
+        }
+    }
+
+    /**
+     * Whether a literal address string and an address taken from a socket name
+     * the same host. Zone ids and IPv4-mapped forms compare equal to their plain
+     * form. Never resolves a name: anything that is not a literal is no match.
+     */
+    fun sameAddress(host: String?, address: InetAddress?): Boolean {
+        if (address == null || !isLiteralAddress(host)) return false
+        val bare = host.orEmpty().trim().removeSurrounding("[", "]").substringBefore('%')
+        val parsed = runCatching { InetAddress.getByName(bare) }.getOrNull() ?: return false
+        return parsed.address.contentEquals(address.address)
+    }
+
     fun display(host: String?): String {
         val h = host?.trim().orEmpty()
         if (h.isEmpty()) return h

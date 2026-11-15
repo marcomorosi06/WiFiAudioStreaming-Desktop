@@ -22,4 +22,15 @@ object Ansi {
     fun cyan(t: String)   = code("36", t)
     fun bold(t: String)   = code("1",  t)
     fun dim(t: String)    = code("2",  t)
+
+    /**
+     * A name that came from the network (a beacon, mDNS, a UPnP description),
+     * made safe to print: control characters, ESC above all since it drives the
+     * terminal, and bidirectional overrides, which reorder what is shown, are
+     * dropped.
+     */
+    fun printable(text: String): String = text.filterNot { c ->
+        c.isISOControl() || c in '\u202A'..'\u202E' || c in '\u2066'..'\u2069' ||
+            c == '\u200E' || c == '\u200F'
+    }
 }

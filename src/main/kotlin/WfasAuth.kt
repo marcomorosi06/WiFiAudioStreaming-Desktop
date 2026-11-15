@@ -112,6 +112,15 @@ object WfasAuth {
         return d == 0
     }
 
+    private val PROOF_IN_LOG = Regex("([cs]proof)=[0-9A-Fa-f]+")
+
+    /**
+     * The message with its proofs masked, for logs. A proof next to its two
+     * nonces is all an offline guess at the key needs, and a debug log outlives
+     * the session it was written for.
+     */
+    fun redactForLog(msg: String): String = PROOF_IN_LOG.replace(msg, "\$1=<redacted>")
+
     fun getToken(msg: String, token: String): String? {
         val needle = ";$token="
         val i = msg.indexOf(needle)

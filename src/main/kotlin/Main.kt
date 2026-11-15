@@ -383,6 +383,9 @@ object AutostartManager {
         }
     }
 
+    private fun xmlEscape(s: String): String =
+        s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace("\"", "&quot;")
+
     fun toggleAutostart(enable: Boolean): String? {
         val os = System.getProperty("os.name").lowercase()
         val exePath = getExecutablePath()
@@ -423,7 +426,7 @@ object AutostartManager {
                     ) "Registry Error: $output" else null
                 }
             } else if (os.contains("mac")) {
-                val plist = "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">\n<plist version=\"1.0\">\n<dict>\n<key>Label</key>\n<string>com.wifiaudiostreaming</string>\n<key>ProgramArguments</key>\n<array><string>$exePath</string></array>\n<key>RunAtLoad</key>\n<true/>\n</dict>\n</plist>"
+                val plist = "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">\n<plist version=\"1.0\">\n<dict>\n<key>Label</key>\n<string>com.wifiaudiostreaming</string>\n<key>ProgramArguments</key>\n<array><string>${xmlEscape(exePath)}</string></array>\n<key>RunAtLoad</key>\n<true/>\n</dict>\n</plist>"
                 val dir = File(System.getProperty("user.home"), "Library/LaunchAgents")
                 val file = File(dir, "com.wifiaudiostreaming.plist")
                 if (enable) {
@@ -434,7 +437,7 @@ object AutostartManager {
                 }
                 null
             } else {
-                val desktopContent = "[Desktop Entry]\nType=Application\nExec=\"$exePath\"\nHidden=false\nNoDisplay=false\nTerminal=false\nX-GNOME-Autostart-enabled=true\nName=WiFi Audio Streaming\nComment=Start WiFi Audio Streaming on login"
+                val desktopContent = "[Desktop Entry]\nType=Application\nExec=${DesktopEntry.execQuote(exePath)}\nHidden=false\nNoDisplay=false\nTerminal=false\nX-GNOME-Autostart-enabled=true\nName=WiFi Audio Streaming\nComment=Start WiFi Audio Streaming on login"
                 val dir = File(System.getProperty("user.home"), ".config/autostart")
                 val file = File(dir, "wifiaudiostreaming.desktop")
                 if (enable) {
@@ -493,6 +496,50 @@ object NetworkHandler_v1 {
     // round trip on a bad link, short enough that an unanswered one does not
     // linger as something to answer later.
     private const val CHALLENGE_TTL_MS = 15_000L
+    // Outstanding challenges are bounded, and a peer gets a new one at most this
+    // often: each challenge carries an HMAC over the key, so it is a sample for
+    // an offline guess, and an unbounded table is memory anyone can fill.
+    private const val MAX_PENDING_CHALLENGES = 64
+    private const val MIN_CHALLENGE_INTERVAL_MS = 1_000L
+    private const val HTTP_MAX_CONNECTIONS = 16
+    private const val HTTP_MAX_HEADERS = 64
+    private const val HTTP_REQUEST_TIMEOUT_MS = 5_000
+
+    // Names a DNS-rebinding page cannot use: it needs a public, dotted domain
+    // it controls. Local resolvers answer for these suffixes and for bare names.
+    private val LOCAL_NAME_SUFFIXES = listOf(".local", ".lan", ".home", ".home.arpa", ".internal", ".localdomain")
+
+    private fun isLocalHostName(hostName: String): Boolean {
+        if (NetAddr.isLiteralAddress(hostName)) return true
+        if (hostName == "localhost" || !hostName.contains('.')) return true
+        if (LOCAL_NAME_SUFFIXES.any { hostName.endsWith(it) }) return true
+        val ownName = runCatching { InetAddress.getLocalHost().hostName.lowercase() }.getOrNull()
+        return ownName != null && hostName == ownName
+    }
+
+    /**
+     * Whether an HTTP request may reach the stream.
+     *
+     * The Host must name this machine by address or by a local name (see
+     * isLocalHostName): a page on another domain that rebinds its DNS
+     * to this address would otherwise be same-origin with the stream and could
+     * read it. When the request carries an Origin (every WebSocket handshake
+     * and every cross-site fetch does), it must be this very server. A request
+     * without one, such as a media player or a plain audio tag, is allowed: with
+     * no CORS grant a cross-site page cannot read what it fetches.
+     */
+    private fun httpRequestAllowed(headers: Map<String, String>): Boolean {
+        val host = headers["host"]?.trim()?.lowercase()?.ifBlank { null } ?: return false
+        val hostName = NetAddr.splitHostPort(host, 0).first.lowercase()
+        if (!isLocalHostName(hostName)) return false
+        val origin = headers["origin"]?.trim() ?: return true
+        val uri = runCatching { java.net.URI(origin) }.getOrNull() ?: return false
+        val originHost = uri.host?.lowercase() ?: return false
+        val shown = if (originHost.contains(':') && !originHost.startsWith("[")) "[$originHost]" else originHost
+        val originAuthority = if (uri.port >= 0) "$shown:${uri.port}" else shown
+        return originAuthority == host
+    }
+
     private const val INCOMPATIBLE_PREFIX = "WFAS_INCOMPATIBLE"
     private const val HELLO_ACK_PREFIX    = "HELLO_ACK"
     private const val PENDING_MESSAGE       = "WFAS_PENDING"
@@ -552,6 +599,10 @@ object NetworkHandler_v1 {
     // Mic-stream session keys (separate long-lived jobs): server decrypts incoming
     // mic with micRecvDir; client encrypts outgoing mic with micSendDir.
     @Volatile var micRecvDir: WfasCrypto.Dir? = null
+    // The unicast client whose talk-back the receiver accepts: set once its
+    // handshake has completed, cleared when the session ends. Null means no
+    // authenticated session, and then no unicast talk-back is accepted at all.
+    @Volatile var micPeerHost: String? = null
     @Volatile var micRecvWin: WfasCrypto.ReplayWindow = WfasCrypto.ReplayWindow()
     @Volatile var micSendDir: WfasCrypto.Dir? = null
     var onAuthRequest: ((peer: String) -> Boolean)? = null
@@ -722,6 +773,14 @@ object NetworkHandler_v1 {
     private var localMicMixJob:  Job? = null
     private var httpServerJob:   Job? = null
     private var donationTimerJob: Job? = null
+
+    /**
+     * The host name as it may appear in a beacon: the beacon is a list of
+     * `;`-separated fields, so a `;` in the name would shift every field after
+     * it, and control characters have no place in a name others will print.
+     */
+    private fun beaconSafeName(name: String): String =
+        name.filterNot { it == ';' || it.isISOControl() }.trim().ifEmpty { "Desktop-PC" }
 
     private fun startDonationTimer() {
         donationTimerJob?.cancel()
@@ -1042,9 +1101,13 @@ object NetworkHandler_v1 {
                         AppDebug.log("[DISCOVERY] Ricevuto da $remoteIp: $message")
                         val parts = message.split(";")
                         if (parts.size < 4) { AppDebug.log("[DISCOVERY] pacchetto malformato (parti=${parts.size}): $message"); continue }
-                        val hostname = parts[1]
+                        // Printed by the CLI and shown in the window: from the
+                        // network, so control characters are dropped first.
+                        val hostname = Ansi.printable(parts[1])
 
-                        if (message.contains("BYE")) {
+                        // Only the mode field marks a shutdown beacon: a host
+                        // whose name contains "BYE" is not leaving.
+                        if (parts[2] == "BYE") {
                             AppDebug.log("[DISCOVERY] BYE da $hostname ($remoteIp), rimuovo dalla lista")
                             discoveryBestAddress.remove(hostname)
                             onDeviceFound(hostname, ServerInfo("", false, 0, null, 0L))
@@ -1135,7 +1198,7 @@ object NetworkHandler_v1 {
         lastAnnounceParams = AnnounceParams(isMulticast, port, capabilities, audioSettings)
         broadcastingJob?.cancel()
         broadcastingJob = scope.launch {
-            val hostname     = runCatching { InetAddress.getLocalHost().hostName }.getOrDefault("Desktop-PC")
+            val hostname     = beaconSafeName(runCatching { InetAddress.getLocalHost().hostName }.getOrDefault("Desktop-PC"))
             val mode         = if (isMulticast) "MULTICAST" else "UNICAST"
             val protocolsStr = capabilities.protocols.joinToString(",") { it.name }
             val httpPortStr  = capabilities.httpPort?.let { ";http_port=$it" } ?: ""
@@ -1170,7 +1233,7 @@ object NetworkHandler_v1 {
         scope.launch {
             job?.cancelAndJoin()
             // Invia un ultimo pacchetto di discovery con flag BYE
-            val hostname = runCatching { InetAddress.getLocalHost().hostName }.getOrDefault("Desktop-PC")
+            val hostname = beaconSafeName(runCatching { InetAddress.getLocalHost().hostName }.getOrDefault("Desktop-PC"))
             val message = "$DISCOVERY_MESSAGE;$hostname;BYE;0"
             val groupAddress = InetAddress.getByName(MULTICAST_GROUP_IP)
             MulticastSocket().use { socket ->
@@ -1332,25 +1395,50 @@ object NetworkHandler_v1 {
                 var totalPackets = 0L
                 var totalBytes   = 0L
                 var micVersionChecked = false
+                var micVersionRejected = false
                 var lastPayloadShorts = 0
-                var micEncSeen = false
+                var droppedForeign = 0L
+                var versionPeer: String? = null
 
                 while (isActive) {
                     try {
                         packet.setData(buf, 0, buf.size)
                         socket.receive(packet)
                         val rawLen = packet.length
-                        if (rawLen >= AUDIO_HEADER_SIZE && buf[0] == AUDIO_MAGIC_0 && buf[1] == AUDIO_MAGIC_1) {
-                            if ((buf[3].toInt() and WfasCrypto.FLAG_ENCRYPTED) != 0) {
-                                val md = micRecvDir ?: continue
-                                val r = WfasCrypto.decryptPacket(md, micRecvWin, buf, rawLen)
-                                if (r !is WfasCrypto.Decrypted.Ok) continue
-                                micEncSeen = true
-                                System.arraycopy(r.pcm, 0, buf, AUDIO_HEADER_SIZE, r.pcm.size)
-                                packet.setData(buf, 0, AUDIO_HEADER_SIZE + r.pcm.size)
-                            } else if (micEncSeen) {
-                                continue
+                        // Unicast talk-back is accepted from the authenticated client
+                        // only. The socket is open on every interface from the moment
+                        // the server starts, so without this anyone on the network
+                        // could speak into the virtual microphone or into the stream.
+                        // Multicast has no per-client handshake, so there is no peer
+                        // to bind to and every receiver may talk back, as before.
+                        if (!isMulticast && !NetAddr.sameAddress(micPeerHost, packet.address)) {
+                            droppedForeign++
+                            if (droppedForeign == 1L || droppedForeign % 500L == 0L) {
+                                AppDebug.log("[MicReceiver] dropped talk-back from ${packet.address?.hostAddress} " +
+                                        "(session peer=${micPeerHost ?: "none"}, dropped=$droppedForeign)")
                             }
+                            continue
+                        }
+                        // The version is checked once per session: a new client
+                        // after a --persist restart gets its own verdict.
+                        if (!isMulticast && micPeerHost != versionPeer) {
+                            versionPeer = micPeerHost
+                            micVersionChecked = false
+                            micVersionRejected = false
+                        }
+                        val isWfasPacket = rawLen >= AUDIO_HEADER_SIZE && buf[0] == AUDIO_MAGIC_0 && buf[1] == AUDIO_MAGIC_1
+                        // An encrypted session takes authenticated ciphertext only:
+                        // the ENCRYPTED flag rides in the cleartext header, so its
+                        // absence is never a reason to accept plaintext.
+                        val sessionDir = if (isMulticast) null else micRecvDir
+                        if (isWfasPacket && (buf[3].toInt() and WfasCrypto.FLAG_ENCRYPTED) != 0) {
+                            val md = sessionDir ?: continue
+                            val r = WfasCrypto.decryptPacket(md, micRecvWin, buf, rawLen)
+                            if (r !is WfasCrypto.Decrypted.Ok) continue
+                            System.arraycopy(r.pcm, 0, buf, AUDIO_HEADER_SIZE, r.pcm.size)
+                            packet.setData(buf, 0, AUDIO_HEADER_SIZE + r.pcm.size)
+                        } else if (sessionDir != null) {
+                            continue
                         }
                         val len = packet.length
                         if (len <= 0) continue
@@ -1363,12 +1451,16 @@ object NetworkHandler_v1 {
                                 micVersionChecked = true
                                 val ver = packet.data[2].toInt() and 0xFF
                                 if (ver != WFAS_PROTOCOL_VERSION) {
+                                    micVersionRejected = true
                                     signalProtocolMismatch(ver, PeerRole.RECEIVER)
                                     onStatusUpdate?.invoke("status_protocol_incompatible", emptyArray())
                                     AppDebug.log("[MicReceiver] mic v=$ver incompatible (mine v=$WFAS_PROTOCOL_VERSION)")
-                                    break
                                 }
                             }
+                            // An incompatible peer is reported once and then ignored,
+                            // rather than shutting the receiver down for whoever
+                            // connects next.
+                            if (micVersionRejected) continue
                             silence = (packet.data[3].toInt() and 0x01) != 0
                             dataOff = AUDIO_HEADER_SIZE
                             dataLen = len - AUDIO_HEADER_SIZE
@@ -1900,13 +1992,13 @@ object NetworkHandler_v1 {
 
             // Link e Ko-fi
             append("<div class=\"links\">")
-            append("<a href=\"https://github.com/marcomorosi06/WiFiAudioStreaming-Desktop\" target=\"_blank\">💻 Get Desktop App (GitHub)</a>")
-            append("<a href=\"https://github.com/marcomorosi06/WiFiAudioStreaming-Android\" target=\"_blank\">📱 Get Android App (GitHub)</a>")
-            append("<a href=\"https://apt.izzysoft.de/fdroid/index/apk/com.cuscus.wifiaudiostreaming\" target=\"_blank\">📲 Get Android App (IzzyOnDroid)</a>")
+            append("<a href=\"https://github.com/marcomorosi06/WiFiAudioStreaming-Desktop\" target=\"_blank\" rel=\"noopener noreferrer\">💻 Get Desktop App (GitHub)</a>")
+            append("<a href=\"https://github.com/marcomorosi06/WiFiAudioStreaming-Android\" target=\"_blank\" rel=\"noopener noreferrer\">📱 Get Android App (GitHub)</a>")
+            append("<a href=\"https://apt.izzysoft.de/fdroid/index/apk/com.cuscus.wifiaudiostreaming\" target=\"_blank\" rel=\"noopener noreferrer\">📲 Get Android App (IzzyOnDroid)</a>")
             append("</div>")
 
             append("<div class=\"kofi\">")
-            append("<a href=\"https://ko-fi.com/marcomorosi06\" target=\"_blank\">☕ Support me on Ko-fi</a>")
+            append("<a href=\"https://ko-fi.com/marcomorosi06\" target=\"_blank\" rel=\"noopener noreferrer\">☕ Support me on Ko-fi</a>")
             append("</div>")
 
             append("</div>")
@@ -2063,6 +2155,9 @@ object NetworkHandler_v1 {
             // invokeOnCompletion era asincrono e causava BindException al riavvio.
             try {
                 AppDebug.log("---HTTP server on port $httpPort (safariMode=$safariMode) ---")
+                // Anyone on the network can open this port: bound what one caller
+                // can hold, and give the request headers a deadline.
+                val liveConnections = java.util.concurrent.atomic.AtomicInteger(0)
                 while (isActive) {
                     val sock = try { serverSocket.accept() }
                     catch (_: java.net.SocketTimeoutException) { continue }
@@ -2071,23 +2166,42 @@ object NetworkHandler_v1 {
                             AppDebug.log("HTTP accept: ${e.message}")
                         break
                     }
+                    if (liveConnections.incrementAndGet() > HTTP_MAX_CONNECTIONS) {
+                        liveConnections.decrementAndGet()
+                        AppDebug.log("HTTP: connection from ${sock.inetAddress} refused, $HTTP_MAX_CONNECTIONS already open")
+                        runCatching { sock.close() }
+                        continue
+                    }
                     launch(Dispatchers.IO) {
                         try {
+                            sock.soTimeout = HTTP_REQUEST_TIMEOUT_MS
                             val br = sock.getInputStream().bufferedReader()
                             val requestLine = br.readLine() ?: return@launch
                             val headers = mutableMapOf<String, String>()
+                            var headerCount = 0
                             while (true) {
                                 val line = br.readLine() ?: break
                                 if (line.isEmpty()) break
+                                if (++headerCount > HTTP_MAX_HEADERS) return@launch
                                 val colon = line.indexOf(':')
                                 if (colon > 0) headers[line.substring(0, colon).trim().lowercase()] =
                                     line.substring(colon + 1).trim()
                             }
+                            sock.soTimeout = 0
                             val path = requestLine.split(" ").getOrNull(1) ?: "/"
                             val out  = sock.getOutputStream()
+                            // The stream must not be readable from a web page the user
+                            // happens to visit: no CORS grant, no cross-site WebSocket,
+                            // and no DNS-rebound host name (see httpRequestAllowed).
+                            if (!httpRequestAllowed(headers)) {
+                                AppDebug.log("HTTP: refused $path from ${sock.inetAddress} (host='${headers["host"]}' origin='${headers["origin"]}')")
+                                out.write("HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\nConnection: close\r\n\r\n".toByteArray())
+                                out.flush()
+                                return@launch
+                            }
                             when {
                                 path == "/stream/aac" -> {
-                                    out.write("HTTP/1.1 200 OK\r\nContent-Type: audio/aac\r\nTransfer-Encoding: chunked\r\nCache-Control: no-cache\r\nConnection: keep-alive\r\nAccess-Control-Allow-Origin: *\r\nAccept-Ranges: none\r\nX-Content-Type-Options: nosniff\r\n\r\n".toByteArray())
+                                    out.write("HTTP/1.1 200 OK\r\nContent-Type: audio/aac\r\nTransfer-Encoding: chunked\r\nCache-Control: no-cache\r\nConnection: keep-alive\r\nAccept-Ranges: none\r\nX-Content-Type-Options: nosniff\r\n\r\n".toByteArray())
                                     out.flush()
                                     aacClients.add(out)
                                     AppDebug.log("---/stream/aac client: ${sock.inetAddress} ---")
@@ -2130,6 +2244,7 @@ object NetworkHandler_v1 {
                         } catch (e: Exception) {
                             if (e !is CancellationException) AppDebug.log("HTTP handler: ${e.message}")
                         } finally {
+                            liveConnections.decrementAndGet()
                             runCatching { sock.close() }
                         }
                     }
@@ -2931,12 +3046,32 @@ object NetworkHandler_v1 {
                         // socket overwrote whatever the previous caller was still
                         // answering - and the session keys were then derived from
                         // whichever pair of nonces happened to be left in it.
-                        class PendingChallenge(val cnonce: String, val snonce: String, val at: Long)
+                        class PendingChallenge(val cnonce: String, val snonce: String, val sproof: String, val at: Long)
                         val challenges = HashMap<String, PendingChallenge>()
                         fun challengeFor(peer: String): PendingChallenge? {
                             val now = System.currentTimeMillis()
                             challenges.entries.removeAll { now - it.value.at > CHALLENGE_TTL_MS }
                             return challenges[peer]
+                        }
+                        // The challenge to send in answer to a HELLO without a proof,
+                        // or null to stay silent. A resent HELLO (same cnonce) gets the
+                        // same challenge back, so crossing replies cannot leave the
+                        // client proving a nonce the server has already replaced. A
+                        // new cnonce from the same peer is answered at most once per
+                        // interval, and the table never grows past its cap.
+                        fun issueChallenge(peer: String, cnonce: String): PendingChallenge? {
+                            val now = System.currentTimeMillis()
+                            val existing = challengeFor(peer)
+                            if (existing != null) {
+                                if (existing.cnonce == cnonce) return existing
+                                if (now - existing.at < MIN_CHALLENGE_INTERVAL_MS) return null
+                            } else if (challenges.size >= MAX_PENDING_CHALLENGES) {
+                                return null
+                            }
+                            val snonce = WfasAuth.nonceHex()
+                            val fresh = PendingChallenge(cnonce, snonce, WfasAuth.proof(authKey, 'S', cnonce, snonce), now)
+                            challenges[peer] = fresh
+                            return fresh
                         }
                         // The nonces of the session that authenticated, kept for the key
                         // derivation below. Only ever written after a proof verified.
@@ -2950,7 +3085,7 @@ object NetworkHandler_v1 {
                             val rxAt = System.currentTimeMillis()
                             val msg = clientDatagram.packet.readText().trim()
                             val clientAddress = clientDatagram.address
-                            AppDebug.log("[SERVER][TIMING] rx '$msg' from $clientAddress")
+                            AppDebug.log("[SERVER][TIMING] rx '${WfasAuth.redactForLog(msg)}' from $clientAddress")
 
                             if (msg == "MODE_PROBE") {
                                 socket.send(Datagram(buildPacket { writeText("UNICAST") }, clientAddress))
@@ -3002,10 +3137,12 @@ object NetworkHandler_v1 {
                                     val cproof = WfasAuth.getToken(msg, "cproof")
                                     val cnonce = WfasAuth.getToken(msg, "cnonce") ?: ""
                                     if (cproof == null) {
-                                        val snonce = WfasAuth.nonceHex()
-                                        challenges[challengeKey] = PendingChallenge(cnonce, snonce, System.currentTimeMillis())
-                                        val sproof = WfasAuth.proof(authKey, 'S', cnonce, snonce)
-                                        socket.send(Datagram(buildPacket { writeText("$AUTH_REQUIRED_PREFIX;snonce=$snonce;sproof=$sproof") }, clientAddress))
+                                        val challenge = issueChallenge(challengeKey, cnonce)
+                                        if (challenge == null) {
+                                            AppDebug.log("[SERVER][UNICAST] challenge rate-limited for $clientAddress")
+                                            continue
+                                        }
+                                        socket.send(Datagram(buildPacket { writeText("$AUTH_REQUIRED_PREFIX;snonce=${challenge.snonce};sproof=${challenge.sproof}") }, clientAddress))
                                         continue
                                     }
                                     // A proof is only an answer to a challenge we issued to
@@ -3050,7 +3187,8 @@ object NetworkHandler_v1 {
                             unicastPeerConnected.value = true
                             sessionEncryptedLive.value = sendDir != null
                             micRecvDir = sessionKeys?.first
-                            if (encrypting) micRecvWin = WfasCrypto.ReplayWindow()
+                            micRecvWin = WfasCrypto.ReplayWindow()
+                            micPeerHost = peerHostOf(clientAddress)
                             fun frameForSend(buf: ByteArray, len: Int): ByteArray {
                                 val dir = sendDir ?: return if (len == buf.size) buf else buf.copyOf(len)
                                 val silence = (buf[3].toInt() and 0x01) != 0
@@ -3230,6 +3368,9 @@ object NetworkHandler_v1 {
                             } finally {
                                 unicastPeerConnected.value = false
                                 sessionEncryptedLive.value = false
+                                // The session is over: its talk-back is not accepted any more.
+                                micPeerHost = null
+                                micRecvDir = null
                                 clientByeReceiverJob.cancel()
                                 pingJob.cancel()
                                 if (clientAlive.get()) {
@@ -3325,15 +3466,28 @@ object NetworkHandler_v1 {
             return
         }
 
-        micSendDir = null   // mic stays plaintext until the handshake derives the session key
+        micSendDir = null
         val peerAcceptsMic = serverInfo.capabilities?.acceptsClientMic ?: true
-        if (sendMicrophone && micInputMixerInfo != null) {
-            if (peerAcceptsMic) {
-                micReceiverJob = scope.launchMicSender(audioSettings, serverInfo, micInputMixerInfo, micPort)
-            } else {
-                AppDebug.log("[CLIENT] mic requested but ${serverInfo.ip} advertises mic without rx, not sending")
-                onStatusUpdate("status_mic_not_accepted", emptyArray())
+        if (sendMicrophone && micInputMixerInfo != null && !peerAcceptsMic) {
+            AppDebug.log("[CLIENT] mic requested but ${serverInfo.ip} advertises mic without rx, not sending")
+            onStatusUpdate("status_mic_not_accepted", emptyArray())
+        }
+        // The microphone starts only once the server has proved itself: after the
+        // unicast handshake, when the session key exists, or on the first valid
+        // multicast packet. Starting it earlier sent it in cleartext to a peer
+        // that had not authenticated yet, and could turn out to be a rogue one.
+        val micWanted = sendMicrophone && micInputMixerInfo != null && peerAcceptsMic
+        val micStarted = java.util.concurrent.atomic.AtomicBoolean(false)
+        fun startMicOnce(encryptedMulticast: Boolean = false) {
+            if (!micWanted || micInputMixerInfo == null || !micStarted.compareAndSet(false, true)) return
+            if (encryptedMulticast) {
+                // A multicast group has no per-client key, so the talk-back would
+                // travel in cleartext next to an encrypted stream: fail closed.
+                AppDebug.log("[CLIENT][MULTICAST] encrypted group: talk-back not sent")
+                onStatusUpdate("status_mic_not_encrypted", emptyArray())
+                return
             }
+            micReceiverJob = scope.launchMicSender(audioSettings, serverInfo, micInputMixerInfo, micPort)
         }
 
         streamingJob = scope.launch {
@@ -3434,7 +3588,7 @@ object NetworkHandler_v1 {
                                 continue
                             }
                             anyReplyReceived = true
-                            AppDebug.log("[CLIENT][UNICAST] reply '$ackText' at +${System.currentTimeMillis() - handshakeStartedAt}ms")
+                            AppDebug.log("[CLIENT][UNICAST] reply '${WfasAuth.redactForLog(ackText)}' at +${System.currentTimeMillis() - handshakeStartedAt}ms")
                             when {
                                 ackText.startsWith(INCOMPATIBLE_PREFIX) -> {
                                     signalProtocolMismatch(parseProtocolVersion(ackText), PeerRole.SENDER)
@@ -3503,7 +3657,7 @@ object NetworkHandler_v1 {
                                     if (WfasAuth.getToken(ackText, "enc") == "1") sessionEncrypted = true
                                     handshakeOk = true
                                 }
-                                else -> AppDebug.log("[CLIENT][UNICAST] unexpected reply '$ackText'")
+                                else -> AppDebug.log("[CLIENT][UNICAST] unexpected reply '${WfasAuth.redactForLog(ackText)}'")
                             }
                             if (handshakeOk) break
                         }
@@ -3521,6 +3675,7 @@ object NetworkHandler_v1 {
                         val recvDir: WfasCrypto.Dir? = sessionKeys?.second
                         micSendDir = if (sessionEncrypted) sessionKeys?.first else null
                         sessionEncryptedLive.value = sessionEncrypted && recvDir != null
+                        startMicOnce()
                         val recvWin = WfasCrypto.ReplayWindow()
                         var serverEncrypts = sessionEncrypted
 
@@ -3796,6 +3951,7 @@ object NetworkHandler_v1 {
                                     if (dir != null) {
                                         val r = WfasCrypto.decryptPacket(dir, mcWin, packet.data, packet.length)
                                         if (r is WfasCrypto.Decrypted.Ok) {
+                                            startMicOnce(encryptedMulticast = true)
                                             mcTotalBytes += r.pcm.size
                                             val plain = ByteArray(AUDIO_HEADER_SIZE + r.pcm.size)
                                             System.arraycopy(packet.data, 0, plain, 0, AUDIO_HEADER_SIZE)
@@ -3809,6 +3965,7 @@ object NetworkHandler_v1 {
                                     val aligned = pcmLen - (pcmLen % frameSize)
                                     mcTotalBytes += aligned
                                     if (aligned > 0) {
+                                        startMicOnce()
                                         player?.let { handleAudioPacket(it, packet.data, packet.length, effectiveAudioSettings.channels, playbackState, onAudioFrame) }
                                     }
                                 }
@@ -4716,6 +4873,9 @@ private fun bindJavaSoundToSystemAlsa() {
 }
 
 fun main(args: Array<String>) {
+    // Before any dorkbox class can load: see DorkboxUpdates.
+    DorkboxUpdates.disable()
+
     // Must run before anything touches FFmpeg/JavaCPP: see the function above.
     bindJavaSoundToSystemAlsa()
 
@@ -4856,6 +5016,8 @@ fun startGuiApplication(cliArgs: CliArgs) = application {
     // La chiave del pairing QR non e' stata salvata: se ne conia una per questa
     // sessione, altrimenti il modo chiave partirebbe senza chiave.
     var appSettings    by remember { mutableStateOf(QrPairingState.seedSessionKey(loadedSettings.app)) }
+    // Protocols of a server start waiting for confirmation (see UnprotectedProtocolsDialog).
+    var pendingUnprotected by remember { mutableStateOf<List<String>?>(null) }
     var audioSettings  by remember { mutableStateOf(loadedSettings.audio) }
     var streamingPort  by remember { mutableStateOf(loadedSettings.streamingPort) }
     var micPort        by remember { mutableStateOf(loadedSettings.micPort) }
@@ -5705,6 +5867,13 @@ fun startGuiApplication(cliArgs: CliArgs) = application {
                         NetworkHandler_v1.configureSecurity(autoMode, appSettings.authKey, autoEncrypt)
                         IpcServer.applySecurity(autoMode, appSettings.authKey)
                         AppDebug.log("[AUTOSTART] security=$autoMode encrypted=$autoEncrypt")
+                        // Unattended, so no dialog: the warning goes to stderr and the log.
+                        UnprotectedProtocols.of(appSettings)
+                            .takeIf { UnprotectedProtocols.needsWarning(autoMode, it) }
+                            ?.let { unprotected ->
+                                System.err.println(UnprotectedProtocols.cliWarning(unprotected))
+                                AppDebug.log("[AUTOSTART] ${UnprotectedProtocols.cliWarning(unprotected)}")
+                            }
 
                         if (appSettings.autoStartVolume >= 0) {
                             serverVolume = (appSettings.autoStartVolume / 100f).coerceIn(0f, 2f)
@@ -5781,6 +5950,14 @@ fun startGuiApplication(cliArgs: CliArgs) = application {
 
                             val micMode = if (cliArgs.mic) cliArgs.micRouting else micRoutingMode
 
+                            // Started from the command line, so no dialog: warn on stderr.
+                            UnprotectedProtocols.of(
+                                cliArgs.rtp, cliArgs.http,
+                                cliArgs.dlna || appSettings.dlnaEnabled,
+                                cliArgs.snapcast || appSettings.snapcastEnabled
+                            ).takeIf { UnprotectedProtocols.needsWarning(NetworkHandler_v1.securityMode, it) }
+                                ?.let { System.err.println(UnprotectedProtocols.cliWarning(it)) }
+
                             NetworkHandler_v1.launchServerInstance(
                                 audioSettings, port, isMulticastMode, caps,
                                 micMode, selectedServerMicOutput, mic, rtp,
@@ -5853,6 +6030,91 @@ fun startGuiApplication(cliArgs: CliArgs) = application {
                             if (cliArgs.mute)           NetworkHandler_v1.isMicMuted.value = true
                         }
                     }
+                }
+
+                // Starting the server from the window, kept as a function so the
+                // confirmation dialog below can resume it either as it was or with
+                // every protocol but WFAS switched off. [caps] is passed in rather
+                // than read from serverCapabilities, which is only recomputed on the
+                // next recomposition.
+                fun startServerFromUi(settings: AppSettings, caps: ServerCapabilities, multicast: Boolean) {
+                    isStreaming      = true
+                    connectionStatus = "Starting Server..."
+                    val port = streamingPort.toIntOrNull() ?: 9090
+                    val mic  = micPort.toIntOrNull() ?: 9092
+                    val rtp  = appSettings.rtpPort.toIntOrNull() ?: 9094
+
+                    isMulticastMode = multicast || settings.rtpEnabled ||
+                            settings.httpEnabled || settings.dlnaEnabled || settings.snapcastEnabled
+
+                    // A previous auto-start may have left its own (auto-start)
+                    // security on the shared handler. A manual start uses the
+                    // current standard settings, so re-apply them here rather
+                    // than inheriting whatever the last start left behind. The
+                    // settings-change effect above only fires when the settings
+                    // themselves change, which is not the case here.
+                    NetworkHandler_v1.configureSecurity(
+                        settings.securityMode, settings.authKey, settings.encryptionEnabled
+                    )
+                    IpcServer.applySecurity(settings.securityMode, settings.authKey)
+
+                    NetworkHandler_v1.launchServerInstance(
+                        audioSettings, port, isMulticastMode, caps,
+                        micRoutingMode, selectedServerMicOutput, mic, rtp,
+                        settings.useNativeEngine, selectedMicMixInput,
+                        muteRender = cliArgs.muteRender ?: settings.muteRender,
+                        persist = cliArgs.persist ?: settings.serverPersist,
+                        dlnaConfig = settings.toDlnaConfig(),
+                        snapcastConfig = settings.toSnapcastConfig(),
+                        onAudioFrame = vizSink
+                    ) { key, args ->
+                        if (key == "error_virtual_driver_missing") {
+                            isStreaming          = false
+                            virtualDriverStatus  = NetworkHandler_v1.checkVirtualDriverStatus(appSettings.useNativeEngine)
+                            connectionStatus     = Strings.get("status_inactive")
+                        } else if (key == "status_client_disconnected") {
+                            // --persist: la sessione e' finita, il server no: resta in ascolto.
+                            if (cliArgs.persist ?: appSettings.serverPersist) {
+                                connectionStatus = Strings.get("status_client_disconnected")
+                            } else scope.launch {
+                                NetworkHandler_v1.stopCurrentStream()
+                                isStreaming = false
+                                connectionStatus = Strings.get("status_inactive")
+                            }
+                        } else {
+                            connectionStatus = if (args.isEmpty()) key else String.format(key, *args)
+                        }
+                    }
+                }
+
+                pendingUnprotected?.let { protocols ->
+                    UnprotectedProtocolsDialog(
+                        protocols = protocols,
+                        onWfasOnly = if (WfasPolicy.enabledAnywhere()) {
+                            {
+                                pendingUnprotected = null
+                                val wfasOnly = appSettings.copy(
+                                    rtpEnabled = false,
+                                    httpEnabled = false,
+                                    dlnaEnabled = false,
+                                    snapcastEnabled = false
+                                )
+                                appSettings = wfasOnly
+                                startServerFromUi(
+                                    wfasOnly,
+                                    ServerCapabilities(setOf(StreamingProtocol.WFAS), null, wfasOnly.httpSafariMode),
+                                    isMulticastMode
+                                )
+                            }
+                        } else {
+                            null
+                        },
+                        onContinue = {
+                            pendingUnprotected = null
+                            startServerFromUi(appSettings, serverCapabilities, isMulticastMode)
+                        },
+                        onCancel = { pendingUnprotected = null }
+                    )
                 }
 
                 Column(Modifier.fillMaxSize()) {
@@ -5932,52 +6194,13 @@ fun startGuiApplication(cliArgs: CliArgs) = application {
                                 }
                             },
                             onStartStreaming = {
-                                isStreaming      = true
-                                connectionStatus = "Starting Server..."
-                                val port = streamingPort.toIntOrNull() ?: 9090
-                                val mic  = micPort.toIntOrNull() ?: 9092
-                                val rtp  = appSettings.rtpPort.toIntOrNull() ?: 9094
-
-                                isMulticastMode = isMulticastMode || appSettings.rtpEnabled ||
-                                        appSettings.httpEnabled || appSettings.dlnaEnabled || appSettings.snapcastEnabled
-
-                                // A previous auto-start may have left its own (auto-start)
-                                // security on the shared handler. A manual start uses the
-                                // current standard settings, so re-apply them here rather
-                                // than inheriting whatever the last start left behind. The
-                                // settings-change effect above only fires when the settings
-                                // themselves change, which is not the case here.
-                                NetworkHandler_v1.configureSecurity(
-                                    appSettings.securityMode, appSettings.authKey, appSettings.encryptionEnabled
-                                )
-                                IpcServer.applySecurity(appSettings.securityMode, appSettings.authKey)
-
-                                NetworkHandler_v1.launchServerInstance(
-                                    audioSettings, port, isMulticastMode, serverCapabilities,
-                                    micRoutingMode, selectedServerMicOutput, mic, rtp,
-                                    appSettings.useNativeEngine, selectedMicMixInput,
-                                    muteRender = cliArgs.muteRender ?: appSettings.muteRender,
-                                    persist = cliArgs.persist ?: appSettings.serverPersist,
-                                    dlnaConfig = appSettings.toDlnaConfig(),
-                                    snapcastConfig = appSettings.toSnapcastConfig(),
-                                    onAudioFrame = vizSink
-                                ) { key, args ->
-                                    if (key == "error_virtual_driver_missing") {
-                                        isStreaming          = false
-                                        virtualDriverStatus  = NetworkHandler_v1.checkVirtualDriverStatus(appSettings.useNativeEngine)
-                                        connectionStatus     = Strings.get("status_inactive")
-                                    } else if (key == "status_client_disconnected") {
-                                        // --persist: la sessione e' finita, il server no: resta in ascolto.
-                                        if (cliArgs.persist ?: appSettings.serverPersist) {
-                                            connectionStatus = Strings.get("status_client_disconnected")
-                                        } else scope.launch {
-                                            NetworkHandler_v1.stopCurrentStream()
-                                            isStreaming = false
-                                            connectionStatus = Strings.get("status_inactive")
-                                        }
-                                    } else {
-                                        connectionStatus = if (args.isEmpty()) key else String.format(key, *args)
-                                    }
+                                // A key or QR pairing protects WFAS only: with other
+                                // protocols on, the start waits for the dialog above.
+                                val unprotected = UnprotectedProtocols.of(appSettings)
+                                if (UnprotectedProtocols.needsWarning(appSettings.securityMode, unprotected)) {
+                                    pendingUnprotected = unprotected
+                                } else {
+                                    startServerFromUi(appSettings, serverCapabilities, isMulticastMode)
                                 }
                             },
                             onStopStreaming = {

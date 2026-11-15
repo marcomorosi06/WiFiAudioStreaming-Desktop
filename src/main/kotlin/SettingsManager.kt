@@ -107,7 +107,9 @@ data class AppSettings(
     val securityMode: String = "OFF",
     val authKey: String = "",
     val rememberAuthKey: Boolean = true,
-    val encryptionEnabled: Boolean = false,
+    // On unless the user turned it off: with a key and no encryption the
+    // handshake is authenticated but the audio itself travels in cleartext.
+    val encryptionEnabled: Boolean = true,
     val qrPairingEnabled: Boolean = false,
     val manualAuthKey: String = "",
     val developerMode: Boolean = false,
@@ -226,6 +228,7 @@ object SettingsRepository {
     private const val SECURITY_MODE_KEY        = "server_security_mode"
     private const val AUTH_KEY_KEY             = "server_auth_key"
     private const val ENCRYPTION_KEY           = "server_encryption_enabled"
+    private const val ENC_DEFAULT_MIGRATED_KEY = "encryption_default_on_migrated"
     private const val USB_MODE_KEY             = "net_usb_mode_enabled"
     private const val USB_LATENCY_KEY          = "net_usb_latency_ms"
     private const val USB_IFACE_KEY            = "net_usb_interface"
@@ -286,10 +289,27 @@ object SettingsRepository {
             runCatching { ConfigManager.save(migrated) }
             migrated
         }
-        val settings = hydrateSecrets(stored)
+        val settings = migrateEncryptionDefault(hydrateSecrets(stored))
         UsbLink.configure(settings.app.usbModeEnabled, settings.app.usbLatencyMs, settings.app.usbInterface)
         WfasPolicy.configure(settings.app.wfasMode)
         return settings
+    }
+
+    /**
+     * Encryption is on by default from this release. The config file stores
+     * every field, so a value written by an earlier build cannot tell an
+     * explicit "off" from an untouched default. Outside Key mode the switch has
+     * had no effect so far, so there it was never a choice and it is turned on
+     * once. A Key-mode setup keeps exactly what it had.
+     */
+    private fun migrateEncryptionDefault(settings: AllSettings): AllSettings {
+        if (prefs.getBoolean(ENC_DEFAULT_MIGRATED_KEY, false)) return settings
+        prefs.putBoolean(ENC_DEFAULT_MIGRATED_KEY, true)
+        runCatching { prefs.flush() }
+        if (settings.app.encryptionEnabled || SecurityMode.requiresKey(settings.app.securityMode)) return settings
+        val updated = settings.copy(app = settings.app.copy(encryptionEnabled = true))
+        runCatching { ConfigManager.save(updated) }
+        return updated
     }
 
     private fun persistSecrets(settings: AllSettings) {
@@ -440,7 +460,7 @@ object SettingsRepository {
         val autoUpdateCheckEnabled = prefs.getBoolean(AUTO_UPDATE_CHECK_KEY, true)
         val securityMode = prefs.get(SECURITY_MODE_KEY, "OFF")
         val authKey = prefs.get(AUTH_KEY_KEY, "")
-        val encryptionEnabled = prefs.getBoolean(ENCRYPTION_KEY, false)
+        val encryptionEnabled = prefs.getBoolean(ENCRYPTION_KEY, true)
         val usbModeEnabled = prefs.getBoolean(USB_MODE_KEY, false)
         val usbLatencyMs = prefs.getInt(USB_LATENCY_KEY, UsbLink.DEFAULT_USB_LATENCY_MS)
         val usbInterface = prefs.get(USB_IFACE_KEY, "Auto")

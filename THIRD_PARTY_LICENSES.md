@@ -38,7 +38,7 @@ was copied from). Both are inside the app: Settings → *Open-source licenses*,
 | JavaCPP, JavaCV, JavaCPP Presets 1.5.10 (Java bindings only for the presets other than FFmpeg) | Apache-2.0 or GPL-2.0 with Classpath Exception |
 | Skiko 0.8.18 with Skia m126 and HarfBuzz, FreeType, ICU 74, libjpeg-turbo, libpng, libwebp, Expat, zlib, Wuffs, piex, Adobe DNG SDK | Apache-2.0, BSD-3-Clause, MIT, FreeType License, Unicode License v3, IJG, libpng-2.0, zlib, DNG SDK License |
 | Kotlin, kotlinx (coroutines, datetime, io, serialization, atomicfu), Compose Multiplatform and the AndroidX libraries it uses, Ktor, ZXing, JNA (with libffi), dorkbox, Javassist, Java UUID Generator, JetBrains annotations | Apache-2.0 (JNA and Javassist used under Apache-2.0; libffi MIT; dorkbox include MIT, BSD-3-Clause and CC0 code) |
-| Bouncy Castle 1.78.1 | Bouncy Castle Licence (MIT) |
+| Bouncy Castle 1.86 (`bcprov`) | Bouncy Castle Licence (MIT) |
 | SLF4J 2.0.16 / 2.0.9 | MIT |
 | Java runtime: Eclipse Temurin 17.0.20+8 | GPL-2.0 with Classpath Exception (notices in the runtime's `legal` folder) |
 | AppImage type2-runtime 20251108 (`.AppImage` files only) with libfuse 3.15.0, squashfuse, Zstandard, zlib, musl, mimalloc | MIT, LGPL-2.1, BSD-2/BSD-3, zlib |

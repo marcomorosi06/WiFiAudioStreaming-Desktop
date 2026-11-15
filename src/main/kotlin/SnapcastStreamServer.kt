@@ -31,6 +31,8 @@ import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicInteger
 
+private const val MAX_STREAM_SESSIONS = 32
+
 class SnapcastStreamServer(
     private val scope: CoroutineScope,
     private val port: Int,
@@ -84,6 +86,13 @@ class SnapcastStreamServer(
             try {
                 while (isActive) {
                     val client = runCatching { socket.accept() }.getOrNull() ?: break
+                    // The port is open to the whole network: a bounded number of
+                    // sessions keeps one host from exhausting threads and memory.
+                    if (sessions.size >= MAX_STREAM_SESSIONS) {
+                        log("[Snapcast] stream connection refused: $MAX_STREAM_SESSIONS sessions already open")
+                        runCatching { client.close() }
+                        continue
+                    }
                     val id = sessionSequence.incrementAndGet()
                     val session = Session(id, client)
                     sessions[id] = session

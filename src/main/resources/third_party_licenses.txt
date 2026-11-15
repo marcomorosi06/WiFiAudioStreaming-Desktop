@@ -192,8 +192,8 @@ licenses/<project>/.
     arch core-common 2.2.0, lifecycle 2.8.4 and 2.8.5)
     Copyright JetBrains s.r.o. and The Android Open Source Project
                                                 licenses/compose-multiplatform/
-  Ktor 3.0.3 (ktor-network, ktor-network-tls, ktor-io, ktor-http,
-    ktor-utils) ................................ licenses/ktor/
+  Ktor 3.0.3 (ktor-network, ktor-io, ktor-http, ktor-utils)
+    ............................................ licenses/ktor/
   ZXing Core 3.5.3 (pairing QR codes: encoding, and decoding from the
     webcam) .................................... licenses/zxing/
   Java Native Access 5.13.0 (jna-jpms, jna-platform-jpms)
@@ -208,8 +208,8 @@ licenses/<project>/.
     MPL-1.1, LGPL-2.1-or-later or Apache-2.0, used here under Apache-2.0.
     Copyright (C) 1999- Shigeru Chiba ......... licenses/javassist/
   Java UUID Generator 4.2.0 .................... licenses/java-uuid-generator/
-  Bouncy Castle 1.78.1 (bcprov, bcpkix, bctls, bcutil): Bouncy Castle
-    Licence (MIT) .............................. licenses/bouncycastle/
+  Bouncy Castle 1.86 (bcprov): Bouncy Castle Licence (MIT)
+    ............................................ licenses/bouncycastle/
   SLF4J API 2.0.16 and SLF4J NOP 2.0.9: MIT .... licenses/slf4j/
 
 

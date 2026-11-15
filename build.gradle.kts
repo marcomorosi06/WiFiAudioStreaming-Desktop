@@ -12,7 +12,7 @@ plugins {
 group = "com.wifiaudiostreaming"
 version = "7.0"
 
-val appVersion = "5.2.0"
+val appVersion = "5.2.1"
 
 val displayVersion = appVersion.split(".").let { p ->
     val major = ((p.getOrNull(0)?.toIntOrNull() ?: 0) - 4).coerceAtLeast(0)
@@ -41,7 +41,8 @@ tasks.named("processResources") {
 repositories {
     google()
     mavenCentral()
-    maven("https://maven.pkg.jetbrains.space/public/p/compose/dev")
+    // No Compose dev repository: every version used here is on Maven Central,
+    // and a third repository is one more place a dependency could resolve from.
 }
 
 // ─── Rilevamento piattaforma ──────────────────────────────────────────────────
@@ -228,16 +229,16 @@ dependencies {
     implementation(compose.material3)
     implementation(compose.materialIconsExtended)
 
+    // Only raw sockets are used: no TLS module.
     val ktorVersion = "3.0.3"
     implementation("io.ktor:ktor-network:$ktorVersion")
-    implementation("io.ktor:ktor-network-tls:$ktorVersion")
 
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.9.0")
 
-    val bcVersion = "1.78.1"
+    // Only the low-level crypto API (ChaCha20-Poly1305, HKDF, SHA-256) is used:
+    // no TLS, no PKIX.
+    val bcVersion = "1.86"
     implementation("org.bouncycastle:bcprov-jdk18on:$bcVersion")
-    implementation("org.bouncycastle:bctls-jdk18on:$bcVersion")
-    implementation("org.bouncycastle:bcpkix-jdk18on:$bcVersion")
 
     // JavaCV rimane per gli encoder AAC e Opus (HTTP server) —
     // NON viene più usato per la cattura audio (sostituita da AudioEngine JNI).
@@ -264,7 +265,9 @@ compose.desktop {
     application {
         mainClass = "MainKt"
 
-        val baseArgs = mutableListOf("-Djava.net.preferIPv6Addresses=false")
+        // The dorkbox tray libraries ping updates.dorkbox.com unless told not to;
+        // the app also switches it off at startup (DorkboxUpdates.kt).
+        val baseArgs = mutableListOf("-Djava.net.preferIPv6Addresses=false", "-Ddorkbox.updates.Updates.ENABLE=false")
         if (isWindows) {
             baseArgs.add("-XX:UseAVX=2")
         }

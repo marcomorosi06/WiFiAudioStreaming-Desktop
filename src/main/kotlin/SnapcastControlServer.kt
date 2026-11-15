@@ -39,6 +39,8 @@ object SnapcastRpcError {
     const val INTERNAL_ERROR = -32603
 }
 
+private const val MAX_CONTROL_CONNECTIONS = 32
+
 class SnapcastControlServer(
     private val scope: CoroutineScope,
     private val port: Int,
@@ -83,6 +85,14 @@ class SnapcastControlServer(
             try {
                 while (isActive) {
                     val client = runCatching { socket.accept() }.getOrNull() ?: break
+                    // Same bound as the stream server: the control port is
+                    // unauthenticated by design (Snapcast has no auth), so at
+                    // least the number of connections one host can hold is capped.
+                    if (connections.size >= MAX_CONTROL_CONNECTIONS) {
+                        log("[Snapcast] control connection refused: $MAX_CONTROL_CONNECTIONS already open")
+                        runCatching { client.close() }
+                        continue
+                    }
                     val id = connectionSequence.incrementAndGet()
                     val connection = Connection(id, client)
                     connections[id] = connection

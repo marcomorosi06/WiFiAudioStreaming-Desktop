@@ -353,7 +353,7 @@ object IpcServer {
         data.forEach { (k, v) ->
             val vStr = when (v) {
                 null       -> "null"
-                is String  -> "\"${v.replace("\\", "\\\\").replace("\"", "\\\"")}\""
+                is String  -> "\"${jsonEscape(v)}\""
                 is Boolean -> v.toString()
                 is Number  -> v.toString()
                 else       -> "\"$v\""
@@ -361,6 +361,23 @@ object IpcServer {
             fields += "\"$k\": $vStr"
         }
         return "{${fields.joinToString(", ")}}"
+    }
+
+    // Values such as renderer names come from the network: a raw newline would
+    // end the one-line reply early and a control character would reach the
+    // terminal of whoever reads it, so every control character is escaped.
+    private fun jsonEscape(v: String): String = buildString(v.length + 8) {
+        for (c in v) {
+            when {
+                c == '\\' -> append("\\\\")
+                c == '"' -> append("\\\"")
+                c == '\n' -> append("\\n")
+                c == '\r' -> append("\\r")
+                c == '\t' -> append("\\t")
+                c.code < 0x20 || c.code == 0x7F || c.code in 0x80..0x9F -> append("\\u%04x".format(c.code))
+                else -> append(c)
+            }
+        }
     }
 
     private fun extractString(json: String, key: String): String? {
