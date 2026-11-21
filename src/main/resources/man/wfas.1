@@ -717,7 +717,7 @@ Prints a pairing code and its QR code, or with \-\-pin an 8\-digit PIN. With a c
 On a client: pair with the server that shows the code or the PIN.
 .RS
 .PP
-Without a code it is asked on the terminal, without echo. With \-\-pin it lists the servers with an open PIN window, asks for the PIN and then for the comparison of the 6\-digit codes. \-\-mic asks the server to accept this device's microphone.
+Without a code it is asked on the terminal, without echo; a code typed on the command line stays in the shell history. With \-\-pin it lists the servers with an open PIN window, asks for the PIN and then for the comparison of the 6\-digit codes. \-\-mic asks the server to accept this device's microphone.
 .RE
 .TP
 .B v3 remove <number|name>
@@ -1310,6 +1310,15 @@ User settings on macOS.
 .TP
 .I %APPDATA%\ewfas\econfig.json
 User settings on Windows.
+.TP
+.I ~/.local/state/wfas/wfas3/
+WFAS v3 keys and pairings on Linux, encrypted; the key is in the Secret Service when available. Honors XDG_STATE_HOME.
+.TP
+.I ~/Library/Application Support/wfas/wfas3/
+WFAS v3 keys and pairings on macOS, encrypted with a key kept in the Keychain; excluded from Time Machine.
+.TP
+.I %LOCALAPPDATA%\ewfas\ewfas3\e
+WFAS v3 keys and pairings on Windows, encrypted with a key protected by the user account; never in the roaming profile.
 .TP
 .I /tmp/wfas\-<pid>.port
 IPC port file created by each running instance, deleted automatically on exit. On Windows it lives in the user temporary directory.

@@ -1,33 +1,33 @@
 # WFAS v3 native module manifest. Checked by CMakeLists.txt before every build.
-# core/  WFAS v3 reference implementation, archive wfas-v31.tar.gz
-#        (SHA-256 22782132be44ad39a201a19665a1b0218896a606779b4b5416aa6c2a7027911b),
-#        specification draft 6 (17 November 2026), unmodified.
+# core/  WFAS v3 reference implementation, archive wfas-v3.tar.gz
+#        (SHA-256 c9a0f7ff53ca78d4a0b24d20008bd8839abc28cd13c6f75af15885ef18de1213),
+#        specification draft 7 (21 November 2026), unmodified.
 # opus/  libopus v1.5.2, https://github.com/xiph/opus tag v1.5.2
 #        (commit ddbe48383984d56acd9e1ab6a090c54ca6b735a6): AUTHORS, COPYING, README,
 #        include/, src/, celt/, silk/, silk/float/ (no subdirectories of celt/ and
 #        silk/ other than silk/float/, no demo programs), byte-identical to upstream.
 # Files are never edited; they are updated only as a whole block.
-9ffd073330257ae98b1a699edeb88b8cfc6f0f04072266712fc34ef469f7903c  ./core/CHANGELOG.md
+92b6778ac26d13e2112dc08b4a8490b25ac20c203fe7b738e4bb79f4a398d5c6  ./core/CHANGELOG.md
 0fd4ff5407c32d1ea3080a36e50c59ddec7dd9bd0d0d658d3964af8453420b35  ./core/LICENSE
 2213ad0194c849e0cd1f9bce2eebe4ebd9b3561344b9b43ecf138352796a7419  ./core/Makefile
 5af5045d30a30cb0a5fd1bc8ac1d29a99fa9eb8d20803008142b435f83a1a9b8  ./core/NOTICE
-535ec91f1163b30a8fe1a047c6255f549e0115ab9be39aaa2353541dad975d60  ./core/WFAS_V3_PROTOCOL.md
+b8af8eaee6f53f238ab6e05ac2ca1ae0e2396885f99d7ac2c884210719d3ca60  ./core/WFAS_V3_PROTOCOL.md
 9c21cd6feb8e3fdd6ba367c13288f75e449182de3f2f2c9202611acfb01fcc09  ./core/model/psk_model.py
 911c3535fb3b77a2d16616100f419472815d44da753257ff6cf4a9728e5c95f2  ./core/tests/cli_test.py
 99656fcd7f5c91271aa876e02b71b2d2193d088d8a4018b400888148ecccd99a  ./core/tests/gen_vectors.py
 c05e93b9a6ef1a8dd2644bea169bb224588beceac26262380f44a5098b1d1e88  ./core/tests/interop.c
 33c158f81a0011133ae9ebc97be89521c8b0f53607ce05eb1d011291e0931108  ./core/tests/interop.py
 b28d5d2f342d9c52a4477693c6974fdcf5cc8373c8555ca433da2ce22771a3f5  ./core/tests/interop_mcast.py
-76d9d9e8db26b7cddd09f9717406d78a3b899f2a6e68e0653eb88adc2180cb5a  ./core/tests/interop_pair.py
-bdc3e25f75a49ba3ebb9f142adc6bde69cfc88261595135dea4b9200537de2b8  ./core/tests/mutate.py
+93677a17d34846565d234b3f0930e3f4f59b2bffa2694df5b328a717fbd95575  ./core/tests/interop_pair.py
+6572e49f7908ad2eba6c902f9eb286c6695b90a33ca7a52e779d70a6c19ad001  ./core/tests/mutate.py
 68677f7841e97d850085c29198e0e40b44f2697a23a93c8693fc99d123b39bce  ./core/tests/peer.py
 b201e109b0381d944509da89b51496f8b67ea88be27a0faee4bb2d6991cb7ecb  ./core/tests/peer_mcast.py
-50031c7a9d5355bbdd3852cb804af8e2de6b3d2548969a33a1228183efcf2cfb  ./core/tests/peer_pair.py
+e73d9c4e14aa9280d7ee725e2d9842054ab085b74f0fbcb55647094832c40b6b  ./core/tests/peer_pair.py
 66732717dcef782a273f7a950df4d297b6755d3268e027f8aea0a5ce7296418b  ./core/tests/ref.py
 2885181bef724cb708e465fcfc50498c9800f01fa3de503dc812256a4d30d05b  ./core/tests/test_base.c
 151934bb8096f24b047409552e7f8f817d69cfd0ea1a0f088c9d7aa61802ed0f  ./core/tests/test_hs.c
 ff986130e7292721bfeb852de4361ecc1b49e628b91db9ee9214f10228bbd4fd  ./core/tests/test_mcast.c
-f74a696c73d6eda7c224965615e08b5c97ec0532fc2a0405f6698d803c1a9554  ./core/tests/test_pair.c
+3959aada18283e6e01653d75ac01a3d52153a5f757041cdabdd8c6caa3965cfe  ./core/tests/test_pair.c
 c03d5ccc2593be5b230fffaeaae93afda0e2cafb0c79f8618bbf88f04b1d478f  ./core/tests/vectors.h
 15479a31a23c55cc35dd5d22f8f9b2d2e62befb8faf54f517d5f0ed0edba3466  ./core/third_party/MANIFEST.sha256
 ad74c036a6afaedc418fed65f171c877c2f74a4c70938a03930aa11c98a20508  ./core/third_party/fiat/AUTHORS
@@ -95,12 +95,12 @@ e1d16de5cb2986d6bbace62fc07d12d4b31e816b3d423a53c04909bd07d4c92c  ./core/third_p
 a154a51bc6c70e523741a9650f474c4d4031ee71a437f6b221faac0b3a4d6ac4  ./core/third_party/hacl/src/Hacl_MAC_Poly1305.c
 c4424a4851cd2d4f27633ca19faf5cb1135a680443727a8d1b134737f9a71e62  ./core/third_party/hacl/src/Lib_Memzero0.c
 c567fa102ccf59ddda657b2bb328b73ff98d0071fcea382b3a997ae430ed7bf9  ./core/third_party/libcrux/libcrux_mlkem768_sha3.h
-91b14ee170a903af69164878e021ad1d2b9c80d0a0b7a90693dc6050db4a6375  ./core/wfas.c
-394498aa33cb2a8b1bf8fbc695869a020406185076deb3aa7398b02434efe539  ./core/wfas.h
+7226a2a472171d830cfb2f8d6283d5bd376832d35a6dd78896ad4c253b8e81e7  ./core/wfas.c
+76e812e76e08c9577a4454640e84fb0c236993ddbab95616b54d17af56a5c150  ./core/wfas.h
 7edf6f14de316aa71b57452f82a93dcb0ed6cd4698fc9efe1f7015088256949d  ./core/wfas_tp.c
 fb2538aa0d622da807769421ae21c8981c8aeb90c7c742dfdd0690d61b435688  ./core/wfas_tp.h
 546c8a9fc15f173054d28c4ac894c83747fcfabfef45142cb1ae0a83785c6104  ./core/wfas_tp_mlkem.c
-50c60d0dc6afa19ff4f328bd1264fd366f2baf4371fb564c5dbfcaabddde637c  ./core/wfascli.c
+18dd6839ca62699848e24479f2aab18b76356ce7755406d718c9d79cc50e2e6c  ./core/wfascli.c
 f9fd849e652219ce98e008303370b352d37663d0ffb27b8dc514ad93c9c7438b  ./opus/AUTHORS
 01e1167d54a096d123cf6dfbbeb19587278845c6481d2d66d545669846079551  ./opus/COPYING
 9bdf02594da8c33af8b7bdb7a2ac98f6fdc6abc71d5fb198e7b186286a681dca  ./opus/README

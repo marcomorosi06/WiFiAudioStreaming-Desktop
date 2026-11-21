@@ -56,6 +56,16 @@ interface Wfas3Store {
 
     /** Erase every v3 record: device and pairs. */
     fun eraseAll()
+
+    /**
+     * Whether any pair record is stored, readable or not. A device record
+     * that is missing while pair records exist is never replaced by a new
+     * one: the new entry key and counters would make every healthy pair
+     * look stolen (specification 7.3, 16).
+     */
+    fun hasPairRecords(): Boolean = (0 until W3.MAX_PAIRS).any { slot ->
+        try { loadPair(slot)?.also { it.fill(0) } != null } catch (_: Exception) { true }
+    }
 }
 
 /** Loads libwfas3 once. The platform sets [loader] before the first use. */
@@ -83,6 +93,7 @@ enum class Wfas3Failure {
     PORT_IN_USE,   // another program holds the v3 port
     NETWORK,       // the socket could not be opened
     IN_USE,        // another process of this app holds the records
+    STORE_KEY,     // records exist but the key that opens them is missing
 }
 
 class Wfas3Exception(val failure: Wfas3Failure, message: String) : Exception(message)
@@ -108,6 +119,8 @@ interface Wfas3Listener {
     fun onBeacon(beacon: Wfas3Beacon) {}
     /** [code]: the 6-digit verification code; show it only in PIN mode. */
     fun onPairAsk(ask: Int, name: String, flags: Int, code: String) {}
+    /** As above, with the address the client asks from (proved by its step 3). */
+    fun onPairAsk(ask: Int, name: String, flags: Int, code: String, from: Wfas3Addr) { onPairAsk(ask, name, flags, code) }
     fun onPairCode(code: String) {}
     fun onPaired(pair: Int, name: String, flags: Int) {}
     fun onPairFailed(reason: Int, race: Boolean) {}
@@ -209,6 +222,9 @@ class Wfas3Engine(
     /** On-link IPv6 prefixes of [link6]: address bytes and prefix length. */
     @Volatile private var prefixes6: List<Pair<ByteArray, Int>> = emptyList()
     @Volatile private var prefixesAtMs = 0L
+    /** On-link IPv4 subnets of the interfaces that are up, for pairing datagrams. */
+    @Volatile private var prefixes4: List<Pair<ByteArray, Int>> = emptyList()
+    @Volatile private var prefixes4AtMs = 0L
 
     /** Whether the port is open on an IPv6-only link (multicast groups are then IPv6 too). */
     val ipv6Link: Boolean get() = v6Link
@@ -254,13 +270,22 @@ class Wfas3Engine(
                 throw Wfas3Exception(Wfas3Failure.LIBRARY, "native library not available")
             }
             if (Wfas3Native.nSelftest() != W3.OK) throw Wfas3Exception(Wfas3Failure.SELFTEST, "self-test failed")
-            val stored = try { store.loadDevice() } catch (e: Exception) {
+            val stored = try { store.loadDevice() } catch (e: Wfas3Exception) {
+                throw e
+            } catch (e: Exception) {
                 throw Wfas3Exception(Wfas3Failure.DEVICE_RECORD, "device record unreadable")
             }
             if (stored != null && stored.size != W3.DEVICE_RECORD_LEN) {
                 stored.fill(0)
                 throw Wfas3Exception(Wfas3Failure.DEVICE_RECORD, "device record has a wrong length")
             }
+            // A new device record only on a store without pairs: with pairs,
+            // a fresh entry key and fresh counters would turn every healthy
+            // pair suspect at its next handshake. Nothing is written.
+            val pairsStored = stored == null && try { store.hasPairRecords() } catch (e: Wfas3Exception) {
+                throw e
+            } catch (_: Exception) { true }
+            if (pairsStored) throw Wfas3Exception(Wfas3Failure.DEVICE_RECORD, "device record missing, pair records present")
             val rec = ByteArray(W3.DEVICE_RECORD_LEN)
             val handle = Wfas3Native.nCreate(stored, rec)
             stored?.fill(0)
@@ -468,19 +493,25 @@ class Wfas3Engine(
 
     fun codeValid(text: String): Boolean = Companion.codeValid(text)
 
-    /** Client: pair with a code (typed, scanned, or the label of a headless device). */
-    fun pairWithCode(code: String, guest: Boolean, mic: Boolean, replace: Int = -1): Int {
+    /**
+     * Client: pair with a code (typed, scanned, or the label of a headless
+     * device). The server plays to this device; it may receive this device's
+     * audio only with [allowReceive]: by default a pairing made to listen does
+     * not let the other side pull the audio of this computer.
+     */
+    fun pairWithCode(code: String, guest: Boolean, mic: Boolean, replace: Int = -1, allowReceive: Boolean = false): Int {
         val flags = (if (guest) W3.PAIR_GUEST else 0) or (if (mic) W3.PAIR_MIC else 0)
-        val perms = W3.PERM_RECEIVE or (if (mic) W3.PERM_MICROPHONE else 0)
+        val perms = (if (allowReceive) W3.PERM_RECEIVE else 0) or (if (mic) W3.PERM_MICROPHONE else 0)
         return callOut { Wfas3Native.nPairStart(h, W3.PAIR_CODE, code, null, null, name, flags, perms, replace, outBuf) }
     }
 
-    /** Client: pair in PIN mode with the beacon the user chose and the PIN typed. */
-    fun pairWithPin(beacon: Wfas3Beacon, pin: String, guest: Boolean, mic: Boolean, replace: Int = -1): Int {
+    /** Client: pair in PIN mode with the beacon the user chose and the PIN typed; see [pairWithCode]. */
+    fun pairWithPin(beacon: Wfas3Beacon, pin: String, guest: Boolean, mic: Boolean, replace: Int = -1,
+                    allowReceive: Boolean = false): Int {
         if (pin.length != 8 || pin.any { it !in '0'..'9' }) return W3.E_ARG
         val p = ByteArray(8) { pin[it].code.toByte() }
         val flags = (if (guest) W3.PAIR_GUEST else 0) or (if (mic) W3.PAIR_MIC else 0)
-        val perms = W3.PERM_RECEIVE or (if (mic) W3.PERM_MICROPHONE else 0)
+        val perms = (if (allowReceive) W3.PERM_RECEIVE else 0) or (if (mic) W3.PERM_MICROPHONE else 0)
         return try {
             callOut { Wfas3Native.nPairStart(h, W3.PAIR_PIN, null, p, beacon.raw, name, flags, perms, replace, outBuf) }
         } finally { p.fill(0) }
@@ -629,6 +660,22 @@ class Wfas3Engine(
         return onLink6(a, ifc.index, prefixes6)
     }
 
+    /**
+     * Whether an IPv4 source is on one of this computer's links: loopback,
+     * link-local, or in the subnet of an address of an interface that is up
+     * (prefixes /8 to /32). Used for pairing datagrams only.
+     */
+    private fun fromLink4(a: InetAddress): Boolean {
+        if (a !is Inet4Address) return false
+        if (a.isLoopbackAddress || a.isLinkLocalAddress) return true
+        if (inPrefixes4(a.address, prefixes4)) return true
+        val now = System.currentTimeMillis()
+        if (now - prefixes4AtMs < 5_000L) return false
+        prefixes4AtMs = now
+        prefixes4 = onLinkPrefixes4()
+        return inPrefixes4(a.address, prefixes4)
+    }
+
     /** [raw] as a destination on the IPv6 link: link-local and link-scope multicast get the link's interface. */
     private fun toLink6(raw: ByteArray): InetAddress? {
         val ifc = link6 ?: return null
@@ -686,8 +733,16 @@ class Wfas3Engine(
                         val len = rx.position()
                         if (len <= 0 || len > W3.MAX_DATAGRAM) continue
                         val a = isa.address ?: continue
+                        val type = rx.array()[1]
+                        // A group socket is bound to its port on every address:
+                        // only multicast datagrams are taken from it, so that it
+                        // is never a second way into the core.
+                        if (ch !== channel && type != T_MULTICAST) continue
                         // On IPv6 only the link itself is heard (see fromLink).
                         if (v6Link && !fromLink(a)) continue
+                        // Pairing happens on the link: over IPv4, beacons and
+                        // pairing steps come only from an on-link subnet.
+                        if (!v6Link && (type == T_PAIR_BEACON || type == T_PAIR) && !fromLink4(a)) continue
                         toMapped(a, ip)
                         lock.withLock {
                             if (h != 0L && Wfas3Native.nReceive(h, rx.array(), len, ip, isa.port, outBuf) == W3.OK) handleOut()
@@ -879,7 +934,7 @@ class Wfas3Engine(
                         ((rawBeacon[16].toInt() and 0xFF) or ((rawBeacon[17].toInt() and 0xFF) shl 8)))
                     l.onBeacon(Wfas3Beacon(rawBeacon, bnm, ba))
                 }
-                if ((ev and W3.EV_PAIR_ASK) != 0) l.onPairAsk(ask, nm, pflags, "%06d".format(code))
+                if ((ev and W3.EV_PAIR_ASK) != 0) l.onPairAsk(ask, nm, pflags, "%06d".format(code), addr)
                 if ((ev and W3.EV_PAIR_CODE) != 0) l.onPairCode("%06d".format(code))
                 if ((ev and W3.EV_PAIR_FAILED) != 0) l.onPairFailed(status, (ev and W3.EV_PAIR_RACE) != 0)
                 if ((ev and W3.EV_WINDOW_CLOSED) != 0) l.onWindowClosed()
@@ -989,6 +1044,37 @@ class Wfas3Engine(
 
         internal fun ipv6OnlyOf(all: List<InetAddress>): Boolean =
             all.none { realIpv4(it) } && all.any { it is Inet6Address && !it.isLoopbackAddress }
+
+        private const val T_PAIR_BEACON: Byte = 0x03
+        private const val T_PAIR: Byte = 0x13
+        private const val T_MULTICAST: Byte = 0x30
+
+        /** The IPv4 subnets of every interface that is up, loopback excluded. */
+        private fun onLinkPrefixes4(): List<Pair<ByteArray, Int>> = try {
+            NetworkInterface.getNetworkInterfaces().toList()
+                .filter { runCatching { it.isUp && !it.isLoopback }.getOrDefault(false) }
+                .flatMap { n -> n.interfaceAddresses.map { it.address to it.networkPrefixLength.toInt() } }
+                .let { prefixesOf4(it) }
+        } catch (_: Exception) { emptyList() }
+
+        internal fun prefixesOf4(list: List<Pair<InetAddress?, Int>>): List<Pair<ByteArray, Int>> = list.mapNotNull { (ad, len) ->
+            if (ad !is Inet4Address || ad.isLoopbackAddress || ad.isAnyLocalAddress) return@mapNotNull null
+            // Shorter than /8 is not a link.
+            if (len !in 8..32) return@mapNotNull null
+            ad.address to len
+        }
+
+        internal fun inPrefixes4(raw: ByteArray, list: List<Pair<ByteArray, Int>>): Boolean {
+            if (raw.size != 4) return false
+            for ((p, len) in list) {
+                if (p.size != 4) continue
+                val mask = if (len >= 32) -1 else ((-1) shl (32 - len))
+                val x = java.nio.ByteBuffer.wrap(raw).int
+                val y = java.nio.ByteBuffer.wrap(p).int
+                if ((x and mask) == (y and mask)) return true
+            }
+            return false
+        }
 
         /** The on-link IPv6 prefixes of [n] (link-local excluded: it is checked by scope). */
         private fun onLinkPrefixes(n: NetworkInterface): List<Pair<ByteArray, Int>> = try {

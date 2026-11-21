@@ -44,6 +44,11 @@ import java.nio.file.Files
 import java.nio.file.LinkOption
 import java.nio.file.StandardCopyOption
 import java.nio.file.StandardOpenOption
+import java.nio.file.attribute.AclEntry
+import java.nio.file.attribute.AclEntryFlag
+import java.nio.file.attribute.AclEntryPermission
+import java.nio.file.attribute.AclEntryType
+import java.nio.file.attribute.AclFileAttributeView
 import java.nio.file.attribute.PosixFilePermissions
 import java.security.MessageDigest
 import java.security.SecureRandom
@@ -125,11 +130,24 @@ class Wfas3FileStore(private val dir: File) : Wfas3Store {
         synchronized(this) {
             key?.let { return it }
             ensureDir()
-            val k = loadKey() ?: newKey()
+            val k = loadKey() ?: run {
+                // A new key would make every stored record unreadable and the
+                // next save would replace the device record: with records on
+                // disk and no key (a reset keychain, a copied folder), stop
+                // here and touch nothing.
+                if (hasRecords()) throw Wfas3Exception(Wfas3Failure.STORE_KEY, "store key missing")
+                newKey()
+            }
             key = k
             return k
         }
     }
+
+    private fun hasRecords(): Boolean =
+        dir.listFiles()?.any { it.isFile && it.name.endsWith(".rec") } ?: false
+
+    override fun hasPairRecords(): Boolean =
+        dir.listFiles()?.any { it.isFile && it.name.startsWith("pair-") && it.name.endsWith(".rec") } ?: false
 
     private fun loadKey(): ByteArray? {
         SecretVault.load(VAULT_NAME)?.let { b64 ->
@@ -175,11 +193,14 @@ class Wfas3FileStore(private val dir: File) : Wfas3Store {
         }.getOrNull()
     }
 
+    /** Null if the record does not exist; throws if it exists and cannot be read or opened. */
     private fun read(name: String): ByteArray? {
         val f = File(dir, name)
-        if (!f.isFile) return null
-        val blob = runCatching { Files.readAllBytes(f.toPath()) }.getOrNull() ?: return null
-        return open(name, blob)
+        if (!f.exists()) return null
+        val blob = try { Files.readAllBytes(f.toPath()) } catch (e: java.io.IOException) {
+            throw java.io.IOException("record not readable")
+        }
+        return open(name, blob) ?: throw java.io.IOException("record does not open")
     }
 
     private fun write(name: String, plain: ByteArray) {
@@ -227,12 +248,28 @@ class Wfas3FileStore(private val dir: File) : Wfas3Store {
             runCatching {
                 Files.setPosixFilePermissions(f.toPath(), PosixFilePermissions.fromString(if (directory) "rwx------" else "rw-------"))
             }
-        } else {
-            runCatching {
-                f.setReadable(false, false); f.setWritable(false, false)
-                f.setReadable(true, true); f.setWritable(true, true)
-                if (directory) { f.setExecutable(false, false); f.setExecutable(true, true) }
-            }
+            return
+        }
+        // Windows: File.setReadable cannot take access away there. The ACL is
+        // set to one entry, full control for the owner (inherited by what the
+        // folder holds), and nothing for anyone else.
+        val done = runCatching {
+            val view = Files.getFileAttributeView(f.toPath(), AclFileAttributeView::class.java)
+                ?: return@runCatching false
+            val owner = Files.getOwner(f.toPath())
+            val entry = AclEntry.newBuilder()
+                .setType(AclEntryType.ALLOW)
+                .setPrincipal(owner)
+                .setPermissions(*AclEntryPermission.values())
+                .apply { if (directory) setFlags(AclEntryFlag.FILE_INHERIT, AclEntryFlag.DIRECTORY_INHERIT) }
+                .build()
+            view.acl = listOf(entry)
+            true
+        }.getOrDefault(false)
+        if (!done) runCatching {
+            f.setReadable(false, false); f.setWritable(false, false)
+            f.setReadable(true, true); f.setWritable(true, true)
+            if (directory) { f.setExecutable(false, false); f.setExecutable(true, true) }
         }
     }
 
@@ -297,7 +334,93 @@ class Wfas3FileStore(private val dir: File) : Wfas3Store {
         private fun pairName(slot: Int) = "pair-%02d.rec".format(slot)
         private fun hintName(slot: Int) = "hint-%02d.rec".format(slot)
 
-        fun defaultDir(): File = File(ConfigPaths.configDir(), "wfas3")
+        /**
+         * Where the records live. Not in the settings folder: on Windows that
+         * is the roaming profile, which can be copied to other machines and
+         * servers; on Linux ~/.config is often synchronised or backed up. The
+         * records go to the local, non-roaming state folder instead
+         * (ConfigPaths.stateDir), and a folder left by an earlier version is
+         * moved there once. With --config the folder next to that file is
+         * kept, as the user chose it.
+         */
+        fun defaultDir(): File {
+            val legacy = File(ConfigPaths.configDir(), "wfas3")
+            if (ConfigPaths.overrideConfigFile != null) return legacy
+            val target = File(ConfigPaths.stateDir(), "wfas3")
+            if (target.absoluteFile == legacy.absoluteFile) return excludeFromBackup(target)
+            if (target.isDirectory || !legacy.isDirectory) return excludeFromBackup(target)
+            return if (migrate(legacy, target)) excludeFromBackup(target) else legacy
+        }
+
+        /**
+         * Move the records of an earlier version. Not while another process
+         * holds them (its lock), and never half: a failed copy is removed and
+         * the old folder stays in use.
+         */
+        private fun migrate(from: File, to: File): Boolean {
+            val lockCh = runCatching {
+                FileChannel.open(File(from, LOCK_FILE).toPath(), StandardOpenOption.CREATE, StandardOpenOption.WRITE)
+            }.getOrNull() ?: return false
+            try {
+                val l = try { lockCh.tryLock() } catch (_: Exception) { null } ?: return false
+                l.release()
+            } finally {
+                runCatching { lockCh.close() }
+            }
+            to.parentFile?.mkdirs()
+            val moved = runCatching {
+                Files.move(from.toPath(), to.toPath(), StandardCopyOption.ATOMIC_MOVE)
+                true
+            }.getOrDefault(false)
+            if (moved) return true
+            // Another volume: copy, check, then erase the old copies.
+            val names = from.listFiles()?.filter { it.isFile && it.name != LOCK_FILE } ?: return false
+            val ok = runCatching {
+                to.mkdirs()
+                for (f in names) {
+                    val t = File(to, f.name)
+                    Files.copy(f.toPath(), t.toPath(), StandardCopyOption.COPY_ATTRIBUTES, LinkOption.NOFOLLOW_LINKS)
+                    if (!Files.readAllBytes(t.toPath()).contentEquals(Files.readAllBytes(f.toPath()))) error("copy differs")
+                }
+                true
+            }.getOrDefault(false)
+            if (!ok) {
+                to.listFiles()?.forEach { runCatching { it.delete() } }
+                runCatching { to.delete() }
+                return false
+            }
+            for (f in names) {
+                runCatching {
+                    val n = f.length().toInt().coerceAtLeast(0)
+                    FileChannel.open(f.toPath(), StandardOpenOption.WRITE).use { ch ->
+                        ch.write(ByteBuffer.allocate(n)); ch.force(true)
+                    }
+                    f.delete()
+                }
+            }
+            runCatching { File(from, LOCK_FILE).delete() }
+            runCatching { from.delete() }
+            return true
+        }
+
+        /**
+         * macOS: Time Machine skips the folder (a sticky exclusion, no
+         * administrator needed). A restored old copy of the records would make
+         * the pairs look stolen, and the copy is of no use without the key in
+         * the Keychain anyway. Best effort, once per run.
+         */
+        @Volatile private var excluded = false
+
+        private fun excludeFromBackup(d: File): File {
+            if (excluded || ConfigPaths.os != HostOs.MACOS) return d
+            excluded = true
+            runCatching {
+                d.mkdirs()
+                ProcessBuilder("/usr/bin/tmutil", "addexclusion", d.absolutePath)
+                    .redirectErrorStream(true).redirectOutput(ProcessBuilder.Redirect.DISCARD).start()
+            }
+            return d
+        }
     }
 }
 
@@ -406,7 +529,8 @@ object Wfas3Desktop : Wfas3Listener {
 
 
     data class WindowState(val kind: Int, val text: String, val qr: String?, val openedAtMs: Long, val ask: Boolean, val paired: String? = null)
-    data class AskState(val ask: Int, val name: String, val flags: Int, val code: String, val pin: Boolean) {
+    /** [from]: the address the client asks from, shown with the question. */
+    data class AskState(val ask: Int, val name: String, val flags: Int, val code: String, val pin: Boolean, val from: String = "") {
         val wantsGuest: Boolean get() = (flags and W3.PAIR_GUEST) != 0
         val wantsMic: Boolean get() = (flags and W3.PAIR_MIC) != 0
     }
@@ -509,6 +633,7 @@ object Wfas3Desktop : Wfas3Listener {
         Wfas3Failure.PORT_IN_USE -> Strings.get("w3_fail_port", W3.UDP_PORT)
         Wfas3Failure.NETWORK -> Strings.get("w3_fail_network")
         Wfas3Failure.IN_USE -> Strings.get("w3_fail_in_use")
+        Wfas3Failure.STORE_KEY -> Strings.get("w3_fail_store_key")
         null -> Strings.get("w3_fail_network")
     }
 
@@ -933,6 +1058,8 @@ object Wfas3Desktop : Wfas3Listener {
         return false
     }
 
+    // A pairing from this PC is made to listen: the server gets no permission
+    // to receive this computer's audio (see Wfas3Engine.pairWithCode).
     fun pairWithCode(app: AppSettings, code: String, guest: Boolean, mic: Boolean, replace: Int = -1): Boolean {
         val e = ensure(app) ?: return false
         pairing.value = ClientPairing.Waiting(pin = false)
@@ -1024,9 +1151,9 @@ object Wfas3Desktop : Wfas3Listener {
 
     // -- engine events (event thread) -----------------------------------------
 
-    override fun onPairAsk(ask: Int, name: String, flags: Int, code: String) {
+    override fun onPairAsk(ask: Int, name: String, flags: Int, code: String, from: Wfas3Addr) {
         val w = window.value
-        asks.value = asks.value.filterNot { it.ask == ask } + AskState(ask, name, flags, code, w?.kind == W3.PAIR_PIN)
+        asks.value = asks.value.filterNot { it.ask == ask } + AskState(ask, name, flags, code, w?.kind == W3.PAIR_PIN, from.hostText())
     }
 
     override fun onPaired(pair: Int, name: String, flags: Int) {
@@ -1078,12 +1205,39 @@ object Wfas3Desktop : Wfas3Listener {
         updateNetwork()
     }
 
+    /** When each listed beacon was last heard: a window sends one every second. */
+    private val beaconHeard = HashMap<String, Long>()
+    private const val BEACON_FRESH_MS = 4_000L
+
     override fun onBeacon(beacon: Wfas3Beacon) {
-        // At most 8 names, as the specification asks; the newest replace none.
-        val cur = beacons.value
-        if (cur.any { it.key == beacon.key }) return
-        if (cur.size >= 8) return
-        beacons.value = cur + beacon
+        // At most 8 names, as the specification asks. A server stays listed
+        // while it is heard; one not heard for 4 s leaves, so that the list
+        // follows the windows that are open and old or forged entries do not
+        // keep a real server out for good.
+        val now = System.currentTimeMillis()
+        synchronized(beaconHeard) {
+            val cur = fresh(now)
+            val known = cur.indexOfFirst { it.key == beacon.key }
+            when {
+                known >= 0 -> { beaconHeard[beacon.key] = now; beacons.value = cur.toMutableList().also { it[known] = beacon } }
+                cur.size < 8 -> { beaconHeard[beacon.key] = now; beacons.value = cur + beacon }
+                else -> beacons.value = cur
+            }
+        }
+    }
+
+    /** Drop the beacons not heard lately; the panel calls it every second. */
+    fun pruneBeacons() {
+        synchronized(beaconHeard) {
+            val cur = fresh(System.currentTimeMillis())
+            if (cur.size != beacons.value.size) beacons.value = cur
+        }
+    }
+
+    private fun fresh(now: Long): List<Wfas3Beacon> {
+        val cur = beacons.value.filter { now - (beaconHeard[it.key] ?: 0L) <= BEACON_FRESH_MS }
+        beaconHeard.keys.retainAll(cur.map { it.key }.toSet())
+        return cur
     }
 
     override fun onSuspect(pair: Int) {

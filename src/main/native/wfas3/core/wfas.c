@@ -406,6 +406,7 @@ static uint32_t wfas3_pair_len_ok(size_t len)
     case 100U:
     case 80U:
     case 52U:
+    case 48U:
         ok = 1U;
         break;
     default:
@@ -518,6 +519,10 @@ typedef char wfas3_assert_pairs[(WFAS3_MAX_PAIRS <= 64U) ? 1 : -1];
 /* Global caps per second. Placeholders: the specification requires them to be
  * set from measurement on the slowest supported device (section 15). */
 #define WFAS3_CAP_TAGS         4096U
+#define WFAS3_TAG_SRC          16U      /* source addresses with a tag budget (7.2) */
+#define WFAS3_CAP_TAGS_SRC     512U     /* tag computations per second per address */
+#define WFAS3_CAP_TAGS_FAST    16U      /* per pair, from its last seen address    */
+typedef char wfas3_assert_tag_src[(WFAS3_TAG_SRC == 16U) ? 1 : -1];   /* wfas3_device */
 #define WFAS3_CAP_STALE        2U
 #define WFAS3_CAP_HS           8U
 #define WFAS3_CAP_PROBE        10U      /* fresh answers to Probes             */
@@ -1548,19 +1553,78 @@ static uint64_t wfas3_mac1_candidates(const wfas3_device *dev, const uint8_t *d,
     return mask;
 }
 
+/* One tag computation for a datagram from this address (7.2): within the
+ * share of its source address and within the global cap. The last
+ * WFAS3_TAG_SRC addresses have a share each; a new address takes the slot
+ * whose second started longest ago. */
+static uint32_t wfas3_tag_take(wfas3_device *dev, const wfas3_addr *from)
+{
+    uint32_t k = WFAS3_NONE;
+    uint32_t i;
+    uint32_t ok = 0U;
+
+    for (i = 0U; i < WFAS3_TAG_SRC; i++) {
+        if ((dev->tag_src_used[i] == 1U) && (wfas3_ct_eq(dev->tag_src_ip[i], from->ip, 16U) == 1U)) {
+            k = i;
+        }
+    }
+    if (k == WFAS3_NONE) {
+        k = 0U;
+        for (i = 1U; i < WFAS3_TAG_SRC; i++) {
+            if ((dev->tag_src_used[k] == 1U) &&
+                ((dev->tag_src_used[i] == 0U) || (dev->tag_src_win_ms[i] < dev->tag_src_win_ms[k]))) {
+                k = i;
+            }
+        }
+        memcpy(dev->tag_src_ip[k], from->ip, 16U);
+        dev->tag_src_used[k] = 1U;
+        dev->tag_src_win_ms[k] = dev->now_ms;
+        dev->tag_src_count[k] = 0U;
+    }
+    if ((wfas3_rate_take(&dev->tag_src_win_ms[k], &dev->tag_src_count[k], dev->now_ms,
+                         WFAS3_CAP_TAGS_SRC) == 1U) &&
+        (wfas3_rate_take(&dev->tag_win_ms, &dev->tag_count, dev->now_ms, WFAS3_CAP_TAGS) == 1U)) {
+        ok = 1U;
+    }
+    return ok;
+}
+
+/* Whether pair i may have its tag computed first, outside the caps: the
+ * datagram comes from the address it was last seen at, and the pair has
+ * budget left for that (7.2). */
+static uint32_t wfas3_tag_fast(wfas3_device *dev, uint32_t i, const wfas3_addr *from)
+{
+    wfas3_pair *p = &dev->pairs[i];
+
+    return ((p->seen_valid == 1U) && (wfas3_ct_eq(p->seen_addr.ip, from->ip, 16U) == 1U) &&
+            (wfas3_rate_take(&p->fast_win_ms, &p->fast_count, dev->now_ms,
+                             WFAS3_CAP_TAGS_FAST) == 1U)) ? 1U : 0U;
+}
+
 /* The pair whose tag key (K_tag, or K_probe when probe == 1) for the incoming
- * direction verifies tag over d[0 .. len), or WFAS3_NONE. */
+ * direction verifies tag over d[0 .. len), or WFAS3_NONE. A candidate last
+ * seen at the source address is tried first, then the others in order. */
 static uint32_t wfas3_tag_select(wfas3_device *dev, uint64_t cand, const uint8_t *d, size_t len,
-                                 const uint8_t *tag, uint32_t probe)
+                                 const uint8_t *tag, uint32_t probe, const wfas3_addr *from)
 {
     uint8_t m[WFAS3_TAG_LEN];
+    uint64_t left = cand;
     uint32_t found = WFAS3_NONE;
     uint32_t i;
 
     for (i = 0U; i < WFAS3_MAX_PAIRS; i++) {
-        if ((((cand >> i) & 1U) == 1U) && (found == WFAS3_NONE) &&
-            (wfas3_rate_take(&dev->tag_win_ms, &dev->tag_count, dev->now_ms,
-                             WFAS3_CAP_TAGS) == 1U) &&
+        if ((((left >> i) & 1U) == 1U) && (found == WFAS3_NONE) && (wfas3_tag_fast(dev, i, from) == 1U)) {
+            left &= ~((uint64_t)1U << i);
+            if ((wfas3_mac(m, sizeof m, (probe == 1U) ? dev->pairs[i].k_probe_in : dev->pairs[i].k_tag_in,
+                           d, len) == WFAS3_OK) &&
+                (wfas3_ct_eq(m, tag, sizeof m) == 1U)) {
+                found = i;
+            }
+        }
+    }
+    for (i = 0U; i < WFAS3_MAX_PAIRS; i++) {
+        if ((((left >> i) & 1U) == 1U) && (found == WFAS3_NONE) &&
+            (wfas3_tag_take(dev, from) == 1U) &&
             (wfas3_mac(m, sizeof m, (probe == 1U) ? dev->pairs[i].k_probe_in : dev->pairs[i].k_tag_in,
                        d, len) == WFAS3_OK) &&
             (wfas3_ct_eq(m, tag, sizeof m) == 1U)) {
@@ -1602,21 +1666,59 @@ static uint64_t wfas3_ectr_next(wfas3_device *dev, wfas3_pair *p, wfas3_out *out
 
 /* -- Cookies (specification 7.5) --------------------------------------------- */
 
+/* Whether cookie secret i is still accepted: for twice its life from its
+ * creation, so that a cookie is never older than 60 s (15). */
+static uint32_t wfas3_cookie_live(const wfas3_device *dev, uint32_t i)
+{
+    return ((((dev->cookie_live >> i) & 1U) == 1U) &&
+            ((dev->now_ms - dev->cookie_born_ms[i]) < (2U * (uint64_t)WFAS3_COOKIE_LIFE_MS))) ? 1U : 0U;
+}
+
+/* Secrets past their time are erased, with or without traffic. */
+static void wfas3_cookie_age(wfas3_device *dev)
+{
+    uint32_t i;
+
+    for (i = 0U; i < 2U; i++) {
+        if ((((dev->cookie_live >> i) & 1U) == 1U) && (wfas3_cookie_live(dev, i) == 0U)) {
+            wfas3_wipe(dev->cookie_secret[i], WFAS3_KEY_LEN);
+            dev->cookie_live &= ~(1U << i);
+        }
+    }
+}
+
+static uint64_t wfas3_cookie_deadline(const wfas3_device *dev)
+{
+    uint64_t t = UINT64_MAX;
+    uint32_t i;
+
+    for (i = 0U; i < 2U; i++) {
+        if (((dev->cookie_live >> i) & 1U) == 1U) {
+            t = wfas3_min64(t, dev->cookie_born_ms[i] + (2U * (uint64_t)WFAS3_COOKIE_LIFE_MS));
+        }
+    }
+    return t;
+}
+
+/* The current secret makes cookies for WFAS3_COOKIE_LIFE_MS; then it becomes
+ * the previous one and a fresh one is made at the next CookieReply. */
 static wfas3_status wfas3_cookie_rotate(wfas3_device *dev)
 {
     uint8_t fresh[WFAS3_KEY_LEN];
     wfas3_status st = WFAS3_OK;
 
-    if ((dev->cookie_ready == 0U) || (dev->now_ms >= dev->cookie_next_ms)) {
+    wfas3_cookie_age(dev);
+    if (((dev->cookie_live & 1U) == 0U) || (dev->now_ms >= dev->cookie_next_ms)) {
         st = wfas3_rng_bytes(&dev->rng, fresh, sizeof fresh);
         if (st == WFAS3_OK) {
-            if (dev->cookie_ready == 0U) {
-                memcpy(dev->cookie_secret[1], fresh, WFAS3_KEY_LEN);
-            } else {
+            if ((dev->cookie_live & 1U) == 1U) {
                 memcpy(dev->cookie_secret[1], dev->cookie_secret[0], WFAS3_KEY_LEN);
+                dev->cookie_born_ms[1] = dev->cookie_born_ms[0];
+                dev->cookie_live |= 2U;
             }
             memcpy(dev->cookie_secret[0], fresh, WFAS3_KEY_LEN);
-            dev->cookie_ready = 1U;
+            dev->cookie_born_ms[0] = dev->now_ms;
+            dev->cookie_live |= 1U;
             dev->cookie_next_ms = dev->now_ms + (uint64_t)WFAS3_COOKIE_LIFE_MS;
         }
     }
@@ -1811,7 +1913,7 @@ static wfas3_status wfas3_creq_handle(wfas3_device *dev, const uint8_t *d,
     wfas3_status st = WFAS3_E_DROP;
 
     if (cand != 0U) {
-        pair = wfas3_tag_select(dev, cand, d, 32U, &d[32], 0U);
+        pair = wfas3_tag_select(dev, cand, d, 32U, &d[32], 0U, from);
     }
     if ((pair != WFAS3_NONE) &&
         (wfas3_ctr_mask(mask, &dev->pairs[pair], 1U ^ dev->pairs[pair].is_low,
@@ -2205,7 +2307,8 @@ typedef struct wfas3_resp_ctx {
     uint32_t  status;
 } wfas3_resp_ctx;
 
-/* Step 4: mac2 with the cookie recomputed from the current and previous secret. */
+/* Step 4: mac2 with the cookie recomputed from the current and previous
+ * secret, each only while it is accepted. */
 static uint32_t wfas3_init_mac2_ok(const wfas3_device *dev, const wfas3_pair *p,
                                    const uint8_t *d, const wfas3_addr *from)
 {
@@ -2215,7 +2318,7 @@ static uint32_t wfas3_init_mac2_ok(const wfas3_device *dev, const wfas3_pair *p,
     uint32_t i;
 
     for (i = 0U; i < 2U; i++) {
-        if ((dev->cookie_ready == 1U) &&
+        if ((wfas3_cookie_live(dev, i) == 1U) &&
             (wfas3_cookie_make(cookie, dev->cookie_secret[i], from, &d[8], p->ectr_seen)
              == WFAS3_OK) &&
             (wfas3_mac_k(m, sizeof m, cookie, sizeof cookie, d, 1352U) == WFAS3_OK)) {
@@ -2504,7 +2607,7 @@ static wfas3_status wfas3_init_handle(wfas3_device *dev, const uint8_t *d,
     wfas3_status st = WFAS3_E_DROP;
 
     if (cand != 0U) {
-        pair = wfas3_tag_select(dev, cand, d, 24U, &d[24], 0U);
+        pair = wfas3_tag_select(dev, cand, d, 24U, &d[24], 0U, from);
     }
     if (pair != WFAS3_NONE) {
         wfas3_pair *p = &dev->pairs[pair];
@@ -5288,7 +5391,7 @@ static wfas3_status wfas3_probe_handle(wfas3_device *dev, const uint8_t *d, cons
     wfas3_status st = WFAS3_E_DROP;
 
     if (cand != 0U) {
-        pair = wfas3_tag_select(dev, cand, d, 28U, &d[28], 1U);
+        pair = wfas3_tag_select(dev, cand, d, 28U, &d[28], 1U, from);
     }
     if ((pair != WFAS3_NONE) &&
         (wfas3_ctr_mask(mask, &dev->pairs[pair], 1U ^ dev->pairs[pair].is_low, WFAS3_T_PROBE,
@@ -5356,7 +5459,7 @@ static wfas3_status wfas3_preply_handle(wfas3_device *dev, const uint8_t *d, con
         wfas3_pair *p = &dev->pairs[pair];
 
         if ((((wfas3_mac1_candidates(dev, d, 44U) >> pair) & 1U) == 1U) &&
-            (wfas3_rate_take(&dev->tag_win_ms, &dev->tag_count, dev->now_ms, WFAS3_CAP_TAGS) == 1U) &&
+            ((wfas3_tag_fast(dev, pair, from) == 1U) || (wfas3_tag_take(dev, from) == 1U)) &&
             (wfas3_mac(m, sizeof m, p->k_probe_in, d, 28U) == WFAS3_OK) &&
             (wfas3_ct_eq(m, &d[28], sizeof m) == 1U)) {
             p->seen_addr = *from;
@@ -5444,15 +5547,17 @@ wfas3_status wfas3_find(wfas3_device *dev, uint32_t pair, uint32_t on, wfas3_out
 #define WFAS3_PAIR_BAD2_MS     5000U    /* client: after a step 2 that did not open */
 #define WFAS3_PAIR_DONE_MS     10000U   /* server: copies of step 8 answered    */
 #define WFAS3_PAIR_S1_CAP      4U       /* step 1 served per second (13.7)      */
-#define WFAS3_PAIR_SRC         8U       /* source addresses remembered          */
 #define WFAS3_PAIR_TURN_MS     2000U    /* an address still waiting its turn    */
+#define WFAS3_PAIR_EVICT_MS    3000U    /* a run without step 3 gives way after */
+#define WFAS3_PAIR_TOKEN       1264U    /* offset of the Retry token in step 1  */
+#define WFAS3_PAIR_RETRY       10U      /* step number of a Retry               */
 #define WFAS3_PAIR_NAME        "WFAS3_PAIR_25519+MLKEM768+CPace_ChaChaPoly_SHA256"
 
 typedef char wfas3_assert_pctx[(WFAS3_PAIR_CTX >= 1U) ? 1 : -1];
 
-/* Length of each step, 13.4. Index 0 is unused. */
-static const uint16_t wfas3_pair_len[10] = {
-    0U, 1368U, 1296U, 176U, 80U, 80U, 80U, 120U, 100U, 52U
+/* Length of each step, 13.4; step 10 is a Retry. Index 0 is unused. */
+static const uint16_t wfas3_pair_len[11] = {
+    0U, 1368U, 1296U, 176U, 80U, 80U, 80U, 120U, 100U, 52U, 48U
 };
 
 /* KDF(k, label) of section 2 for a 16-byte k (the secret, the window nonce):
@@ -5686,15 +5791,20 @@ wfas3_status wfas3_code_parse(const char *text, size_t len, uint8_t *code)
 
 /* -- Declared names (13.2) ----------------------------------------------------- */
 
-/* Code points removed before display: controls, and format and direction
- * characters that can hide or reorder text. */
+/* Code points removed before display: controls, format and direction
+ * characters that can hide or reorder text, every Default_Ignorable_Code_Point
+ * of Unicode (fillers, joiners, variation selectors, tags) and the blank
+ * Braille pattern, which all show as nothing. */
 static uint32_t wfas3_cp_hidden(uint32_t cp)
 {
     return ((cp <= 0x1FU) || ((cp >= 0x7FU) && (cp <= 0x9FU)) || (cp == 0xADU) ||
-            (cp == 0x61CU) || (cp == 0x180EU) || ((cp >= 0x200BU) && (cp <= 0x200FU)) ||
-            ((cp >= 0x2028U) && (cp <= 0x202EU)) || ((cp >= 0x2060U) && (cp <= 0x206FU)) ||
-            (cp == 0xFEFFU) || ((cp >= 0xFFF9U) && (cp <= 0xFFFBU)) ||
-            ((cp >= 0xE0000U) && (cp <= 0xE007FU))) ? 1U : 0U;
+            (cp == 0x34FU) || (cp == 0x61CU) || ((cp >= 0x115FU) && (cp <= 0x1160U)) ||
+            ((cp >= 0x17B4U) && (cp <= 0x17B5U)) || ((cp >= 0x180BU) && (cp <= 0x180FU)) ||
+            ((cp >= 0x200BU) && (cp <= 0x200FU)) || ((cp >= 0x2028U) && (cp <= 0x202EU)) ||
+            ((cp >= 0x2060U) && (cp <= 0x206FU)) || (cp == 0x2800U) || (cp == 0x3164U) ||
+            ((cp >= 0xFE00U) && (cp <= 0xFE0FU)) || (cp == 0xFEFFU) || (cp == 0xFFA0U) ||
+            ((cp >= 0xFFF0U) && (cp <= 0xFFFBU)) || ((cp >= 0x1BCA0U) && (cp <= 0x1BCA3U)) ||
+            ((cp >= 0x1D173U) && (cp <= 0x1D17AU)) || ((cp >= 0xE0000U) && (cp <= 0xE0FFFU))) ? 1U : 0U;
 }
 
 /* Length (1 to 4) of the well-formed UTF-8 sequence at n[i] within len
@@ -6091,7 +6201,7 @@ static wfas3_status wfas3_beacon_build(const wfas3_device *dev, wfas3_out *out)
     d[3] = 0U;
     d[4] = (uint8_t)w->mode;
     d[5] = (uint8_t)w->used;
-    d[6] = 0U;
+    d[6] = (w->kind == WFAS3_PAIR_CODE) ? 1U : 0U;  /* flags: bit0 one-use secret */
     d[7] = 0U;
     memcpy(&d[8], w->nonce, 16U);
     if (w->mode == 2U) {
@@ -6115,6 +6225,9 @@ static wfas3_status wfas3_win_keys(wfas3_device *dev, uint32_t kind, uint8_t *co
     wfas3_pwin *w = &dev->win;
     wfas3_status st = wfas3_rng_bytes(&dev->rng, w->nonce, 16U);   /* public */
 
+    if (st == WFAS3_OK) {
+        st = wfas3_rng_bytes(&dev->rng, w->k_t, 32U);              /* Retry tokens */
+    }
     if ((st == WFAS3_OK) && (kind == WFAS3_PAIR_LABEL)) {
         memcpy(w->prs, dev->label_secret, 16U);
         memcpy(w->w_priv, dev->label_priv, 32U);
@@ -6220,17 +6333,47 @@ uint32_t wfas3_window_failed(const wfas3_device *dev)
     return ((dev != NULL) && (dev->win.open == 1U)) ? dev->win.failed : WFAS3_NONE;
 }
 
-/* Whether a step 1 from this address is served now (13.7): one per second
- * per address, WFAS3_PAIR_S1_CAP per second in total, a free context, and
- * no other address still waiting that was served less recently. */
-static uint32_t wfas3_s1_admit(wfas3_device *dev, const wfas3_addr *from)
+/* token = MAC16(K_t, "retry" || address 16 || port u16 || pair_sid), 13.7. */
+static wfas3_status wfas3_pair_token(uint8_t tok[WFAS3_TAG_LEN], const wfas3_pwin *w, const wfas3_addr *a,
+                                     const uint8_t sid[8])
 {
-    wfas3_pwin *w = &dev->win;
-    uint64_t now = dev->now_ms;
+    uint8_t in[31];
+
+    in[0] = 0x72U;                                       /* "retry" */
+    in[1] = 0x65U;
+    in[2] = 0x74U;
+    in[3] = 0x72U;
+    in[4] = 0x79U;
+    memcpy(&in[5], a->ip, 16U);
+    wfas3_wr_be16(&in[21], a->port);
+    memcpy(&in[23], sid, 8U);
+    return wfas3_mac(tok, WFAS3_TAG_LEN, w->k_t, in, sizeof in);
+}
+
+/* Retry (step 10): header, token 16, filter; 48 bytes, so smaller than the
+ * step 1 that causes it. */
+static wfas3_status wfas3_retry_build(const wfas3_device *dev, const uint8_t *d,
+                                      const uint8_t tok[WFAS3_TAG_LEN], const wfas3_addr *from,
+                                      wfas3_out *out)
+{
+    uint8_t *r = out->dgram;
+    wfas3_status st;
+
+    wfas3_pair_head(r, WFAS3_PAIR_RETRY, dev->win.mode, &d[8]);
+    memcpy(&r[16], tok, WFAS3_TAG_LEN);
+    st = wfas3_mac(&r[32], WFAS3_TAG_LEN, dev->win.k_f, r, 32U);
+    if (st == WFAS3_OK) {
+        out->len = 48U;
+        out->to = *from;
+    }
+    return st;
+}
+
+/* Slot of the admission table for this address (13.7): its own, else a
+ * free one, else that of the address seen least recently. */
+static uint32_t wfas3_s1_slot(wfas3_pwin *w, const wfas3_addr *from)
+{
     uint32_t k = WFAS3_NONE;
-    uint32_t free_ctx = 0U;
-    uint32_t turn = 1U;
-    uint32_t admit = 0U;
     uint32_t i;
 
     for (i = 0U; i < WFAS3_PAIR_SRC; i++) {
@@ -6241,19 +6384,59 @@ static uint32_t wfas3_s1_admit(wfas3_device *dev, const wfas3_addr *from)
     if (k == WFAS3_NONE) {
         k = 0U;
         for (i = 1U; i < WFAS3_PAIR_SRC; i++) {
-            if ((w->src_used[i] == 0U) ||
-                ((w->src_used[k] != 0U) && (w->src_seen_ms[i] < w->src_seen_ms[k]))) {
-                k = (w->src_used[k] == 0U) ? k : i;
+            if ((w->src_used[k] != 0U) &&
+                ((w->src_used[i] == 0U) || (w->src_seen_ms[i] < w->src_seen_ms[k]))) {
+                k = i;
             }
         }
         w->src[k] = *from;
         w->src_used[k] = 1U;                             /* 1 seen, 2 served */
         w->src_waiting[k] = 0U;
+        w->src_served_ms[k] = 0U;
     }
-    w->src_seen_ms[k] = now;
+    return k;
+}
+
+/* A context for a new run: a free one, or else the one whose step 2 has
+ * waited longest for step 3, if that is at least WFAS3_PAIR_EVICT_MS. */
+static uint32_t wfas3_s1_ctx(const wfas3_device *dev)
+{
+    uint32_t ci = WFAS3_NONE;
+    uint32_t old = WFAS3_NONE;
+    uint32_t i;
+
     for (i = 0U; i < WFAS3_PAIR_CTX; i++) {
-        free_ctx |= (dev->pctx[i].state == WFAS3_PS_FREE) ? 1U : 0U;
+        const wfas3_pctx *c = &dev->pctx[i];
+
+        if ((c->state == WFAS3_PS_FREE) && (ci == WFAS3_NONE)) {
+            ci = i;
+        } else if ((c->state == WFAS3_PS_S2) &&
+                   ((dev->now_ms - c->wait_ms) >= (uint64_t)WFAS3_PAIR_EVICT_MS) &&
+                   ((old == WFAS3_NONE) || (c->wait_ms < dev->pctx[old].wait_ms))) {
+            old = i;
+        } else {
+            /* busy */
+        }
     }
+    return (ci != WFAS3_NONE) ? ci : old;
+}
+
+/* Whether a step 1 with a valid token from this address is served now, and
+ * in which context (13.7): one per second per address, WFAS3_PAIR_S1_CAP per
+ * second in total, a context, and its turn: an address served before waits
+ * while another one, seen in the last WFAS3_PAIR_TURN_MS, has not been
+ * served or was served less recently. A run whose context is taken ends as
+ * by a timeout. */
+static uint32_t wfas3_s1_admit(wfas3_device *dev, const wfas3_addr *from, wfas3_out *out)
+{
+    wfas3_pwin *w = &dev->win;
+    uint64_t now = dev->now_ms;
+    uint32_t k = wfas3_s1_slot(w, from);
+    uint32_t ci = WFAS3_NONE;
+    uint32_t turn = 1U;
+    uint32_t i;
+
+    w->src_seen_ms[k] = now;
     for (i = 0U; i < WFAS3_PAIR_SRC; i++) {
         if ((i != k) && (w->src_used[i] != 0U) && (w->src_waiting[i] == 1U) &&
             ((now - w->src_seen_ms[i]) <= (uint64_t)WFAS3_PAIR_TURN_MS) &&
@@ -6264,17 +6447,23 @@ static uint32_t wfas3_s1_admit(wfas3_device *dev, const wfas3_addr *from)
         }
     }
     if ((w->src_used[k] == 2U) && ((now - w->src_served_ms[k]) < (uint64_t)WFAS3_PAIR_RETRY_MS)) {
-        admit = 0U;                                      /* one per second per address */
-    } else if ((free_ctx == 1U) && (turn == 1U) &&
-               (wfas3_rate_take(&w->s1_win_ms, &w->s1_count, now, WFAS3_PAIR_S1_CAP) == 1U)) {
-        w->src_used[k] = 2U;
-        w->src_served_ms[k] = now;
-        w->src_waiting[k] = 0U;
-        admit = 1U;
+        ci = WFAS3_NONE;                                 /* one per second per address */
     } else {
-        w->src_waiting[k] = 1U;
+        ci = (turn == 1U) ? wfas3_s1_ctx(dev) : WFAS3_NONE;
+        if ((ci != WFAS3_NONE) &&
+            (wfas3_rate_take(&w->s1_win_ms, &w->s1_count, now, WFAS3_PAIR_S1_CAP) == 1U)) {
+            if (dev->pctx[ci].state != WFAS3_PS_FREE) {
+                wfas3_pctx_fail(dev, &dev->pctx[ci], WFAS3_PAIRF_TIMEOUT, 1U, out);   /* gives way */
+            }
+            w->src_used[k] = 2U;
+            w->src_served_ms[k] = now;
+            w->src_waiting[k] = 0U;
+        } else {
+            ci = WFAS3_NONE;
+            w->src_waiting[k] = 1U;
+        }
     }
-    return admit;
+    return ci;
 }
 
 /* Tokens e, ee, yb, cpace of the second message. */
@@ -6396,18 +6585,22 @@ static uint32_t wfas3_pctx_find(const wfas3_device *dev, const uint8_t sid[8], c
     return found;
 }
 
-/* Step 1. A copy is answered with the stored step 2, once a second: until
- * step 3 the server never sends more than it receives. */
+/* Step 1. Bytes 1264..1280 carry the Retry token, zero at first: a step 1
+ * without the valid token of its address and pair_sid is answered with a
+ * Retry and changes nothing, so that only an address that receives what is
+ * sent to it takes part in admission (13.7). A copy of the step 1 of a run,
+ * the same bytes 0..1264, is answered with the stored step 2, once a
+ * second: until step 3 the server never sends more than it receives. */
 static wfas3_status wfas3_ps_step1(wfas3_device *dev, const uint8_t *d, const wfas3_addr *from,
                                    wfas3_out *out)
 {
     uint8_t h[WFAS3_HASH_LEN];
+    uint8_t tok[WFAS3_TAG_LEN];
     uint32_t ci = wfas3_pctx_find(dev, &d[8], from);
-    uint32_t i;
     wfas3_status st = WFAS3_E_DROP;
 
-    wfas_tp_sha256(h, d, WFAS3_LEN_INIT);
-    if (wfas3_all_zero(&d[1264], 88U) == 0U) {
+    wfas_tp_sha256(h, d, WFAS3_PAIR_TOKEN);
+    if (wfas3_all_zero(&d[WFAS3_PAIR_TOKEN + WFAS3_TAG_LEN], 72U) == 0U) {
         st = WFAS3_E_DROP;
     } else if (ci != WFAS3_NONE) {
         wfas3_pctx *c = &dev->pctx[ci];
@@ -6419,15 +6612,16 @@ static wfas3_status wfas3_ps_step1(wfas3_device *dev, const uint8_t *d, const wf
         }
     } else if ((dev->win.used == 1U) || (wfas3_pair_slot_free(dev) == WFAS3_NONE)) {
         st = WFAS3_E_DROP;                               /* one pairing per window */
+    } else if (wfas3_pair_token(tok, &dev->win, from, &d[8]) != WFAS3_OK) {
+        st = WFAS3_E_DROP;
+    } else if (wfas3_ct_eq(tok, &d[WFAS3_PAIR_TOKEN], sizeof tok) == 0U) {
+        st = wfas3_retry_build(dev, d, tok, from, out);  /* the address is not proved yet */
+    } else if (wfas_tp_mlkem768_check_pk(&d[48]) != 1U) {
+        st = WFAS3_E_DROP;                               /* before it can take a context */
     } else if (dev->entropy_fresh == 0U) {
         st = WFAS3_E_ENTROPY;                            /* nothing changed yet */
-    } else if (wfas3_s1_admit(dev, from) == 1U) {
-        ci = WFAS3_NONE;
-        for (i = 0U; i < WFAS3_PAIR_CTX; i++) {
-            if ((dev->pctx[i].state == WFAS3_PS_FREE) && (ci == WFAS3_NONE)) {
-                ci = i;
-            }
-        }
+    } else {
+        ci = wfas3_s1_admit(dev, from, out);
         if (ci != WFAS3_NONE) {
             wfas3_pctx *c = &dev->pctx[ci];
 
@@ -6446,10 +6640,14 @@ static wfas3_status wfas3_ps_step1(wfas3_device *dev, const uint8_t *d, const wf
                 wfas3_pctx_free(c);
                 st = WFAS3_E_DROP;
             }
+        } else {
+            /* refused for now: the client sends it again in a second */
         }
-    } else {
-        /* refused for now: the client sends it again in a second */
+        if ((st != WFAS3_OK) && ((out->events & WFAS3_EV_PAIR_FAILED) != 0U)) {
+            st = WFAS3_OK;                               /* a run gave way: report it */
+        }
     }
+    wfas3_wipe(tok, sizeof tok);
     return st;
 }
 
@@ -6529,6 +6727,7 @@ static void wfas3_ask(wfas3_device *dev, wfas3_pctx *c, wfas3_out *out)
     out->ask = c->ask_id;
     out->pflags = c->flags;
     memcpy(out->name, c->name, 32U);
+    out->addr = c->addr;                             /* proved by step 3 */
     out->code = (dev->win.mode == 2U) ? c->code : 0U;
 }
 
@@ -6850,14 +7049,15 @@ static void wfas3_pcli_send(const wfas3_device *dev, wfas3_pcli *c, wfas3_out *o
  * warned that another device may have been paired in its place (13.2). */
 static void wfas3_pcli_fail(wfas3_device *dev, uint32_t why, wfas3_out *out)
 {
-    uint32_t race = ((dev->pcli.answered == 1U) || (why == WFAS3_PAIRF_USED)) &&
+    uint32_t race = ((dev->pcli.answered == 1U) || (why == WFAS3_PAIRF_USED) || (why == WFAS3_PAIRF_KEY)) &&
                     (why != WFAS3_PAIRF_CANCELLED) ? 1U : 0U;
 
     wfas3_pcli_free(&dev->pcli);
     wfas3_pair_failed(out, why, race);
 }
 
-/* Step 1: e, e1, ya and 88 zero bytes. */
+/* Step 1: e, e1, ya, the Retry token (zero until a Retry comes) and 72
+ * zero bytes. */
 static wfas3_status wfas3_pc_step1(wfas3_device *dev, wfas3_out *out)
 {
     wfas3_pcli *c = &dev->pcli;
@@ -6888,7 +7088,7 @@ static wfas3_status wfas3_pc_step1(wfas3_device *dev, wfas3_out *out)
         memcpy(&d[16], c->e_pub, 32U);
         wfas_tp_mlkem768_keygen(&d[48], c->kem_sk, rnd);
         memcpy(&d[1232], c->ya_pub, 32U);
-        memset(&d[1264], 0, 88U);
+        memset(&d[WFAS3_PAIR_TOKEN], 0, 88U);
         st = wfas3_pair_sym(&c->sym, c->mode, c->sid, c->nonce);
     }
     if (st == WFAS3_OK) {
@@ -7003,7 +7203,9 @@ wfas3_status wfas3_beacons(wfas3_device *dev, uint32_t on)
     return st;
 }
 
-/* Receiver of a PairBeacon (13.2). */
+/* Receiver of a PairBeacon (13.2). A beacon of a permanent secret (a label,
+ * flags bit0 clear) can be an old one played again: with state 1 it ends the
+ * run only if it carries the nonce of the run. */
 static wfas3_status wfas3_beacon_handle(wfas3_device *dev, const uint8_t *d, const wfas3_addr *from,
                                         wfas3_out *out)
 {
@@ -7012,14 +7214,15 @@ static wfas3_status wfas3_beacon_handle(wfas3_device *dev, const uint8_t *d, con
     uint32_t mode = d[4];
     wfas3_status st = WFAS3_E_DROP;
 
-    if (((mode != 1U) && (mode != 2U)) || (d[5] > 1U) || (d[6] != 0U) || (d[7] != 0U) ||
-        ((mode == 1U) && (wfas3_all_zero(&d[24], 32U) == 0U)) ||
+    if (((mode != 1U) && (mode != 2U)) || (d[5] > 1U) || (d[6] > ((mode == 1U) ? 1U : 0U)) ||
+        (d[7] != 0U) || ((mode == 1U) && (wfas3_all_zero(&d[24], 32U) == 0U)) ||
         ((mode == 2U) && (wfas3_all_zero(&d[56], 16U) == 0U))) {
         st = WFAS3_E_DROP;
     } else if ((mode == 1U) && (c->state != WFAS3_PC_FREE) && (c->mode == 1U)) {
         if ((wfas3_mac(m, sizeof m, c->k_b, d, 56U) == WFAS3_OK) && (wfas3_ct_eq(m, &d[56], 16U) == 1U)) {
-            if ((d[5] == 1U) && ((c->state == WFAS3_PC_BEACON) ||
-                                 ((c->state != WFAS3_PC_S8) && (wfas3_ct_eq(c->nonce, &d[8], 16U) == 1U)))) {
+            if ((d[5] == 1U) && (c->state != WFAS3_PC_S8) &&
+                (((d[6] == 1U) && (c->state == WFAS3_PC_BEACON)) ||
+                 ((c->state != WFAS3_PC_BEACON) && (wfas3_ct_eq(c->nonce, &d[8], 16U) == 1U)))) {
                 wfas3_pcli_fail(dev, WFAS3_PAIRF_USED, out);    /* someone else used the window */
                 st = WFAS3_OK;
             } else if ((d[5] == 0U) && (c->state == WFAS3_PC_BEACON)) {
@@ -7094,7 +7297,7 @@ static wfas3_status wfas3_pc_tokens2(wfas3_pcli *c, wfas3_sym *t, const uint8_t 
     if ((st == WFAS3_OK) && (c->mode == 1U)) {
         wfas3_w_fp(fp, w_pub);
         if (wfas3_ct_eq(fp, c->fp_w, sizeof fp) == 0U) {
-            *key_bad = 1U;                                                     /* 13.3: abort */
+            *key_bad = 1U;                                     /* 13.3: this step 2 is ignored */
             st = WFAS3_E_AUTH;
         }
     }
@@ -7152,7 +7355,10 @@ static wfas3_status wfas3_pc_step3(wfas3_device *dev, wfas3_sym *t, const uint8_
 }
 
 /* Step 2. One that does not open is ignored: it may be a forgery, and the
- * real one may still come; the attempt fails WFAS3_PAIR_BAD2_MS later. */
+ * real one may still come; the attempt fails WFAS3_PAIR_BAD2_MS later. So is
+ * one that opens with a pairing key other than that of the code: whoever
+ * sent it holds the secret, but the real server may still answer; if it does
+ * not, the attempt fails WFAS3_PAIRF_KEY with the warning (13.3). */
 static wfas3_status wfas3_pc_step2(wfas3_device *dev, const uint8_t *d, wfas3_out *out)
 {
     wfas3_pcli *c = &dev->pcli;
@@ -7176,13 +7382,9 @@ static wfas3_status wfas3_pc_step2(wfas3_device *dev, const uint8_t *d, wfas3_ou
             wfas3_pcli_fail(dev, WFAS3_PAIRF_PROTOCOL, out);
             st = WFAS3_OK;
         }
-    } else if (key_bad == 1U) {
-        wfas3_pcli_fail(dev, WFAS3_PAIRF_KEY, out);
-        out->events &= ~WFAS3_EV_PAIR_RACE;
-        out->events |= WFAS3_EV_PAIR_RACE;               /* someone holds the code */
-        st = WFAS3_OK;
     } else {
         wfas3_wipe(c->peer_s, sizeof c->peer_s);
+        c->key_bad |= key_bad;                           /* someone holds the code */
         if (c->bad2 == 0U) {
             c->bad2 = 1U;
             c->bad2_ms = dev->now_ms;
@@ -7374,6 +7576,18 @@ static wfas3_status wfas3_pc_handle(wfas3_device *dev, const uint8_t *d, size_t 
             st = wfas3_pc_step7(dev, d, out);
         } else if ((step == 9U) && (c->state == WFAS3_PC_S8)) {
             st = wfas3_pc_step9(dev, d, out);
+        } else if ((step == WFAS3_PAIR_RETRY) && (c->state == WFAS3_PC_S1) &&
+                   (wfas3_ct_eq(&c->tx[WFAS3_PAIR_TOKEN], &d[16], WFAS3_TAG_LEN) == 0U)) {
+            /* Retry: the token goes into step 1, the filter is made again.
+             * The first Retry is answered at once, a later one only changes
+             * the next copy: Retries cannot make this device send faster. */
+            memcpy(&c->tx[WFAS3_PAIR_TOKEN], &d[16], WFAS3_TAG_LEN);
+            st = wfas3_mac(&c->tx[WFAS3_LEN_INIT - WFAS3_TAG_LEN], WFAS3_TAG_LEN, c->k_f, c->tx,
+                           (size_t)WFAS3_LEN_INIT - (size_t)WFAS3_TAG_LEN);
+            if ((st == WFAS3_OK) && (c->retried == 0U)) {
+                c->retried = 1U;
+                wfas3_pcli_send(dev, c, out);
+            }
         } else {
             /* a copy or a step out of order */
         }
@@ -7394,7 +7608,7 @@ static uint32_t wfas3_pc_poll(wfas3_device *dev, wfas3_out *out)
         wfas3_pcli_fail(dev, WFAS3_PAIRF_TIMEOUT, out);
     } else if ((c->state == WFAS3_PC_S1) && (c->bad2 == 1U) &&
                ((now - c->bad2_ms) >= (uint64_t)WFAS3_PAIR_BAD2_MS)) {
-        wfas3_pcli_fail(dev, WFAS3_PAIRF_WRONG, out);
+        wfas3_pcli_fail(dev, (c->key_bad == 1U) ? WFAS3_PAIRF_KEY : WFAS3_PAIRF_WRONG, out);
     } else if ((c->state == WFAS3_PC_S1) && (waited >= (uint64_t)WFAS3_PAIR_WAIT2_MS)) {
         wfas3_pcli_fail(dev, WFAS3_PAIRF_TIMEOUT, out);
     } else if (((c->state == WFAS3_PC_S3) || (c->state == WFAS3_PC_S5) || (c->state == WFAS3_PC_S8)) &&
@@ -7447,15 +7661,15 @@ static uint64_t wfas3_pc_deadline(const wfas3_device *dev)
     return t;
 }
 
-/* A Pair datagram: steps 1, 3, 5, 8 go to the server, the others to the
- * client; the length must be that of its step. */
+/* A Pair datagram: steps 1, 3, 5, 8 go to the server, the others (and the
+ * Retry, step 10) to the client; the length must be that of its step. */
 static wfas3_status wfas3_pair_handle(wfas3_device *dev, const uint8_t *d, size_t len,
                                       const wfas3_addr *from, wfas3_out *out)
 {
     uint32_t step = d[4];
     wfas3_status st = WFAS3_E_DROP;
 
-    if ((step >= 1U) && (step <= 9U) && (len == (size_t)wfas3_pair_len[step]) &&
+    if ((step >= 1U) && (step <= WFAS3_PAIR_RETRY) && (len == (size_t)wfas3_pair_len[step]) &&
         (d[6] == 0U) && (d[7] == 0U)) {
         if ((step == 1U) || (step == 3U) || (step == 5U) || (step == 8U)) {
             st = wfas3_ps_handle(dev, d, len, from, out);
@@ -7710,6 +7924,7 @@ uint64_t wfas3_next_deadline(const wfas3_device *dev)
         t = wfas3_min64(t, wfas3_grp_deadline(dev));
         t = wfas3_min64(t, wfas3_ps_deadline(dev));
         t = wfas3_min64(t, wfas3_pc_deadline(dev));
+        t = wfas3_min64(t, wfas3_cookie_deadline(dev));
         t = (t >= (UINT64_MAX / 1000U)) ? UINT64_MAX : (t * 1000U);
     }
     return t;
@@ -7902,6 +8117,7 @@ wfas3_status wfas3_poll(wfas3_device *dev, wfas3_out *out)
     if ((dev != NULL) && (out != NULL) && (dev->started == 1U)) {
         wfas3_out_clear(out);
         st = WFAS3_OK;
+        wfas3_cookie_age(dev);                           /* nothing to send */
         if (wfas_tp_drbg_left(&dev->rng.drbg) < WFAS3_RNG_MARGIN) {
             st = WFAS3_E_ENTROPY;
             done = 1U;

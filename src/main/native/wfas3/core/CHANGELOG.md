@@ -1,5 +1,49 @@
 # Changelog - WFAS v3
 
+## 2026-11-21 - security fixes; specification draft 7
+
+Changed (wire format: draft 7 does not interoperate with draft 6 for pairing)
+- PairBeacon byte 6 is a flags byte, bit0 = one-use secret (code). A client
+  ignores a state-1 beacon of a permanent secret (label) unless it carries
+  the window_nonce of its run, so recorded label beacons can no longer end a
+  pairing or raise a false race warning (13.2, G1).
+- Pairing step 10, Retry (48 bytes), and the Retry token in bytes
+  1264..1280 of step 1: only a step 1 with the token of its address, port
+  and pair_sid takes part in admission; a run without step 3 gives way after
+  3 s to an address whose turn it is; 16 addresses remembered
+  (`WFAS3_PAIR_SRC`, now in `wfas.h`) (13.4, 13.7, G3).
+- A step 2 whose pairing key does not match the code is ignored like a
+  forgery; the run fails `WFAS3_PAIRF_KEY` with `WFAS3_EV_PAIR_RACE` only if
+  the real step 2 does not come within 5 s (13.3, G2).
+- Tag computations (7.2): first try for the pair last seen at the source
+  address, 16 per second per pair outside the caps; the others count in a
+  share of 512 per second for each of the last 16 source addresses and in
+  the global cap (G4).
+- Cookie secrets carry their creation time: accepted for mac2 only for 60 s,
+  erased by `wfas3_poll` even without traffic; `wfas3_next_deadline` covers
+  them (7.5, G5).
+- `wfas3_name_clean` also removes every Default_Ignorable_Code_Point and
+  U+2800 (13.2, G6).
+- `WFAS3_EV_PAIR_ASK` carries the client's address in `out.addr` (13.4, G7);
+  `wfascli` prints it.
+- `WFAS_V3_PROTOCOL.md`: draft 7, sections 3, 7.2, 7.5, 9.4, 12, 13.2 to
+  13.4, 13.7, 15, 16, 17, Appendix A (table G) and C.
+
+Added
+- `tests/test_pair.c`: replayed label beacons and beacon flags, Retry and
+  tokens, step 1 floods from addresses that do not answer and from a few that
+  do, step 2 with another pairing key followed by the real one, tag budget
+  under floods from one and from many addresses, cookie age, question
+  address, more name cleaning cases.
+- `tests/peer_pair.py`, `tests/interop_pair.py`: beacon flags, Retry and
+  tokens in both roles, a played label beacon, the delayed KEY failure, the
+  address in the question.
+- `tests/mutate.py`: 15 pairing and entry mutations of `wfas.c` and 2 of
+  `tests/peer_pair.py` for the rules above.
+
+No third-party file was added or changed; `NOTICE` and
+`third_party/MANIFEST.sha256` are unchanged. WFAS v2 is not touched.
+
 ## 2026-11-17 - pairing, multicast and command-line stage; specification draft 6
 
 Added

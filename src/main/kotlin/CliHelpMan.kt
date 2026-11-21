@@ -113,6 +113,15 @@ object CliHelpMan {
             "User settings on macOS.",
         "%APPDATA%\\wfas\\config.json" to
             "User settings on Windows.",
+        "~/.local/state/wfas/wfas3/" to
+            "WFAS v3 keys and pairings on Linux, encrypted; the key is in the Secret Service when " +
+            "available. Honors XDG_STATE_HOME.",
+        "~/Library/Application Support/wfas/wfas3/" to
+            "WFAS v3 keys and pairings on macOS, encrypted with a key kept in the Keychain; " +
+            "excluded from Time Machine.",
+        "%LOCALAPPDATA%\\wfas\\wfas3\\" to
+            "WFAS v3 keys and pairings on Windows, encrypted with a key protected by the user " +
+            "account; never in the roaming profile.",
         "/tmp/wfas-<pid>.port" to
             "IPC port file created by each running instance, deleted automatically on exit. " +
             "On Windows it lives in the user temporary directory.",

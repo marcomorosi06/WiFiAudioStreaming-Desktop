@@ -23,6 +23,10 @@ import java.util.ArrayDeque
  * Cuts captured 16-bit interleaved PCM into the exact packets of a stream
  * configuration (PCM 16/24 bit or Opus) and hands each packet, with its
  * sample position and capture time, to [emit].
+ *
+ * [feed] and [close] may come from different threads (capture and session
+ * teardown): both hold the object's lock, so the native encoder is never
+ * used after it was destroyed, and nothing is fed after [close].
  */
 class Wfas3Framer(
     val config: Wfas3Config,
@@ -36,6 +40,7 @@ class Wfas3Framer(
     private val payload = ByteArray(config.payloadBytes)
     private var pos = 0L
     private var enc = 0L
+    private var closed = false
 
     init {
         require(config.isValid()) { "invalid configuration" }
@@ -50,7 +55,9 @@ class Wfas3Framer(
      * [pcm] holds [frames] samples per channel, interleaved, with [srcChannels]
      * channels (1 or 2); [captureUs] is the clock time of the first sample.
      */
+    @Synchronized
     fun feed(pcm: ShortArray, off: Int, frames: Int, srcChannels: Int, captureUs: Long) {
+        if (closed) return
         var i = 0
         while (i < frames) {
             if (fill == 0) accStartUs = captureUs + i * 1_000_000L / config.sampleRate
@@ -82,7 +89,7 @@ class Wfas3Framer(
     private fun pack() {
         when {
             config.opus -> {
-                if (Wfas3Opus.nEncode(enc, acc, payload) != payload.size) java.util.Arrays.fill(payload, 0)
+                if (enc == 0L || Wfas3Opus.nEncode(enc, acc, payload) != payload.size) java.util.Arrays.fill(payload, 0)
             }
             config.bits == 16 -> {
                 var j = 0
@@ -95,7 +102,9 @@ class Wfas3Framer(
         }
     }
 
+    @Synchronized
     fun close() {
+        closed = true
         if (enc != 0L) { Wfas3Opus.nEncDestroy(enc); enc = 0L }
         java.util.Arrays.fill(acc, 0)
         java.util.Arrays.fill(payload, 0)
@@ -106,12 +115,15 @@ class Wfas3Framer(
  * Decodes the payload of a stream into 16-bit interleaved PCM with at most
  * two channels. Packets missing in the sample sequence become Opus
  * concealment (up to [MAX_CONCEAL] frames) or silence in the playout.
+ * [decode], [conceal] and [close] hold the object's lock: the native decoder
+ * is never used after it was destroyed by another thread.
  */
 class Wfas3Decoder(val config: Wfas3Config) {
     val outChannels: Int = minOf(config.channels, 2)
     private var dec = 0L
     private val tmp = ShortArray(config.frameSamples * minOf(config.channels, 2))
     private var nextPos = -1L
+    private var closed = false
 
     init {
         if (config.opus) {
@@ -122,8 +134,9 @@ class Wfas3Decoder(val config: Wfas3Config) {
     }
 
     /** Concealment frames for a gap before [pos] (Opus only); each goes to [out]. */
+    @Synchronized
     fun conceal(pos: Long, out: (ShortArray, Int, Long) -> Unit) {
-        if (!config.opus || nextPos < 0 || pos <= nextPos) return
+        if (!config.opus || dec == 0L || nextPos < 0 || pos <= nextPos) return
         val missing = ((pos - nextPos) / config.frameSamples).coerceAtMost(MAX_CONCEAL.toLong()).toInt()
         var p = pos - missing.toLong() * config.frameSamples
         repeat(missing) {
@@ -134,8 +147,9 @@ class Wfas3Decoder(val config: Wfas3Config) {
     }
 
     /** Decode one packet. Returns the samples per channel written to [dst], or 0. */
+    @Synchronized
     fun decode(pos: Long, data: ByteArray, off: Int, len: Int, dst: ShortArray): Int {
-        if (len != config.payloadBytes) return 0
+        if (len != config.payloadBytes || closed) return 0
         nextPos = pos + config.frameSamples
         if (config.opus) {
             val pkt = if (off == 0) data else data.copyOfRange(off, off + len)
@@ -162,8 +176,11 @@ class Wfas3Decoder(val config: Wfas3Config) {
         return frames
     }
 
+    @Synchronized
     fun close() {
+        closed = true
         if (dec != 0L) { Wfas3Opus.nDecDestroy(dec); dec = 0L }
+        java.util.Arrays.fill(tmp, 0)
     }
 
     companion object { const val MAX_CONCEAL = 3 }

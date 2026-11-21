@@ -609,6 +609,7 @@ static void on_out(void)
         s->ask_id = g_out.ask;
         s->ask_flags = g_out.pflags;
         name_print("pair with", g_out.name);
+        (void)printf("  asking from %s\n", addr_text(&g_out.addr, at, sizeof at));
         if ((g_out.pflags & WFAS3_PAIR_GUEST) != 0U) {
             (void)printf("  as a guest\n");
         }

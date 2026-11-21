@@ -1120,7 +1120,8 @@ private fun AskQuestion(a: Wfas3Desktop.AskState) {
     Scrim {
         QuestionCard(
             title = Strings.get("w3_ask_title", a.name.ifBlank { "?" }),
-            detail = Strings.get("w3_ask_unknown"),
+            detail = if (a.from.isBlank()) Strings.get("w3_ask_unknown")
+                else Strings.get("w3_ask_from", a.from) + " " + Strings.get("w3_ask_unknown"),
             icon = Icons.Outlined.PersonAdd,
             tone = violet,
             blob = Blob.ALERT
@@ -1226,10 +1227,14 @@ private fun ClientPairPanel(app: AppSettings) {
         delay(700)
         if (Wfas3Desktop.pairing.value is Wfas3Desktop.ClientPairing.Idle) go()
     }
-    // The only server with a PIN window nearby is chosen by itself.
+    // The only server with an open PIN window nearby is chosen by itself.
     LaunchedEffect(beacons, pinTab) {
-        if (pinTab && chosen == null && beacons.size == 1) chosen = beacons.first()
+        if (pinTab && chosen == null && beacons.size == 1 && !beacons.first().used) chosen = beacons.first()
         if (chosen != null && beacons.none { it.key == chosen?.key }) { chosen = null; pin = "" }
+    }
+    // Servers whose beacons stopped leave the list.
+    LaunchedEffect(pinTab) {
+        while (pinTab) { delay(1000); Wfas3Desktop.pruneBeacons() }
     }
     // And the eighth digit of the PIN starts it.
     LaunchedEffect(pin, chosen) {
@@ -1329,7 +1334,9 @@ private fun ClientPairPanel(app: AppSettings) {
                             key(b.key) {
                                 ListRow(
                                     title = b.name.ifBlank { "?" },
-                                    detail = null,
+                                    detail = b.addr.hostText().let { at ->
+                                        if (b.used) Strings.get("w3_cpair_pin_used", at) else at
+                                    }.ifBlank { null },
                                     selected = chosen?.key == b.key,
                                     onClick = { chosen = b; pin = "" },
                                     leading = { Avatar(b.name, size = 36.dp, live = chosen?.key == b.key) }

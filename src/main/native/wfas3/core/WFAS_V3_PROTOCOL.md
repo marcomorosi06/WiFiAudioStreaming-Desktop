@@ -1,6 +1,6 @@
 # WFAS v3 protocol specification
 
-Draft 6, 17 November 2026. Status: EXPERIMENTAL.
+Draft 7, 21 November 2026. Status: EXPERIMENTAL.
 
 This document fixes every wire format of WFAS v3. It is derived from "WFAS v3 -
 progetto del protocollo" revision 4 and changes it where a review found a
@@ -105,7 +105,7 @@ Every datagram starts with 4 bytes:
 | 0x10 | Init | initiator -> responder | 1368 |
 | 0x11 | Resp | responder -> initiator | 1228 |
 | 0x12 | CookieReply | responder -> initiator | 64 |
-| 0x13 | Pair | both, 9 steps | per step, section 13.4 |
+| 0x13 | Pair | both, 9 steps and Retry | per step, section 13.4 |
 | 0x14 | CookieRequest | initiator -> responder | 64 |
 | 0x15 | Reject | responder -> initiator | 48 |
 | 0x20 | Transport | both | 160, or the stream packet length of the session |
@@ -210,8 +210,18 @@ matches, the candidates are the pairs holding that key. No match: drop.
 
 For each candidate pair the receiver computes the tag with that pair's key for
 the incoming direction and compares. The first match selects the pair. No
-match: drop. The number of tag computations per second has one global cap
-(section 15).
+match: drop.
+
+Order and budget. A candidate whose last seen address (12) has the IP
+address of the source of the datagram is tried first; these first tries have
+a budget of their own, 16 per second per pair, outside the caps below. Every
+other tag computation counts in the share of the source IP address, 512 per
+second for each of the last 16 source addresses (a new address takes the
+place of the one whose second started longest ago), and in one global cap
+per second (section 15). So a device that holds the entry key cannot, from
+its own address, keep the other pairs out; from many addresses it can use up
+the global cap, but a pair that comes back from the address it was last
+seen at still gets through.
 
 ### 7.3 Entry counter
 
@@ -288,9 +298,13 @@ Normal reply: key = HKDF-Expand(K_cookie[d], "WFAS3 cookie" || salt, 32) and
 plaintext16 = cookie = MAC16(S, src_addr16 || src_port || request_id || u64(ectr))
 ```
 
-where S is the device cookie secret (32 random bytes, replaced every 30 s, the
-previous one stays valid; never stored), src_addr16 is the source address of
-the request as an IPv6 address (IPv4-mapped for IPv4) and src_port its port.
+where S is the device cookie secret (32 random bytes, never stored),
+src_addr16 is the source address of the request as an IPv6 address
+(IPv4-mapped for IPv4) and src_port its port. A secret makes cookies for 30 s;
+the first CookieReply after that makes a fresh one, and the previous one
+stays valid. A secret is accepted for mac2 only until 60 s after it was
+made, and is then erased even if no CookieReply was sent meanwhile: a cookie
+is never older than 60 s.
 
 Stale notice: sent instead when the request took the stale path, at most once
 every 30 s per pair and twice per second in total; beyond that the request is
@@ -579,8 +593,8 @@ does no harm. A removed device still holds the entry key that was current
 when it was removed. Once every other pair has received the new key it stops
 at mac1 like a stranger. Until then its mac1 still verifies, and each of its
 datagrams costs one tag computation for every pair that has not yet been
-updated (at most 63), under the global cap of section 15; it never passes the
-pair tag.
+updated (at most 63), under the share and the global cap of 7.2; it never
+passes the pair tag.
 
 ENTRY_KEY carries the current entry key and is repeated in every control
 packet until ENTRY_KEY_ACK with the first 8 bytes of its SHA-256 arrives. The
@@ -934,7 +948,7 @@ the latest session of the pair, as changed by 10.5, or the source address of
 the latest accepted ProbeReply, whichever came last.
 
 Receiver of a Probe, in order: length and header; mac1 (7.1); tag with
-K_probe for the incoming direction, counted in the cap of 7.2; counter (7.3)
+K_probe for the incoming direction, under the budget of 7.2; counter (7.3)
 against `probe_seen`:
 
 - greater: fresh. `probe_seen` takes the value at once. The Probe is
@@ -954,7 +968,7 @@ alert and never answers a ProbeReply.
 Receiver of a ProbeReply, in order: length and header; nonce and ctr_masked
 both equal to those of a Probe of a running search sent in the last 4 s;
 mac1 (7.1) with a key that the pair of that search holds; tag with K_probe
-for the incoming direction, counted in the cap of 7.2. Then the search ends
+for the incoming direction, under the budget of 7.2. Then the search ends
 and its nonces are forgotten, the pair's last seen address becomes the
 source address of the ProbeReply, and the application is told that the peer
 was found there. That address is a candidate for the handshake, which
@@ -1001,7 +1015,9 @@ second while it is open:
 0   A3 03 00 00
 4   mode          u8   1 = code or label, 2 = PIN
 5   state         u8   0 = open, 1 = used: a pairing was completed in this window
-6   reserved      2    zero
+6   flags         u8   mode 1: bit0 1 = the secret is used once (a code),
+                       0 = permanent (a label). mode 2: zero. Other bits zero
+7   reserved      1    zero
 8   window_nonce  16   random per window
 24  name          32   mode 2: declared name, UTF-8, zero padded. mode 1: zero
 56  tag           16   mode 1: MAC16(K_b, bytes 0..56), K_b = KDF(secret, "pair beacon")
@@ -1016,13 +1032,18 @@ code learns with certainty that someone else used the window.
 A mode-1 client waits for a beacon whose tag verifies with its code; the
 first one with state 0 starts its run (its step 1 goes to the source address
 of the beacon, and window_nonce comes from it). A beacon of its code with
-state 1 seen before its own step 8 ends the run. A mode-2 client starts from
-a beacon chosen by its user and the PIN typed by its user.
+state 1, seen before its own step 8, ends the run if flags bit0 is 1, or if
+its window_nonce is that of the run. With bit0 0 the secret is permanent and
+a beacon recorded in an earlier window can be played again: a state-1 beacon
+with another window_nonce, or one seen before the run started, is ignored.
+A mode-2 client starts from a beacon chosen by its user and the PIN typed by
+its user.
 
-A client whose own pairing did not complete and that sees state 1 for its
-code, or whose pairing fails after a step 2 of its run has verified (for any
-reason except its own user's cancellation), MUST tell the user that another
-device may have been paired in its place, and MUST propose the remedy: on a
+A client whose own pairing did not complete and that sees a state-1 beacon
+that ends its run, or whose pairing fails after a step 2 of its run has
+verified or after a step 2 with another pairing key (13.3) (for any reason
+except its own user's cancellation), MUST tell the user that another device
+may have been paired in its place, and MUST propose the remedy: on a
 headless device, erase all pairs (hold the button for 10 s) and pair again;
 on a device with a screen, remove the unknown entry from the list of paired
 devices. A headless device MUST signal every completed pairing with its
@@ -1030,8 +1051,12 @@ indicator or a sound, and cannot remove a single pair by itself.
 
 In mode 1 nothing readable is announced: only a device that holds the code
 recognises the beacon. In mode 2 the name is public and unauthenticated; an
-application shows at most 8 such names, cleaned of control and direction
-characters, and decides nothing from them.
+application shows at most 8 such names and decides nothing from them. A
+declared name is always shown cleaned: invalid UTF-8 becomes "?", and
+control, format and direction characters, every other character that shows
+as nothing (the Unicode Default_Ignorable_Code_Point property) and U+2800
+are removed. A name that is empty after cleaning is shown as such, never
+replaced by text that looks like a name.
 
 Filter key: mode 1: K_f = KDF(secret, "pair filter"). Mode 2:
 K_f = KDF(window_nonce, "pin filter"). It can never come from the PIN. Here
@@ -1075,8 +1100,12 @@ secret obtains nothing, and gets exactly one guess per run. A client
 processes a step 2 on a copy of its state: a step 2 that does not verify
 changes nothing, so a forgery cannot stop the real one.
 
-In mode 1 the client MUST check fp against W_public as soon as `w` is opened
-and abort on mismatch. In mode 2 there is no such check.
+In mode 1 the client MUST check fp against W_public as soon as `w` is opened.
+A mismatch shows that the sender holds the secret but not the pairing key:
+that step 2 is treated like one that does not verify (it changes nothing,
+and the real one may still come), and the client remembers it. If the run
+then fails, it fails with the reason "key", and the warning of 13.2 is due.
+In mode 2 there is no such check.
 
 After the third message, with ck its chaining key: K_c2s = KDF(ck, "pair
 c2s"), K_s2c = KDF(ck, "pair s2c"), K_fix = KDF(ck, "pair fixed"),
@@ -1092,7 +1121,7 @@ Every Pair datagram:
 
 ```
 0   A3 13 00 00
-4   step      u8   1..9
+4   step      u8   1..9, or 10 for a Retry (13.7)
 5   mode      u8
 6   reserved  2    zero
 8   pair_sid  8    random, chosen by the client
@@ -1102,7 +1131,7 @@ Every Pair datagram:
 
 | Step | From | Length | Body |
 | --- | --- | --- | --- |
-| 1 | C | 1368 | e 32, e1 1184, ya 32, 88 zero bytes |
+| 1 | C | 1368 | e 32, e1 1184, ya 32, token 16, 72 zero bytes |
 | 2 | S | 1296 | e 32, yb 32, ekem1 1104, w 48, s 48 |
 | 3 | C | 176 | s 48, EncryptAndHash(name 32, flags u8, 15 zero, commit_c 32) 96 |
 | 4 | S | 80 | Seal(K_s2c, 4, bytes 0..16, commit_s 32) |
@@ -1111,6 +1140,7 @@ Every Pair datagram:
 | 7 | S | 120 | Seal(K_s2c, 7, bytes 0..16, decision u8, permissions u8, guest u8, 1 zero, name 32, entry key 32, 4 zero) |
 | 8 | C | 100 | Seal(K_c2s, 8, bytes 0..16, accept u8, 3 zero, entry key 32, replaces 16) |
 | 9 | S | 52 | Seal(K_s2c, 9, bytes 0..16, done u8, 3 zero) |
+| 10 | S | 48 | Retry: token 16 |
 
 flags in step 3: bit0 guest requested, bit1 microphone requested; the other
 bits zero. Every value outside its range, and every non-zero reserved byte,
@@ -1118,11 +1148,12 @@ is a protocol error. A server serves a datagram only from the address and
 pair_sid of its run; a client only from the server's address and its own
 pair_sid.
 
-Retransmission. Each step is built once and sent unchanged; a step is
-processed once. Until step 3 has verified, which proves the client's address,
+Retransmission. Each step is built once and sent unchanged, except that a
+Retry puts its token into step 1 (13.7); a step is processed once. Until step 3 has verified, which proves the client's address,
 a reply is never larger than the datagram that causes it, and the server
-sends nothing on its own: it answers each copy of step 1 with its stored
-step 2, at most once per second. After that the side that waits for the
+sends nothing on its own: it answers a step 1 without its token with a
+Retry, and each copy of the step 1 of a run (the same bytes 0..1264) with its
+stored step 2, at most once per second. After that the side that waits for the
 other one's next step sends its last step again every second: the client
 steps 1, 3, 5 and 8, the server steps 4, 6 (while its user is being asked)
 and 7. A copy of step 5 that verifies, received after step 6 was replaced by
@@ -1146,7 +1177,8 @@ carries accept 1. In mode 1 the exchange still runs and the code MAY be
 shown.
 
 Approval: after step 5 the server asks its user (declared name, cleaned; the
-flags; in PIN mode the code), "No" first, 60 s, no answer means no; one
+source address of the client; the flags; in PIN mode the code), "No" first,
+60 s, no answer means no; one
 question is open at a time, the others wait their turn. On a headless device
 the open window is the approval, with the permissions set when it was
 opened. A refusal (decision 0) carries a zero name, permissions and entry
@@ -1186,15 +1218,34 @@ its session through the entry like any pair.
 
 ### 13.7 Limits
 
-A Pair datagram with a wrong filter is dropped after one HMAC. In both
-modes the server admits step 1 at most once per second per source address
-and 4 times per second in total, with at most 2 runs in computation at a
-time; addresses take turns: an address served before waits while another
-one, seen in the last 2 s, has not been served or was served less recently.
-The server remembers the last 8 addresses for this. An attempt in progress
-is never interrupted and there is no lock-out. The application shows the
-count of attempts of the window that ended without a pair, except those its
-own user refused, and proposes the code.
+A Pair datagram with a wrong filter is dropped after one HMAC.
+
+Retry. A step 1 takes part in admission only if bytes 1264..1280 hold the
+token of its source:
+token = MAC16(K_t, "retry" || src_addr16 || src_port || pair_sid), with
+K_t 32 random bytes made when the window opens, erased with it and never
+sent, and src_addr16, src_port as in 7.5. To any other step 1 (a wrong token
+is no token) the server answers with a Retry: step 10, 48 bytes, the header
+of 13.4, the token, the filter. A Retry changes no state of the server and is
+smaller than the step 1 that causes it. So whoever cannot receive at an
+address cannot take part from it, whatever the mode. The client accepts a
+Retry only while it waits for step 2, from the server's address with its
+pair_sid and a valid filter, and only with a token other than the one its
+step 1 holds: it puts the token into step 1 and makes the filter again. It
+sends step 1 at once for the first Retry of its run; a later one only
+changes the copies it sends every second.
+
+Admission. In both modes the server admits step 1 at most once per second
+per source address and 4 times per second in total, with at most 2 runs in
+computation at a time; addresses take turns: an address served before
+waits while another one, seen in the last 2 s, has not been served or was
+served less recently. The server remembers the last 16 addresses for this.
+When no context is free, a run whose step 3 has not arrived 3 s after its
+step 2 gives way to an address whose turn it is, and ends as by a timeout.
+A run whose step 3 has verified is never interrupted and there is no
+lock-out. The application shows the count of attempts of the window that
+ended without a pair, except those its own user refused, and proposes the
+code.
 
 ## 14. Multicast
 
@@ -1295,10 +1346,10 @@ Its other frames are those of section 10.
 | Item | Limit |
 | --- | --- |
 | Datagram without valid mac1 | dropped after one HMAC per distinct entry key still held by some pair |
-| Tag computations | one global cap per second, set from measurement on the slowest supported device |
+| Tag computations | first try for the pair last seen at the source: 16 per second per pair; the others: 512 per second per source address (16 remembered) and one global cap per second, set from measurement on the slowest supported device |
 | Fresh CookieRequest | one per 2 s per pair |
 | Stale CookieRequest, stale Probe | one answer per 30 s per pair, 2 per second in total; separate budgets for the two |
-| Cookie | bound to address, port, request and counter; secret replaced every 30 s, so valid at most 60 s |
+| Cookie | bound to address, port, request and counter; a secret makes cookies for 30 s and is accepted until 60 s after it was made, then erased |
 | Init | latest request only, once; one handshake per pair every 2 s |
 | Handshakes in total | cap set from measurement: at most 10 percent of the CPU, audio always first |
 | Sessions | 8 by default |
@@ -1315,8 +1366,8 @@ Its other frames are those of section 10.
 | ProbeReply | accepted for a Probe of the last 4 s, once |
 | Seen counters alone | written at most once per minute per pair |
 | Pairing window, code, PIN | 120 s, one pairing; beacon every second |
-| Pairing steps | sent again every second; 10 s for a step the peer sends without waiting, 70 s for one that may wait for a user, 30 s for step 2, 5 s after a step 2 that does not verify; copies of step 8 answered for 10 s |
-| Step 1 | one per second per address, 4 per second in total, 2 runs at a time, 8 addresses remembered |
+| Pairing steps | sent again every second; 10 s for a step the peer sends without waiting, 70 s for one that may wait for a user, 30 s for step 2, 5 s after a step 2 that does not verify or has another pairing key; copies of step 8 answered for 10 s |
+| Step 1 | only with the Retry token of its address; one per second per address, 4 per second in total, 2 runs at a time, 16 addresses remembered; a run without step 3 gives way after 3 s |
 | Approval question | 60 s, then no; one at a time |
 | Unconfirmed session (responder) | discarded after 15 s |
 | Unused new pair | erased after 10 minutes |
@@ -1344,7 +1395,13 @@ no amplification.
 What remains, by design:
 
 1. Availability. Whoever controls the radio or the path can stop the audio.
-   A valid paired device can consume shared entry capacity.
+   A valid paired device that sends from many addresses can consume the
+   global entry capacity; a pair that comes back from its last seen address
+   still gets through (7.2). In PIN mode anyone on the link passes the
+   filter of 13.7: an attacker that receives at more addresses than the
+   server remembers can still delay or prevent a PIN pairing. With a code it
+   cannot without the secret, so the application proposes the code after
+   failed attempts.
 2. Existence of the session, its stream class and the microphone stream being
    on are visible.
 3. A compromised paired device receives audio as intended. A thief holding a
@@ -1379,6 +1436,11 @@ What remains, by design:
    the network while a window is open can pair first. That pair stays until
    it is removed. The owner is warned (13.2) but, on a headless device, the
    only removal is erasing all pairs, and the label secret is permanent.
+   Beacons of a label can be recorded and played in a later window. Since
+   draft 7 a played state-1 beacon no longer ends a run or raises the
+   warning; a played state-0 beacon can still make a waiting client send its
+   step 1 to the wrong address or with the wrong nonce, so that this run
+   times out or fails, without any warning.
 8. Asymmetric delay of time packets: up to 7.5 ms per room.
 9. User errors, implementation bugs, side channels and flaws in the state
    machines are reduced by section 17 and Appendix B, not removed by this
@@ -1452,15 +1514,17 @@ from this document, which compares the stored state of both sides after every
 handshake and exchanges Probes in both directions; the bounded model; cppcheck
 and the Clang analyser; GCC and Clang, sanitizers and Valgrind. The pairing
 suite (all three methods over a hostile network, wrong codes, PINs and
-keys, refusals, guests, unused and replaced pairs, races and admission) and
+keys, refusals, guests, unused and replaced pairs, races, admission with
+Retry under floods of step 1, replayed label beacons, step 2 with another
+pairing key; also the tag budget under floods and the age of cookies) and
 the multicast suite (members, loss and resends, leave, revocation, consent,
 epochs, forgeries) run on the C core; `tests/peer_pair.py` and
 `tests/peer_mcast.py`, second implementations of sections 13 and 14 written
 from this document, interoperate with it in both roles; `tests/cli_test.py`
 runs two `wfascli` devices on one machine. `make mutate`
 puts back, one at a time, every defect found so far in the core, removes rules
-C2, C3, C5, R2 and I2 and 17 rules of sections 13 and 14, and alters the
-second implementations in 19 ways; the suites must fail every time.
+C2, C3, C5, R2 and I2 and 32 rules of sections 7, 13 and 14, and alters the
+second implementations in 21 ways; the suites must fail every time.
 
 ## 18. Coexistence with v2
 
@@ -1567,6 +1631,19 @@ Changes in draft 6, from the implementation of sections 13 and 14:
 | F15 | AEAD nonce in a multicast packet starts with the key epoch, as 14.1 already said (2). | Section 2 said 4 zero bytes for every nonce. |
 | F16 | fiat-crypto pinned; `wfascli.c` requirements (17, Appendix B). | The component is now vendored; the storage rules of the client were not written down. |
 
+Changes in draft 7, after a security review of draft 6 and of its
+implementation:
+
+| # | Change | Reason |
+| --- | --- | --- |
+| G1 | PairBeacon byte 6 is a flags byte: bit0 says that the secret is used once. A state-1 beacon of a permanent secret ends a run only with the window_nonce of that run (13.2). | A state-1 beacon of a label, recorded once by anyone, could be played in any later window to end every pairing with that label and to raise the warning that tells the owner to erase all pairs. |
+| G2 | A step 2 whose W does not match the fingerprint is ignored like a forged one; the run fails "key", with the warning, only if the real one does not come (13.3, 13.4). | Whoever held the code (a photographed label) could end every pairing at once with a step 2 of its own. |
+| G3 | Retry: step 10, a stateless token bound to address, port and pair_sid in bytes 1264..1280 of step 1; only a step 1 with its token takes part in admission; a run without step 3 gives way after 3 s; 16 addresses remembered (13.4, 13.7, 15). | In PIN mode the filter key is public: step 1 from ever new spoofed addresses kept both contexts busy, and the real client rarely got its turn. |
+| G4 | Tag computations: first try for the pair last seen at the source address, with its own budget; a share per source address under the global cap (7.2, 15). | One paired device, holding the entry key, could use up the global cap with datagrams that pass mac1 and keep every other pair out. |
+| G5 | A cookie secret is accepted only until 60 s after it was made and is erased even without traffic (7.5, 15). | The secret was replaced only when a CookieReply was built: without requests, a cookie stayed valid for any time. |
+| G6 | Declared names are cleaned of every default-ignorable character and U+2800 (13.2). | Hangul fillers, variation selectors, tags and blank Braille passed the cleaning and allowed names that look empty or like another name. |
+| G7 | The approval question names the source address of the client (13.4). | The user had no way to tell two clients with the same declared name apart. |
+
 ## Appendix B. Open before "stable"
 
 1. Symbolic model (Tamarin or ProVerif) of sections 7, 8, 11, 13, 14, and a
@@ -1592,7 +1669,7 @@ Changes in draft 6, from the implementation of sections 13 and 14:
 | Probe | 60 | ProbeReply 60 |
 | CookieRequest | 64 | CookieReply 64 |
 | Init | 1368 | Resp 1228 or Reject 48 |
-| Pair step 1 | 1368 | step 2, 1296 |
+| Pair step 1 | 1368 | step 2, 1296, or Retry 48 |
 | Pair step 3 | 176 | step 4, 80 |
 | Control packet | 160 | - |
 | Audio packet, PCM 48 kHz stereo 16 bit, 5 ms | 1015 | - |

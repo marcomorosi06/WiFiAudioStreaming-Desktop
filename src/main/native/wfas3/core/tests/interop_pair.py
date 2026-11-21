@@ -21,6 +21,8 @@ import peer_pair  # noqa: E402
 import ref  # noqa: E402
 from interop import C_IP, PY_IP, PORT, ST_OK, ST_DROP, expect  # noqa: E402
 
+PAIRF_KEY_C = 4
+
 EV_STORE_PAIR, EV_STORE_DEVICE, EV_UP = 0x01, 0x02, 0x04
 EV_ERASED = 0x4000
 EV_BEACON, EV_ASK, EV_CODE, EV_PAIRED = 0x100000, 0x200000, 0x400000, 0x800000
@@ -139,11 +141,22 @@ def c_server(path, kind, label, guest_req=False, answer_guest=0, refuse=False, a
         expect(bytes.fromhex(c.cmd("codeparse " + peer_pair.code_text(code).lower())[1]) == code,
                label + ": C reads Python's text")
         cl = peer_pair.Client(name=b"Py phone", flags=(GUEST if guest_req else 0) | MIC, code=code)
+        expect(o.dgram[6] == (1 if kind == CODE else 0), label + ": beacon flags say whether the secret is used once")
         expect(cl.on_beacon(o.dgram) == ("start",), label + ": Python recognises C's beacon")
     d1 = cl.step1()
     bad = d1[:-1] + bytes([d1[-1] ^ 1])
     expect(c.out("recv %s %d %s" % (PY_IP.hex(), PORT, bad.hex())).status == ST_DROP,
            label + ": a wrong filter is dropped")
+    o = c.recv(d1)
+    if not expect(len(o.dgram) == 48 and o.dgram[4] == peer_pair.RETRY and o.to == (PY_IP, PORT),
+                  label + ": C answers step 1 without a token with a Retry"):
+        return None
+    r = cl.on_retry(o.dgram)
+    if not expect(r[0] == "step1" and r[1][1264:1280] == o.dgram[16:32], label + ": Python takes the token"):
+        return None
+    d1 = r[1]
+    o = c.out("recv %s %d %s" % (PY_IP.hex(), PORT + 1, d1.hex()))
+    expect(len(o.dgram) == 48, label + ": the token is bound to the address and port")
     o = c.recv(d1)
     if not expect(len(o.dgram) == 1296, label + ": C answers step 1 with step 2"):
         return None
@@ -166,6 +179,7 @@ def c_server(path, kind, label, guest_req=False, answer_guest=0, refuse=False, a
         expect(o.has(EV_ASK) and o.name == name32(b"Py phone") and o.pflags == ((GUEST if guest_req else 0) | MIC),
                label + ": C asks its user with the name and flags")
         expect(o.code == (cl.code if kind == PIN else 0), label + ": the code is shown in PIN mode")
+        expect(o.addr == (PY_IP, PORT), label + ": the question names the client's address")
         o = c.out("answer %d %d 3 %d" % (o.ask, 0 if refuse else 1, answer_guest))
     else:
         expect(not o.has(EV_ASK), label + ": a headless window asks nobody")
@@ -231,10 +245,22 @@ def py_server(path, kind, label, flags=MIC, confirm_early=False, wrong_w=False, 
         expect(o.status == ST_OK and not o.dgram, label + ": C waits for the beacon")
         other = peer_pair.Window("code")
         expect(not c.recv(other.beacon()).dgram, label + ": C ignores another window's beacon")
+        if kind == LABEL:
+            old = peer_pair.Window("label", name=b"Py speaker", secret=win.prs, w_priv=win.w_priv)
+            old.used = 1
+            o = c.recv(old.beacon())
+            expect(not o.dgram and not o.has(EV_FAILED), label + ": C ignores an old used label beacon")
         o = c.recv(win.beacon())
     if not expect(len(o.dgram) == 1368 and o.to == (PY_IP, PORT), label + ": C sends step 1"):
         return None
-    r = win.on_step1(o.dgram)
+    r = win.on_step1(o.dgram, C_IP, PORT)
+    if not expect(r[0] == "retry", label + ": Python answers with a Retry"):
+        return None
+    o = c.recv(r[1])
+    if not expect(len(o.dgram) == 1368 and o.dgram[1264:1280] == r[1][16:32],
+                  label + ": C sends step 1 again at once, with the token"):
+        return None
+    r = win.on_step1(o.dgram, C_IP, PORT)
     if not expect(r[0] == "step2", label + ": Python accepts C's step 1"):
         return None
     forged = bytearray(r[1])
@@ -243,7 +269,14 @@ def py_server(path, kind, label, flags=MIC, confirm_early=False, wrong_w=False, 
     expect(c.recv(bytes(forged)).status == ST_DROP, label + ": C ignores a forged step 2")
     o = c.recv(r[1])
     if wrong_w:
-        expect(o.has(EV_FAILED | EV_RACE) and o.status == ST_OK, label + ": C aborts on a wrong fingerprint")
+        expect(o.status == ST_DROP and not o.has(EV_FAILED), label + ": C ignores a step 2 with a wrong key")
+        c.time(5100)
+        for _ in range(8):
+            o = c.out("poll")
+            if o.has(EV_FAILED):
+                break
+        expect(o.has(EV_FAILED | EV_RACE) and o.answer == PAIRF_KEY_C,
+               label + ": C fails KEY, with the warning, 5 s later")
         c.close()
         return None
     if not expect(len(o.dgram) == 176, label + ": C answers step 2 with step 3"):
@@ -335,6 +368,7 @@ def test_replace(path):
     cl = peer_pair.Client(name=b"Py phone", code=code)
     cl.on_beacon(o.dgram)
     o = c.recv(cl.step1())
+    o = c.recv(cl.on_retry(o.dgram)[1])
     o = c.recv(cl.on_step2(o.dgram)[1])
     o = c.recv(cl.on_step4(o.dgram)[1])
     cl.on_step6(o.dgram)

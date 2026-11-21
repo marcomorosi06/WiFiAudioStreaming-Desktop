@@ -53,6 +53,16 @@ object ConfigPaths {
         else           -> (envDir("XDG_CONFIG_HOME") ?: File(homeDir(), ".config")).let { File(it, APP_DIR_NAME) }
     }
 
+    /**
+     * Local state that must stay on this machine (the WFAS v3 records): never
+     * the roaming profile on Windows, the XDG state folder on Linux.
+     */
+    fun stateDir(): File = when (os) {
+        HostOs.WINDOWS -> (envDir("LOCALAPPDATA") ?: File(homeDir(), "AppData/Local")).let { File(it, APP_DIR_NAME) }
+        HostOs.MACOS   -> File(homeDir(), "Library/Application Support/$APP_DIR_NAME")
+        else           -> (envDir("XDG_STATE_HOME") ?: File(homeDir(), ".local/state")).let { File(it, APP_DIR_NAME) }
+    }
+
     @Volatile
     var overrideConfigFile: File? = null
 
@@ -70,6 +80,7 @@ object ConfigPaths {
 
     fun describeForHelp(): List<Pair<String, String>> = listOf(
         "settings file"  to configFile().path,
+        "WFAS v3 records" to (if (overrideConfigFile != null) File(configDir(), "wfas3") else File(stateDir(), "wfas3")).path,
         "IPC port file"  to portFileGlob(),
         "RTP descriptor" to sdpFile().path
     )

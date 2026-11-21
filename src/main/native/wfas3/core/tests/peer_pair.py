@@ -5,8 +5,9 @@
 # Second implementation of WFAS v3 pairing (WFAS_V3_PROTOCOL.md section 13),
 # written from the specification text, not from wfas.c. Used only by
 # tests/interop_pair.py. One server window and one client run, driven
-# message by message; timers, admission and retransmission are left to the
-# test. Every method returns a tuple whose first element says what happened.
+# message by message; timers, admission (except the Retry token of 13.7)
+# and retransmission are left to the test. Every method returns a tuple
+# whose first element says what happened.
 
 import hashlib
 import os
@@ -18,7 +19,8 @@ from ref import ML_KEM_768
 T_PAIR_BEACON = 0x03
 T_PAIR = 0x13
 NAME = b"WFAS3_PAIR_25519+MLKEM768+CPace_ChaChaPoly_SHA256"
-LENGTHS = {1: 1368, 2: 1296, 3: 176, 4: 80, 5: 80, 6: 80, 7: 120, 8: 100, 9: 52}
+LENGTHS = {1: 1368, 2: 1296, 3: 176, 4: 80, 5: 80, 6: 80, 7: 120, 8: 100, 9: 52, 10: 48}
+RETRY = 10
 CROCKFORD = "0123456789ABCDEFGHJKMNPQRSTVWXYZ"
 
 
@@ -115,12 +117,14 @@ class Window:
         self.name = name.ljust(32, b"\0")
         self.used = 0
         self.ctx = None
+        self.k_t = os.urandom(32)                          # 13.7: Retry tokens
+        self.flags = 1 if kind == "code" else 0           # 13.2: bit0 one-use secret
 
     def code(self):
         return self.prs if self.mode == 2 else self.prs + fingerprint(self.w_pub)
 
     def beacon(self):
-        b = bytes([0xA3, T_PAIR_BEACON, 0, 0, self.mode, self.used, 0, 0]) + self.nonce
+        b = bytes([0xA3, T_PAIR_BEACON, 0, 0, self.mode, self.used, self.flags, 0]) + self.nonce
         if self.mode == 2:
             return b + self.name + bytes(16)
         b += bytes(32)
@@ -129,17 +133,25 @@ class Window:
     def _send(self, d):
         return d + mac16(self.k_f, d)
 
-    def on_step1(self, d):
+    def token(self, ip, port, sid):
+        """13.7: MAC16(K_t, "retry" || address 16 || port u16 || pair_sid)."""
+        return mac16(self.k_t, b"retry" + ip + port.to_bytes(2, "big") + sid)
+
+    def on_step1(self, d, ip, port):
+        """Step 1 from (ip, port). Without the token of that address: a Retry."""
         if len(d) != 1368 or d[:5] != bytes([0xA3, T_PAIR, 0, 0, 1]) or d[5] != self.mode:
             return ("drop", "header")
         if not filter_ok(self.k_f, d):
             return ("drop", "filter")
-        if d[6:8] != bytes(2) or d[1264:1352] != bytes(88) or self.used:
+        if d[6:8] != bytes(2) or d[1280:1352] != bytes(72) or self.used:
             return ("drop", "body")
+        sid = d[8:16]
+        tok = self.token(ip, port, sid)
+        if not same(d[1264:1280], tok):
+            return ("retry", self._send(head(RETRY, self.mode, sid) + tok))
         e_c, ek, ya_pub = d[16:48], d[48:1232], d[1232:1264]
         if not ek_valid(ek):
             return ("drop", "ek")
-        sid = d[8:16]
         s = start_sym(self.mode, sid, self.nonce)
         s.mix_hash(e_c)
         s.mix_hash(ek)
@@ -268,13 +280,21 @@ class Client:
         return d + mac16(self.k_f, d)
 
     def on_beacon(self, b):
-        """Mode 1: a beacon of this code starts the run; state 1 means used."""
+        """Mode 1: a beacon of this code starts the run. State 1 means used:
+        for a one-use secret (flags 1) at any time before step 8, otherwise
+        only with the nonce of the run, since an old beacon of a permanent
+        secret may be played again."""
         if len(b) != 72 or b[:4] != bytes([0xA3, T_PAIR_BEACON, 0, 0]) or b[4] != 1:
             return ("drop",)
+        if b[6] > 1 or b[7] != 0 or b[5] > 1 or b[24:56] != bytes(32):
+            return ("drop", "field")
         if not same(mac16(self.k_b, b[:56]), b[56:72]):
             return ("drop", "tag")
         if b[5] == 1:
-            return ("used",)
+            if self.state < 8 and ((b[6] == 1 and self.state == 0) or
+                                   (self.state != 0 and b[8:24] == self.nonce)):
+                return ("used",)
+            return ("drop", "old")
         if self.state != 0:
             return ("drop", "busy")
         self.nonce = b[8:24]
@@ -292,7 +312,21 @@ class Client:
         for x in (self.e_pub, self.ek, self.ya_pub):
             self.s.mix_hash(x)
         self.state = 1
-        return self._send(head(1, self.mode, self.sid) + self.e_pub + self.ek + self.ya_pub + bytes(88))
+        self.retried = False
+        self.tx1 = head(1, self.mode, self.sid) + self.e_pub + self.ek + self.ya_pub + bytes(88)
+        return self._send(self.tx1)
+
+    def on_retry(self, d):
+        """13.7: the token goes into step 1; the first Retry is answered at once."""
+        if self.state != 1 or not self._dg(d, RETRY):
+            return ("drop",)
+        if d[16:32] == self.tx1[1264:1280]:
+            return ("drop", "same")
+        self.tx1 = self.tx1[:1264] + d[16:32] + self.tx1[1280:]
+        if self.retried:
+            return ("token",)
+        self.retried = True
+        return ("step1", self._send(self.tx1))
 
     def _dg(self, d, step):
         if len(d) != LENGTHS[step] or d[:5] != bytes([0xA3, T_PAIR, 0, 0, step]):
@@ -325,7 +359,7 @@ class Client:
         if w_pub is None:
             return ("drop", "w")
         if self.mode == 1 and not same(fingerprint(w_pub), self.fp_w):
-            return ("key",)
+            return ("key",)                                # ignored, as a forgery (13.3)
         s.mix_key(dh(self.e_priv, w_pub))                  # ew
         s_s = s.decrypt_and_hash(d[1232:1280])
         if s_s is None:

@@ -251,7 +251,15 @@ class Wfas3Addr(val ip: ByteArray, val port: Int) {
  * [raw] goes back to the core unchanged when the user chooses it.
  */
 class Wfas3Beacon(val raw: ByteArray, val name: String, val addr: Wfas3Addr) {
-    val key: String get() = raw.copyOfRange(24, 40).joinToString("") { "%02x".format(it) }
+    /**
+     * Window nonce and source address together: anyone can send a beacon
+     * with the nonce of another, so the nonce alone must not hide the real
+     * server behind a copy from elsewhere.
+     */
+    val key: String get() = raw.copyOfRange(24, 40).joinToString("") { "%02x".format(it) } +
+        "@" + addr.ip.joinToString("") { "%02x".format(it) } + ":" + addr.port
+    /** State 1: the window says it was used (unauthenticated, like everything here). */
+    val used: Boolean get() = raw.size >= 24 && (raw[20].toInt() or raw[21].toInt() or raw[22].toInt() or raw[23].toInt()) != 0
 }
 
 /** What the user interface may know of a pair. Nothing secret. */

@@ -12,7 +12,7 @@ plugins {
 group = "com.wifiaudiostreaming"
 version = "7.0"
 
-val appVersion = "5.3.0"
+val appVersion = "5.3.1"
 
 val displayVersion = appVersion.split(".").let { p ->
     val major = ((p.getOrNull(0)?.toIntOrNull() ?: 0) - 4).coerceAtLeast(0)

@@ -42,6 +42,7 @@ typedef struct who_st {
     uint32_t ask_flags;
     uint32_t ask_code;
     uint32_t ask_pending;
+    uint32_t ask_addr_ok;
     uint32_t codes;
     uint32_t code;
     uint32_t confirm_pending;
@@ -251,6 +252,9 @@ static void handle_out(uint32_t who)
         w->ask_flags = g_out.pflags;
         w->ask_code = g_out.code;
         w->ask_pending = 1U;
+        w->ask_addr_ok = (wfas3_addr_eq(&g_out.addr, &g_dev[who].pctx[0].addr) |
+                          wfas3_addr_eq(&g_out.addr, &g_dev[who].pctx[1].addr)) &
+                         (1U ^ wfas3_addr_eq(&g_out.addr, &(wfas3_addr){ { 0U }, 0U }));
     }
     if ((ev & WFAS3_EV_PAIR_CODE) != 0U) {
         w->codes += 1U;
@@ -515,6 +519,19 @@ static void test_code_text(void)
     memset(name, 'A', 32U);
     wfas3_name_clean(name, clean);
     check((strlen(clean) == 32U) ? 1U : 0U, "name clean: 32 bytes, NUL terminated");
+    /* Characters that show as nothing: Hangul fillers U+3164 and U+115F,
+     * blank Braille U+2800, combining grapheme joiner U+034F, variation
+     * selectors U+FE0F and U+E0100, tag U+E0041. */
+    set_name(name, "a\xE3\x85\xA4" "b\xE1\x85\x9F" "c\xE2\xA0\x80" "d\xCD\x8F" "e\xEF\xB8\x8F"
+                   "f\xF3\xA0\x84\x80" "g\xF3\xA0\x81\x81");
+    wfas3_name_clean(name, clean);
+    check((strcmp(clean, "abcdefg") == 0) ? 1U : 0U, "name clean: default-ignorable characters removed");
+    set_name(name, "\xE3\x85\xA4\xE3\x85\xA4\xE2\xA0\x80");
+    wfas3_name_clean(name, clean);
+    check((clean[0] == '\0') ? 1U : 0U, "name clean: a name of fillers is empty");
+    set_name(name, "\xE2\x80\x8C\xE3\x80\x80" "K");
+    wfas3_name_clean(name, clean);
+    check((strcmp(clean, "\xE3\x80\x80" "K") == 0) ? 1U : 0U, "name clean: a visible space stays");
 }
 
 /* Code pairing, the server's user says yes; then a session. */
@@ -712,7 +729,9 @@ static void test_wrong_pin(void)
     check((g_w.w[0].paired == 0U) && (g_w.w[1].paired == 0U) ? 1U : 0U, "wrong pin: no pair");
 }
 
-/* A code whose pairing key is not the server's: someone in the middle. */
+/* A code whose pairing key is not the server's: someone in the middle. The
+ * step 2 is ignored like a forgery (the real server may still answer); the
+ * run fails KEY, with the warning, 5 s later. */
 static void test_wrong_key(void)
 {
     uint8_t code[WFAS3_CODE_LEN];
@@ -723,9 +742,50 @@ static void test_wrong_key(void)
     check((start_client(1U, WFAS3_PAIR_CODE, code, 0U, WFAS3_NONE) == WFAS3_OK) ? 1U : 0U,
           "wrong key: client starts");
     run(3000U);
+    check((g_w.w[1].failed == 0U) && (g_dev[1].pcli.key_bad == 1U) &&
+          (g_dev[1].pcli.state == WFAS3_PC_S1) ? 1U : 0U, "wrong key: step 2 ignored, the client waits");
+    run(3000U);
     check((g_w.w[1].failed == 1U) && (g_w.w[1].fail_why == WFAS3_PAIRF_KEY) &&
           (g_w.w[1].race == 1U) ? 1U : 0U, "wrong key: KEY failure with the warning");
     check((g_w.w[0].asks == 0U) && (g_w.w[0].paired == 0U) ? 1U : 0U, "wrong key: nothing on the server");
+}
+
+/* Someone else holds the code and answers first with its own pairing key:
+ * the client ignores that step 2 and pairs with the real server. */
+static void test_key_race(void)
+{
+    uint8_t code[WFAS3_CODE_LEN];
+    uint8_t d1[WFAS3_LEN_INIT];
+    wfas3_addr from = addr_of(0U);
+    wfas3_addr a1 = addr_of(1U);
+    wfas3_device *fake = &g_dev[2];
+    wfas3_status st;
+
+    setup(43U);
+    check((open_window(WFAS3_PAIR_CODE, 0U, code) == WFAS3_OK) ? 1U : 0U, "key race: window");
+    (void)start_client(1U, WFAS3_PAIR_CODE, code, 0U, WFAS3_NONE);
+    g_w.cut[0] = 1U;
+    (void)wfas3_beacon_build(&g_dev[0], &g_out);
+    st = wfas3_receive(&g_dev[1], g_out.dgram, WFAS3_LEN_PAIR_BEACON, &from, &g_out);
+    check((st == WFAS3_OK) && (g_dev[1].pcli.state == WFAS3_PC_S1) ? 1U : 0U, "key race: step 1 sent");
+    /* Device 2 plays a server with the same secret but its own W. */
+    fake->win = g_dev[0].win;
+    fake->win.w_priv[0] ^= 0x40U;
+    wfas_tp_x25519_public(fake->win.w_pub, fake->win.w_priv);
+    memcpy(d1, g_dev[1].pcli.tx, sizeof d1);
+    (void)wfas3_pair_token(&d1[WFAS3_PAIR_TOKEN], &fake->win, &a1, &d1[8]);
+    (void)wfas3_mac(&d1[1352], 16U, fake->win.k_f, d1, 1352U);
+    add_entropy(2U);
+    st = wfas3_receive(fake, d1, sizeof d1, &a1, &g_out);
+    check((st == WFAS3_OK) && (g_out.len == 1296U) ? 1U : 0U, "key race: the impostor answers");
+    st = wfas3_receive(&g_dev[1], g_out.dgram, g_out.len, &from, &g_out);
+    check((st == WFAS3_E_DROP) && (g_dev[1].pcli.key_bad == 1U) && (g_w.w[1].failed == 0U) ? 1U : 0U,
+          "key race: the wrong key is ignored");
+    g_w.cut[0] = 0U;
+    fake->win.open = 0U;
+    run(4000U);
+    check((g_w.w[1].paired == 1U) && (g_w.w[0].paired == 1U) && (g_w.w[1].race == 0U) ? 1U : 0U,
+          "key race: the real server still pairs");
 }
 
 /* A wrong secret in the code: no beacon matches, the client waits. */
@@ -943,13 +1003,17 @@ static void test_race(uint64_t seed)
     check((g_w.w[1].race + g_w.w[2].race == 1U) ? 1U : 0U, "race: the winner is not warned");
 }
 
-/* A client that only sends copies of step 1 gets no more than it sends;
- * many sources are served fairly, at most 4 a second. */
+/* A step 1 without its token gets a Retry, smaller, and changes nothing; a
+ * client that only sends copies of step 1 gets no more than it sends; many
+ * sources are served fairly, at most 4 a second. */
 static void test_admission(void)
 {
     uint8_t code[WFAS3_CODE_LEN];
     uint8_t d1[WFAS3_LEN_INIT];
+    uint8_t retry[48];
+    uint8_t retry2[48];
     wfas3_addr from;
+    wfas3_addr other = addr_of(2U);
     uint32_t k;
     uint32_t answers = 0U;
     uint32_t src;
@@ -967,7 +1031,46 @@ static void test_admission(void)
     from = addr_of(0U);
     st = wfas3_receive(&g_dev[1], d1, WFAS3_LEN_PAIR_BEACON, &from, &g_out);
     check((st == WFAS3_OK) && (g_out.len == WFAS3_LEN_INIT) &&
-          (g_dev[1].pcli.state == WFAS3_PC_S1) ? 1U : 0U, "admission: the client sent step 1");
+          (g_dev[1].pcli.state == WFAS3_PC_S1) &&
+          (wfas3_all_zero(&g_out.dgram[WFAS3_PAIR_TOKEN], 88U) == 1U) ? 1U : 0U,
+          "admission: the client sent step 1, without a token");
+    memcpy(d1, g_dev[1].pcli.tx, sizeof d1);
+    from = addr_of(1U);
+    add_entropy(0U);
+    st = wfas3_receive(&g_dev[0], d1, sizeof d1, &from, &g_out);
+    check((st == WFAS3_OK) && (g_out.len == 48U) && (g_out.dgram[4] == WFAS3_PAIR_RETRY) &&
+          (wfas3_addr_eq(&g_out.to, &from) == 1U) &&
+          (g_dev[0].pctx[0].state == WFAS3_PS_FREE) && (g_dev[0].pctx[1].state == WFAS3_PS_FREE) &&
+          (g_dev[0].win.src_used[0] == 0U) && (g_dev[0].win.s1_count == 0U) ? 1U : 0U,
+          "admission: a step 1 without its token gets a Retry and changes nothing");
+    memcpy(retry, g_out.dgram, sizeof retry);
+    d1[WFAS3_PAIR_TOKEN] ^= 0x01U;
+    (void)wfas3_mac(&d1[1352], 16U, g_dev[0].win.k_f, d1, 1352U);
+    st = wfas3_receive(&g_dev[0], d1, sizeof d1, &other, &g_out);
+    check((st == WFAS3_OK) && (g_out.len == 48U) && (g_dev[0].pctx[0].state == WFAS3_PS_FREE) ? 1U : 0U,
+          "admission: a wrong token is no token");
+    from = addr_of(1U);
+    (void)wfas3_pair_token(&d1[WFAS3_PAIR_TOKEN], &g_dev[0].win, &from, &d1[8]);
+    (void)wfas3_mac(&d1[1352], 16U, g_dev[0].win.k_f, d1, 1352U);
+    st = wfas3_receive(&g_dev[0], d1, sizeof d1, &other, &g_out);
+    check((st == WFAS3_OK) && (g_out.len == 48U) && (g_dev[0].pctx[0].state == WFAS3_PS_FREE) ? 1U : 0U,
+          "admission: a token is bound to its address");
+    st = wfas3_receive(&g_dev[1], retry, sizeof retry, &other, &g_out);
+    check((st == WFAS3_E_DROP) && (wfas3_all_zero(&g_dev[1].pcli.tx[WFAS3_PAIR_TOKEN], 16U) == 1U) ? 1U : 0U,
+          "admission: a Retry from another address is ignored");
+    from = addr_of(0U);
+    st = wfas3_receive(&g_dev[1], retry, sizeof retry, &from, &g_out);
+    check((st == WFAS3_OK) && (g_out.len == WFAS3_LEN_INIT) &&
+          (wfas3_ct_eq(&g_out.dgram[WFAS3_PAIR_TOKEN], &retry[16], 16U) == 1U) &&
+          (wfas3_pair_filter_ok(g_out.dgram, g_out.len, g_dev[1].pcli.k_f) == 1U) ? 1U : 0U,
+          "admission: the client answers the first Retry at once, with the token");
+    memcpy(retry2, retry, sizeof retry2);
+    retry2[16] ^= 0x01U;
+    (void)wfas3_mac(&retry2[32], 16U, g_dev[1].pcli.k_f, retry2, 32U);
+    st = wfas3_receive(&g_dev[1], retry2, sizeof retry2, &from, &g_out);
+    check((g_out.len == 0U) && (g_dev[1].pcli.tx[WFAS3_PAIR_TOKEN] == retry2[16]) ? 1U : 0U,
+          "admission: a later Retry only changes the next copy");
+    (void)wfas3_receive(&g_dev[1], retry, sizeof retry, &from, &g_out);
     memcpy(d1, g_dev[1].pcli.tx, sizeof d1);
     from = addr_of(1U);
     for (k = 0U; k < 100U; k++) {
@@ -1003,6 +1106,8 @@ static void test_admission(void)
             (void)wfas3_set_time(&g_dev[1], US(g_w.now));
             if (wfas3_pc_step1(&g_dev[1], &g_out) == WFAS3_OK) {
                 memcpy(d1, g_out.dgram, sizeof d1);
+                (void)wfas3_pair_token(&d1[WFAS3_PAIR_TOKEN], &g_dev[0].win, &from, &d1[8]);
+                (void)wfas3_mac(&d1[1352], 16U, g_dev[0].win.k_f, d1, 1352U);
                 add_entropy(0U);
                 st = wfas3_receive(&g_dev[0], d1, sizeof d1, &from, &g_out);
                 served[src] += ((st == WFAS3_OK) && (g_out.len == 1296U)) ? 1U : 0U;
@@ -1017,6 +1122,331 @@ static void test_admission(void)
         check((served[src] >= 1U) ? 1U : 0U, "admission: every source is served");
     }
     check((answers <= 13U) ? 1U : 0U, "admission: at most 4 a second in total");
+}
+
+/* -- Draft 7: beacons of a permanent secret, admission, tag budget, cookies - */
+
+/* A recorded state-1 beacon of a label, played again in a later window,
+ * no longer ends a run (13.2); a fresh state-1 beacon of the run still does.
+ * A code beacon says that its secret is used once. */
+static void test_beacon_replay(void)
+{
+    uint8_t lrec[WFAS3_LABEL_RECORD_LEN];
+    uint8_t code[WFAS3_CODE_LEN];
+    uint8_t shown[WFAS3_CODE_LEN];
+    uint8_t old[WFAS3_LEN_PAIR_BEACON];
+    uint8_t pin[WFAS3_PIN_LEN];
+    wfas3_addr anywhere = addr_of(2U);
+    wfas3_status st;
+
+    setup(121U);
+    (void)wfas3_label_create(&g_dev[0], lrec);
+    (void)wfas3_label_load(&g_dev[0], lrec);
+    (void)wfas3_label_code(&g_dev[0], code);
+    check((open_window(WFAS3_PAIR_LABEL, 0U, shown) == WFAS3_OK) && (g_out.dgram[6] == 0U) ? 1U : 0U,
+          "replay: a label beacon has flags 0");
+    (void)start_client(1U, WFAS3_PAIR_LABEL, code, 0U, WFAS3_NONE);
+    run(20000U);
+    check((g_w.w[1].paired == 1U) && (g_dev[0].win.used == 1U) ? 1U : 0U, "replay: first label pairing");
+    check((wfas3_beacon_build(&g_dev[0], &g_out) == WFAS3_OK) && (g_out.dgram[5] == 1U) ? 1U : 0U,
+          "replay: a state-1 beacon recorded");
+    memcpy(old, g_out.dgram, sizeof old);
+    run(130000U);
+    check((g_dev[0].win.open == 0U) ? 1U : 0U, "replay: that window closed");
+
+    /* Later: a new client waits for the beacon; the old one is played. */
+    (void)start_client(2U, WFAS3_PAIR_LABEL, code, 0U, WFAS3_NONE);
+    st = wfas3_receive(&g_dev[2], old, sizeof old, &anywhere, &g_out);
+    check((st != WFAS3_OK) && ((g_out.events & WFAS3_EV_PAIR_FAILED) == 0U) &&
+          (g_dev[2].pcli.state == WFAS3_PC_BEACON) ? 1U : 0U,
+          "replay: an old label beacon with state 1 is ignored while waiting");
+    g_w.cut[0] = 1U;
+    check((open_window(WFAS3_PAIR_LABEL, 0U, shown) == WFAS3_OK) ? 1U : 0U, "replay: a new window");
+    {
+        uint8_t fresh[WFAS3_LEN_PAIR_BEACON];
+        wfas3_addr srv = addr_of(0U);
+
+        memcpy(fresh, g_out.dgram, sizeof fresh);
+        add_entropy(2U);
+        (void)wfas3_receive(&g_dev[2], fresh, sizeof fresh, &srv, &g_out);
+    }
+    g_w.cut[0] = 0U;
+    check((g_dev[2].pcli.state == WFAS3_PC_S1) ? 1U : 0U, "replay: the client started its run");
+    st = wfas3_receive(&g_dev[2], old, sizeof old, &anywhere, &g_out);
+    check(((g_out.events & WFAS3_EV_PAIR_FAILED) == 0U) ? 1U : 0U,
+          "replay: an old label beacon with another nonce is ignored during the run");
+    run(20000U);
+    check((g_w.w[2].paired == 1U) && (g_w.w[2].race == 0U) ? 1U : 0U, "replay: the new client pairs");
+
+    /* The genuine case: a label client whose run is overtaken. */
+    run(130000U);
+    (void)open_window(WFAS3_PAIR_LABEL, 0U, shown);
+    g_w.cut[1] = 1U;
+    run(1100U);
+    (void)start_client(1U, WFAS3_PAIR_LABEL, code, 0U, WFAS3_NONE);
+    (void)wfas3_beacon_build(&g_dev[0], &g_out);
+    memcpy(old, g_out.dgram, sizeof old);
+    anywhere = addr_of(0U);
+    add_entropy(1U);
+    (void)wfas3_receive(&g_dev[1], old, sizeof old, &anywhere, &g_out);   /* its run starts */
+    check((g_dev[1].pcli.state == WFAS3_PC_S1) ? 1U : 0U, "replay: a label run starts");
+    g_dev[0].win.used = 1U;                     /* as if someone else completed */
+    (void)wfas3_beacon_build(&g_dev[0], &g_out);
+    st = wfas3_receive(&g_dev[1], g_out.dgram, WFAS3_LEN_PAIR_BEACON, &anywhere, &g_out);
+    check((st == WFAS3_OK) && ((g_out.events & WFAS3_EV_PAIR_FAILED) != 0U) &&
+          ((g_out.events & WFAS3_EV_PAIR_RACE) != 0U) && (g_out.status == WFAS3_PAIRF_USED) ? 1U : 0U,
+          "replay: state 1 with the nonce of the run ends it, with the warning");
+    g_w.cut[1] = 0U;
+
+    /* Code: flags 1; state 1 ends a client that is still waiting. */
+    setup(122U);
+    check((open_window(WFAS3_PAIR_CODE, 0U, code) == WFAS3_OK) && (g_out.dgram[6] == 1U) ? 1U : 0U,
+          "replay: a code beacon has flags 1");
+    g_dev[0].win.used = 1U;
+    (void)wfas3_beacon_build(&g_dev[0], &g_out);
+    memcpy(old, g_out.dgram, sizeof old);
+    (void)start_client(1U, WFAS3_PAIR_CODE, code, 0U, WFAS3_NONE);
+    anywhere = addr_of(0U);
+    st = wfas3_receive(&g_dev[1], old, sizeof old, &anywhere, &g_out);
+    check((st == WFAS3_OK) && (g_out.status == WFAS3_PAIRF_USED) &&
+          ((g_out.events & WFAS3_EV_PAIR_RACE) != 0U) ? 1U : 0U,
+          "replay: a used code window ends a waiting client");
+    old[6] = 2U;
+    (void)start_client(2U, WFAS3_PAIR_CODE, code, 0U, WFAS3_NONE);
+    check((wfas3_receive(&g_dev[2], old, sizeof old, &anywhere, &g_out) == WFAS3_E_DROP) &&
+          (g_dev[2].pcli.state == WFAS3_PC_BEACON) ? 1U : 0U, "replay: unknown flags are an error");
+    setup(123U);
+    check((open_window(WFAS3_PAIR_PIN, 1U, pin) == WFAS3_OK) && (g_out.dgram[6] == 0U) ? 1U : 0U,
+          "replay: a PIN beacon has flags 0");
+}
+
+static uint32_t g_spoof;
+
+/* A step 1 that passes the filter. pool == 0: from a new address each time,
+ * an address that does not answer, so without a token. pool > 0: from one of
+ * pool addresses at which the attacker does receive, so with a token. */
+static void bogus_step1(uint32_t pool)
+{
+    uint8_t d[WFAS3_LEN_INIT];
+    uint8_t sk[WFAS_TP_MLKEM_SK];
+    uint8_t r64[64];
+    uint8_t sid[8];
+    uint32_t n = (pool == 0U) ? g_spoof : (1000U + (g_spoof % pool));
+    wfas3_addr from;
+    wfas3_status st;
+
+    fill_rnd(d, sizeof d);
+    fill_rnd(sid, sizeof sid);
+    fill_rnd(r64, sizeof r64);
+    wfas3_pair_head(d, 1U, g_dev[0].win.mode, sid);
+    wfas_tp_mlkem768_keygen(&d[48], sk, r64);
+    memset(&d[WFAS3_PAIR_TOKEN], 0, 88U);
+    memset(&from, 0, sizeof from);
+    from.ip[10] = 0xFFU;
+    from.ip[11] = 0xFFU;
+    from.ip[12] = 172U;
+    from.ip[13] = 16U;
+    from.ip[14] = (uint8_t)(n >> 8);
+    from.ip[15] = (uint8_t)(n & 0xFFU);
+    from.port = 50000U;
+    g_spoof += 1U;
+    if (pool > 0U) {
+        (void)wfas3_pair_token(&d[WFAS3_PAIR_TOKEN], &g_dev[0].win, &from, sid);
+    }
+    (void)wfas3_mac(&d[1352], 16U, g_dev[0].win.k_f, d, 1352U);   /* public in PIN mode */
+    st = wfas3_receive(&g_dev[0], d, sizeof d, &from, &g_out);
+    if (st == WFAS3_E_ENTROPY) {
+        add_entropy(0U);
+        (void)wfas3_receive(&g_dev[0], d, sizeof d, &from, &g_out);
+    }
+}
+
+/* PIN mode: anyone on the link passes the filter. Step 1 from addresses that
+ * do not answer gets Retries only and takes no context; runs from a few
+ * addresses that do answer give way after 3 s to the real client, which has
+ * not been served yet (13.7). The client starts pre ticks into the attack. */
+static void test_pin_hold(uint32_t pool, uint32_t per_tick, uint32_t pre, uint64_t seed)
+{
+    uint8_t pin[WFAS3_PIN_LEN];
+    uint64_t t0;
+    uint32_t tick;
+    uint32_t k;
+
+    setup(seed);
+    g_spoof = 1000U;
+    (void)wfas3_beacons(&g_dev[1], 1U);
+    (void)open_window(WFAS3_PAIR_PIN, 1U, pin);
+    run(1500U);
+    for (tick = 0U; tick < pre; tick++) {
+        for (k = 0U; k < per_tick; k++) {
+            bogus_step1(pool);
+        }
+        run(10U);
+    }
+    (void)start_client(1U, WFAS3_PAIR_PIN, pin, 0U, WFAS3_NONE);
+    t0 = g_w.now;
+    for (tick = 0U; tick < 4000U; tick++) {
+        for (k = 0U; k < per_tick; k++) {
+            bogus_step1(pool);
+        }
+        run(10U);
+        if ((g_w.w[1].paired != 0U) || (g_w.w[1].failed != 0U)) {
+            tick = 4000U;
+        }
+    }
+    if (pool == 0U) {
+        check((g_w.w[1].paired == 1U) && (g_w.w[0].paired == 1U) && ((g_w.now - t0) <= 2000U) &&
+              (g_dev[0].win.failed == 0U) ? 1U : 0U,
+              "pin hold: step 1 from addresses that do not answer takes nothing");
+    } else {
+        check((g_w.w[1].paired == 1U) && (g_w.w[0].paired == 1U) && ((g_w.now - t0) <= 4500U) ? 1U : 0U,
+              "pin hold: runs from a few answering addresses give way to the client");
+    }
+}
+
+/* One paired device sends junk with a valid mac1 and bad tags, as fast as it
+ * likes (7.2). From its own address, its share of the tag computations is
+ * used up and the other pair connects even from an address it was never
+ * seen at; from many addresses the global cap is used up, and the other pair
+ * connects from the address it was last seen at. */
+static void test_tag_budget(uint32_t spoof)
+{
+    uint8_t code[WFAS3_CODE_LEN];
+    uint8_t d[WFAS3_LEN_COOKIE];
+    wfas3_addr fa = addr_of(1U);
+    uint32_t p1;
+    uint32_t p2;
+    uint32_t ps2;
+    uint32_t tick;
+    uint32_t i;
+    uint32_t s;
+
+    setup(131U + spoof);
+    (void)open_window(WFAS3_PAIR_CODE, 0U, code);
+    (void)start_client(1U, WFAS3_PAIR_CODE, code, 0U, WFAS3_NONE);
+    run(15000U);
+    run(125000U);
+    (void)open_window(WFAS3_PAIR_CODE, 0U, code);
+    (void)start_client(2U, WFAS3_PAIR_CODE, code, 0U, WFAS3_NONE);
+    run(15000U);
+    p1 = g_w.w[1].paired_pair;
+    p2 = g_w.w[2].paired_pair;
+    ps2 = g_w.w[0].paired_pair;
+    check((g_w.w[0].paired == 2U) && (p1 < WFAS3_MAX_PAIRS) && (p2 < WFAS3_MAX_PAIRS) &&
+          (ps2 < WFAS3_MAX_PAIRS) ? 1U : 0U, "tag budget: device 0 has two pairs");
+    if ((p1 >= WFAS3_MAX_PAIRS) || (p2 >= WFAS3_MAX_PAIRS) || (ps2 >= WFAS3_MAX_PAIRS)) {
+        return;
+    }
+    check(session_up(2U, p2, 0U), "tag budget: device 2 connects without attack");
+    for (s = 0U; s < WFAS3_MAX_SESSIONS; s++) {
+        if ((g_dev[2].sessions[s].state == WFAS3_SES_UP) &&
+            (wfas3_session_close(&g_dev[2], s, WFAS3_BYE_NORMAL, &g_out) == WFAS3_OK)) {
+            handle_out(2U);
+        }
+    }
+    run(6000U);
+    g_w.w[2].up = 0U;
+    g_w.w[0].up = 0U;
+    if (spoof == 0U) {
+        g_dev[0].pairs[ps2].seen_valid = 0U;            /* as after a restart: no fast path */
+    }
+    for (tick = 0U; tick < 1000U; tick++) {
+        if ((tick % 100U) == 0U) {
+            for (i = 0U; i < 2048U; i++) {
+                fill_rnd(d, sizeof d);
+                d[0] = WFAS3_MARKER;
+                d[1] = WFAS3_T_COOKIE_REQUEST;
+                d[2] = 0U;
+                d[3] = 0U;
+                (void)wfas3_mac1_out(&d[48], &g_dev[1].pairs[p1], d, 48U);
+                if (spoof == 1U) {
+                    fa.ip[13] = (uint8_t)(rnd32() & 0xFFU);
+                    fa.ip[14] = (uint8_t)(rnd32() & 0xFFU);
+                }
+                (void)wfas3_receive(&g_dev[0], d, sizeof d, &fa, &g_out);
+            }
+        }
+        if (tick == 300U) {
+            wfas3_addr to = addr_of(0U);
+            wfas3_config c = cfg_pcm();
+
+            if (wfas3_connect(&g_dev[2], p2, &to, &c, &g_out) == WFAS3_OK) {
+                handle_out(2U);
+            }
+        }
+        run(10U);
+    }
+    check((g_w.w[2].up >= 1U) && (g_w.w[0].up >= 1U) ? 1U : 0U,
+          (spoof == 1U) ? "tag budget: the pair connects from its address during a spoofed flood"
+                        : "tag budget: the pair connects, from anywhere, during a flood from one device");
+    check((g_dev[0].tag_count <= WFAS3_CAP_TAGS) ? 1U : 0U, "tag budget: the global cap holds");
+}
+
+/* A cookie is accepted for at most 60 s from the creation of its secret,
+ * with or without traffic (7.5, 15). */
+static void test_cookie_age(void)
+{
+    wfas3_device *dev = &g_dev[0];
+    uint8_t cookie[WFAS3_TAG_LEN];
+    uint8_t rid[16];
+    wfas3_addr a = addr_of(1U);
+    uint64_t t0;
+
+    setup(141U);
+    fill_rnd(rid, sizeof rid);
+    add_entropy(0U);
+    check((wfas3_cookie_rotate(dev) == WFAS3_OK) && (dev->cookie_live == 1U) ? 1U : 0U,
+          "cookie: a first secret");
+    t0 = g_w.now;
+    (void)wfas3_cookie_make(cookie, dev->cookie_secret[0], &a, rid, 7U);
+    g_w.now = t0 + 29000U;
+    (void)wfas3_set_time(dev, US(g_w.now));
+    check((wfas3_cookie_live(dev, 0U) == 1U) && (wfas3_cookie_rotate(dev) == WFAS3_OK) &&
+          (dev->cookie_live == 1U) ? 1U : 0U, "cookie: no rotation before 30 s");
+    g_w.now = t0 + 31000U;
+    (void)wfas3_set_time(dev, US(g_w.now));
+    check((wfas3_cookie_rotate(dev) == WFAS3_OK) && (dev->cookie_live == 3U) &&
+          (wfas3_ct_eq(dev->cookie_secret[1], dev->cookie_secret[0], 32U) == 0U) ? 1U : 0U,
+          "cookie: rotated, the previous secret kept");
+    g_w.now = t0 + 59000U;
+    (void)wfas3_set_time(dev, US(g_w.now));
+    check((wfas3_cookie_live(dev, 1U) == 1U) ? 1U : 0U, "cookie: the previous secret before 60 s");
+    g_w.now = t0 + 60000U;
+    (void)wfas3_set_time(dev, US(g_w.now));
+    check((wfas3_cookie_live(dev, 1U) == 0U) && (wfas3_cookie_live(dev, 0U) == 1U) ? 1U : 0U,
+          "cookie: refused at 60 s, without any traffic");
+    check((wfas3_poll(dev, &g_out) == WFAS3_OK) && (dev->cookie_live == 1U) &&
+          (wfas3_all_zero(dev->cookie_secret[1], 32U) == 1U) ? 1U : 0U, "cookie: erased at the next poll");
+    check((wfas3_next_deadline(dev) <= US(t0 + 31000U + 60000U)) ? 1U : 0U,
+          "cookie: the deadline covers the current secret");
+    g_w.now = t0 + 600000U;
+    (void)wfas3_set_time(dev, US(g_w.now));
+    (void)wfas3_poll(dev, &g_out);
+    check((dev->cookie_live == 0U) && (wfas3_all_zero(dev->cookie_secret[0], 32U) == 1U) ? 1U : 0U,
+          "cookie: no secret left after an idle while");
+}
+
+/* The question to the server's user names the client's address (13.4). */
+static void test_ask_addr(void)
+{
+    uint8_t code[WFAS3_CODE_LEN];
+    uint32_t d;
+    uint32_t got = 0U;
+    wfas3_addr want = addr_of(1U);
+
+    setup(151U);
+    g_w.w[0].answer = 0U;
+    (void)open_window(WFAS3_PAIR_CODE, 1U, code);
+    (void)start_client(1U, WFAS3_PAIR_CODE, code, 0U, WFAS3_NONE);
+    for (d = 0U; (d < 300U) && (got == 0U); d++) {
+        run(10U);
+        if (g_w.w[0].asks == 1U) {
+            got = 1U;
+        }
+    }
+    check((got == 1U) && (wfas3_addr_eq(&g_dev[0].pctx[0].addr, &want) == 1U) ? 1U : 0U,
+          "ask: the question was put");
+    check((g_w.w[0].ask_addr_ok == 1U) ? 1U : 0U, "ask: PAIR_ASK carries the client's address");
 }
 
 /* API: arguments and states. */
@@ -1143,6 +1573,17 @@ int main(void)
     test_admission();
     test_api();
     test_forged_step2();
+    test_key_race();
+    test_beacon_replay();
+    test_pin_hold(0U, 1U, 200U, 160U);
+    test_pin_hold(0U, 10U, 200U, 161U);
+    for (seed = 0U; seed < 6U; seed++) {
+        test_pin_hold(2U, 1U, 150U + (37U * (uint32_t)seed), 170U + seed);
+    }
+    test_tag_budget(0U);
+    test_tag_budget(1U);
+    test_cookie_age();
+    test_ask_addr();
     (void)printf("%u checks, %u failed\n", g_run, g_fail);
     return (g_fail == 0U) ? 0 : 1;
 }

@@ -111,6 +111,32 @@ object Changelog {
 
     val entries: List<ChangelogEntry> = listOf(
         ChangelogEntry(
+            version = "1.3.1",
+            date = Bilingual("November 2026", "Novembre 2026"),
+            headline = Bilingual(
+                "WFAS v3 security fixes (specification draft 7).",
+                "Correzioni di sicurezza di WFAS v3 (specifica draft 7)."
+            ),
+            items = listOf(
+                ChangelogItem(
+                    icon = Icons.Outlined.Shield,
+                    title = Bilingual("Safer pairing", "Abbinamento pi\u00f9 sicuro"),
+                    body = Bilingual(
+                        "Old pairing signals of a label played again no longer stop a pairing or raise a false alarm; floods of fake requests from addresses that do not answer no longer keep a PIN window busy; a reply with the wrong key no longer stops the real one; the request shows the address it comes from; names that look empty are cleaned. To pair with this computer as a server the other device needs the updated app; existing pairings keep working.",
+                        "I vecchi segnali di abbinamento di un'etichetta ritrasmessi non fermano pi\u00f9 un abbinamento n\u00e9 danno falsi allarmi; le raffiche di richieste false da indirizzi che non rispondono non bloccano pi\u00f9 una finestra PIN; una risposta con la chiave sbagliata non ferma pi\u00f9 quella vera; la richiesta mostra l'indirizzo da cui arriva; i nomi che sembrano vuoti vengono ripuliti. Per abbinarsi a questo computer come server l'altro dispositivo deve avere l'app aggiornata; gli abbinamenti esistenti continuano a funzionare."
+                    )
+                ),
+                ChangelogItem(
+                    icon = Icons.Outlined.Lock,
+                    title = Bilingual("Keys and records", "Chiavi e dati salvati"),
+                    body = Bilingual(
+                        "The v3 records now live in the local, non-roaming folder of this computer (moved there once) and are left out of Time Machine; on Windows only your account can open them. If the key or the device record is missing while pairings exist, nothing is overwritten and the app says so. A pairing made to listen no longer lets the server receive this computer's audio. Over IPv4 pairing is accepted only from the local network, and the multicast port takes only multicast audio. The code is no longer suggested on the command line, where it would stay in the shell history.",
+                        "I dati di v3 ora stanno nella cartella locale, non sincronizzata, di questo computer (spostati l\u00ec una volta) e sono esclusi da Time Machine; su Windows solo il tuo account pu\u00f2 aprirli. Se mancano la chiave o il record del dispositivo mentre esistono abbinamenti, non viene sovrascritto nulla e l'app lo dice. Un abbinamento fatto per ascoltare non permette pi\u00f9 al server di ricevere l'audio di questo computer. Su IPv4 l'abbinamento \u00e8 accettato solo dalla rete locale, e la porta multicast accetta solo audio multicast. Il codice non viene pi\u00f9 suggerito sulla riga di comando, dove resterebbe nella cronologia della shell."
+                    )
+                )
+            )
+        ),
+        ChangelogEntry(
             version = "1.3",
             date = Bilingual("November 2026", "Novembre 2026"),
             headline = Bilingual(

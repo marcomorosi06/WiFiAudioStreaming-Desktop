@@ -87,6 +87,7 @@ extern "C" {
 #define WFAS3_MAX_ATTEMPTS       4U
 #define WFAS3_MAX_FINDS          4U       /* searches running at a time (12)  */
 #define WFAS3_PAIR_CTX           2U       /* pairing clients served at a time (13.7) */
+#define WFAS3_PAIR_SRC           16U      /* step-1 source addresses remembered (13.7) */
 #define WFAS3_GROUP_SLOTS        16U      /* receivers of a multicast group (14) */
 #ifndef WFAS3_MCAST_HISTORY
 #define WFAS3_MCAST_HISTORY      64U      /* packets a source keeps for NACK (14.3):
@@ -171,8 +172,9 @@ typedef enum wfas3_status {
                                                is on; nothing in it is verified */
 #define WFAS3_EV_PAIR_ASK        0x200000U  /* server: ask the user whether to
                                                pair with out.name (clean it with
-                                               wfas3_name_clean), out.pflags; in
-                                               PIN mode show out.code too. "No"
+                                               wfas3_name_clean), out.pflags,
+                                               asking from out.addr; in PIN
+                                               mode show out.code too. "No"
                                                first; answer with
                                                wfas3_pair_answer(out.ask)     */
 #define WFAS3_EV_PAIR_CODE       0x400000U  /* client: show the 6-digit out.code;
@@ -339,8 +341,9 @@ typedef struct wfas3_out {
     wfas3_config config;     /* see SESSION_UP, REFUSED, STREAM_PARAMS        */
     uint32_t     stream_on;  /* with STREAM_PARAMS: the stream is on          */
     wfas3_addr   addr;       /* with FOUND: the address the peer answered from;
-                                with PAIRED: the peer's address; with
-                                GROUP_JOIN, GROUP_LEAVE: the group address  */
+                                with PAIRED, PAIR_ASK: the peer's address;
+                                with GROUP_JOIN, GROUP_LEAVE: the group
+                                address                                      */
     /* with WFAS3_EV_AUDIO */
     uint32_t     stream;     /* WFAS3_STREAM_*                                */
     uint32_t     epoch;
@@ -458,6 +461,8 @@ typedef struct wfas3_pair {
     uint8_t  k_probe_in[32];
     uint64_t unused_until_ms;   /* erased then without a session handshake (13.4) */
     uint64_t guest_seen_ms;     /* guest: the last time it had a session (13.6) */
+    uint64_t fast_win_ms;       /* tag checks for its last seen address (7.2) */
+    uint32_t fast_count;
 } wfas3_pair;
 
 typedef struct wfas3_search {   /* a search for the peer of a pair (12)       */
@@ -704,14 +709,15 @@ typedef struct wfas3_pwin {     /* the pairing window of a server (13.2)      */
     uint8_t    nonce[16];
     uint8_t    k_f[32];           /* filter key                                 */
     uint8_t    k_b[32];           /* beacon tag key, mode 1                     */
+    uint8_t    k_t[32];           /* Retry token key, random per window (13.7)  */
     uint8_t    name[32];
     uint64_t   s1_win_ms;         /* step-1 admission (13.7)                    */
     uint32_t   s1_count;
-    wfas3_addr src[8];
-    uint64_t   src_served_ms[8];
-    uint64_t   src_seen_ms[8];
-    uint32_t   src_waiting[8];
-    uint32_t   src_used[8];
+    wfas3_addr src[WFAS3_PAIR_SRC];
+    uint64_t   src_served_ms[WFAS3_PAIR_SRC];
+    uint64_t   src_seen_ms[WFAS3_PAIR_SRC];
+    uint32_t   src_waiting[WFAS3_PAIR_SRC];
+    uint32_t   src_used[WFAS3_PAIR_SRC];
 } wfas3_pwin;
 
 typedef struct wfas3_pctx {     /* a client served by this server (13.4)      */
@@ -728,7 +734,8 @@ typedef struct wfas3_pctx {     /* a client served by this server (13.4)      */
     uint64_t   next_tx_ms;
     wfas3_addr addr;
     uint8_t    sid[8];
-    uint8_t    rx_hash[32];       /* the last step received, to know its copies */
+    uint8_t    rx_hash[32];       /* the last step received, to know its copies;
+                                     step 1: bytes 0..1264, without the token  */
     wfas3_sym  sym;
     uint8_t    h3[32];
     uint8_t    h[32];
@@ -759,6 +766,8 @@ typedef struct wfas3_pcli {     /* this device pairing as a client (13.4)     */
     uint32_t   confirmed;         /* PIN mode: the user said the codes match    */
     uint32_t   answered;          /* a valid step 2 arrived (13.2 warning)      */
     uint32_t   bad2;              /* a step 2 did not open                      */
+    uint32_t   key_bad;           /* a step 2 opened with another pairing key   */
+    uint32_t   retried;           /* a Retry was answered at once (13.7)        */
     uint32_t   guest;
     uint32_t   peer_perms;
     uint32_t   code;
@@ -808,6 +817,7 @@ typedef struct wfas3_device {
     uint64_t      ectr_limit;
     uint64_t      ectr_high;
     uint64_t      cookie_next_ms;
+    uint64_t      cookie_born_ms[2];
     uint64_t      tag_win_ms;
     uint64_t      stale_win_ms;
     uint64_t      hs_win_ms;
@@ -819,12 +829,16 @@ typedef struct wfas3_device {
     uint32_t      hs_count;
     uint32_t      probe_count;
     uint32_t      pstale_count;
-    uint32_t      cookie_ready;
+    uint32_t      cookie_live;    /* bit i: cookie_secret[i] is valid          */
     uint32_t      poll_next;
     uint8_t       entry_key[32];
     uint8_t       entry_hash[8];
     uint8_t       k_mac1[32];
     uint8_t       cookie_secret[2][32];
+    uint8_t       tag_src_ip[16][16];  /* tag checks per source address (7.2) */
+    uint64_t      tag_src_win_ms[16];
+    uint32_t      tag_src_count[16];
+    uint32_t      tag_src_used[16];
     uint8_t       suggest[16];
     wfas3_policy  policy;
     wfas3_pair    pairs[WFAS3_MAX_PAIRS];

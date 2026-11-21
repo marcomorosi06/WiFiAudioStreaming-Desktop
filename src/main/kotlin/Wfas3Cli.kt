@@ -165,7 +165,7 @@ object Wfas3Cli {
         println()
         if (pairs.isEmpty()) {
             println("  " + dim("To pair: on the server run 'wfas --server' and press p, or use the app;"))
-            println("  " + dim("then here: wfas v3 pair <code>"))
+            println("  " + dim("then here: wfas v3 pair   (it asks for the code, which then stays out of the shell history)"))
             println()
         }
         return ExitCode.OK
@@ -317,7 +317,7 @@ object Wfas3Cli {
             println("  " + bold("Pairing code") + dim("  valid for ${WINDOW_SECONDS}s, for one device"))
             println("        " + bold(w.text))
             println()
-            println("  " + dim("Scan the QR code with the app, or on another computer run: wfas v3 pair <code>"))
+            println("  " + dim("Scan the QR code with the app, or on another computer run: wfas v3 pair   (it asks for the code)"))
             println("  " + dim("Keep the code to yourself: whoever has it can pair while the window is open."))
         }
         if (!ask) println("  " + dim("The code is enough to pair: no confirmation is asked here."))
@@ -373,7 +373,7 @@ object Wfas3Cli {
             return
         }
         println()
-        val who = bold(a.name.ifBlank { "a device" })
+        val who = bold(a.name.ifBlank { "a device" }) + (if (a.from.isNotBlank()) dim(" at ${a.from}") else "")
         val yes = if (a.pin) {
             println("  Pairing request from $who.")
             println("  It shows a code: check that it is " + bold(sasGroups(a.code)) + ".")
@@ -497,7 +497,7 @@ object Wfas3Cli {
             else readSecret("  Code shown on the server: ")
         })?.trim().orEmpty()
         if (code.isEmpty()) {
-            val m = "No code given. Usage: wfas v3 pair <code>   (or 'wfas v3 pair --pin')"
+            val m = "No code given. Usage: wfas v3 pair   (asks for the code), or 'wfas v3 pair --pin'"
             if (args.json) json("status" to "error", "message" to m) else note(yellow("i") + " " + m)
             return false
         }
@@ -506,6 +506,11 @@ object Wfas3Cli {
                 "a code is valid for two minutes."
             if (args.json) json("status" to "error", "message" to m) else note(yellow("i") + " " + m)
             return false
+        }
+        if (given != null && !args.json && ConsoleInput.hasTty) {
+            // A code on the command line is in the shell history and, while
+            // this runs, in the process list of every user of this computer.
+            println("  " + dim("Next time run 'wfas v3 pair' without the code: it is asked here and stays out of the shell history."))
         }
         say("  Pairing...", args)
         return Wfas3Desktop.pairWithCode(app, code, guest = false, mic = args.mic)
@@ -533,13 +538,16 @@ object Wfas3Cli {
         }
         val b: Wfas3Beacon = if (list.size == 1) list[0] else {
             println()
-            list.forEachIndexed { i, x -> println("    " + bold("${i + 1}.") + "  " + x.name.ifBlank { "?" }) }
+            list.forEachIndexed { i, x ->
+                println("    " + bold("${i + 1}.") + "  " + x.name.ifBlank { "?" } + "  " + dim(x.addr.hostText()) +
+                    (if (x.used) dim("  (window already used)") else ""))
+            }
             println("  " + dim("Only the names chosen by their owners are shown; check the name on the server screen."))
             print("  Which one? [1-${list.size}]: "); System.out.flush()
             val n = readLine()?.trim()?.toIntOrNull()
             list.getOrNull((n ?: 0) - 1) ?: run { Wfas3Desktop.stopPinSearch(); note("  Nothing chosen."); return false }
         }
-        println("  Server: " + bold(b.name.ifBlank { "?" }))
+        println("  Server: " + bold(b.name.ifBlank { "?" }) + "  " + dim(b.addr.hostText()))
         val pin = readSecret("  PIN shown on the server: ")?.filter { it.isDigit() }.orEmpty()
         if (pin.length != 8) {
             Wfas3Desktop.stopPinSearch()
@@ -644,7 +652,7 @@ object Wfas3Cli {
 
     private fun noPairsHelp(args: CliArgs) {
         val m = "This device has no WFAS v3 pairing yet. On the server press p in 'wfas --server' (or use the app), " +
-            "then run: wfas v3 pair <code>. A server that only has WFAS v2 is reached with --legacy-v2."
+            "then run: wfas v3 pair (it asks for the code). A server that only has WFAS v2 is reached with --legacy-v2."
         if (args.json) json("event" to "no_pairs", "message" to m) else note(yellow("i") + " " + m)
     }
 

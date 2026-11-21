@@ -44,7 +44,7 @@ object CliHelpModel {
         "wfas --client"        to "play audio from a server",
         "wfas --gui"           to "open the desktop app",
         "wfas --connect <ip>"  to "join a specific server",
-        "wfas v3 pair <code>"  to "pair with a WFAS v3 server",
+        "wfas v3 pair"         to "pair with a WFAS v3 server",
         "wfas rtp listen <src>" to "play someone else's RTP stream",
         "wfas snapcast listen"  to "join a Snapcast multiroom system",
         "wfas snapcast mixer"   to "play and control a Snapcast system"
@@ -1533,7 +1533,8 @@ object CliHelpModel {
                         syntax = "v3 pair [code] [--pin] [--mic]",
                         brief = "On a client: pair with the server that shows the code or the PIN.",
                         tokens = listOf("pair", "join"),
-                        detail = "Without a code it is asked on the terminal, without echo. With --pin " +
+                        detail = "Without a code it is asked on the terminal, without echo; a code typed " +
+                                "on the command line stays in the shell history. With --pin " +
                                 "it lists the servers with an open PIN window, asks for the PIN and " +
                                 "then for the comparison of the 6-digit codes. --mic asks the server " +
                                 "to accept this device's microphone."

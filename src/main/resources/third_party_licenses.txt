@@ -222,7 +222,7 @@ native/ of the WiFiAudioStreaming jar) is built from the folder
 src/main/native/wfas3 of the source repository. The build checks every file
 against MANIFEST.sha256 there. Compiled into it:
 
-  WFAS v3 reference core (draft 6) . MIT                licenses/wfas3/
+  WFAS v3 reference core (draft 7) . MIT                licenses/wfas3/
     Copyright (c) 2026 Marco Morosi. wfas.c, wfas_tp.c, wfas_tp_mlkem.c.
     Its NOTICE (licenses/wfas3/NOTICE) lists the components below and
     reproduces their licences in full.
