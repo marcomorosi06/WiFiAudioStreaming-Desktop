@@ -18,7 +18,7 @@ was copied from). Both are inside the app: Settings → *Open-source licenses*,
 
 | File | Origin | Terms |
 |---|---|---|
-| `src/main/resources/raw/connection_sound.wav`, `src/main/resources/raw/disconnection_sound.wav` | Generated with ElevenLabs, free plan | Attribution "elevenlabs.io" required; no commercial use. Remove or replace them before any commercial redistribution. |
+| `src/main/resources/raw/connection_sound.wav`, `src/main/resources/raw/disconnection_sound.wav` | Free sounds | No restriction: they can be used, changed and redistributed, also commercially, with no attribution required. |
 
 ## Credits for the app's own content
 
@@ -27,6 +27,9 @@ was copied from). Both are inside the app: Settings → *Open-source licenses*,
 - **WFAS v2 protocol**: the C reference implementation is published separately
   under the MIT License ([`wfas-protocol`](https://github.com/marcomorosi06/wfas-protocol),
   © 2026 Marco Morosi). It is not bundled in this app.
+- **WFAS v3 protocol**: the specification and the C reference core are in
+  [`src/main/native/wfas3/core`](src/main/native/wfas3/core), under the MIT
+  License (© 2026 Marco Morosi), and are compiled into the app (`libwfas3`).
 
 ## What the packages contain
 
@@ -38,6 +41,7 @@ was copied from). Both are inside the app: Settings → *Open-source licenses*,
 | JavaCPP, JavaCV, JavaCPP Presets 1.5.10 (Java bindings only for the presets other than FFmpeg) | Apache-2.0 or GPL-2.0 with Classpath Exception |
 | Skiko 0.8.18 with Skia m126 and HarfBuzz, FreeType, ICU 74, libjpeg-turbo, libpng, libwebp, Expat, zlib, Wuffs, piex, Adobe DNG SDK | Apache-2.0, BSD-3-Clause, MIT, FreeType License, Unicode License v3, IJG, libpng-2.0, zlib, DNG SDK License |
 | Kotlin, kotlinx (coroutines, datetime, io, serialization, atomicfu), Compose Multiplatform and the AndroidX libraries it uses, Ktor, ZXing, JNA (with libffi), dorkbox, Javassist, Java UUID Generator, JetBrains annotations | Apache-2.0 (JNA and Javassist used under Apache-2.0; libffi MIT; dorkbox include MIT, BSD-3-Clause and CC0 code) |
+| `libwfas3` (WFAS v3): the WFAS v3 reference core, HACL* (hacl-packages) with the KaRaMeL headers, libcrux ML-KEM-768, fiat-crypto (Curve25519 field arithmetic), libopus 1.5.2; source in [`src/main/native/wfas3`](src/main/native/wfas3), each file pinned by SHA-256 | MIT (WFAS v3 core, HACL*, libcrux, fiat-crypto used under MIT), Apache-2.0 (KaRaMeL headers), BSD-3-Clause (libopus, with royalty-free patent licences); on Windows also the GCC runtime (libgcc, libssp; GCC Runtime Library Exception) and the mingw-w64 runtime (ZPL-2.1, public domain), statically linked |
 | Bouncy Castle 1.86 (`bcprov`) | Bouncy Castle Licence (MIT) |
 | SLF4J 2.0.16 / 2.0.9 | MIT |
 | Java runtime: Eclipse Temurin 17.0.20+8 | GPL-2.0 with Classpath Exception (notices in the runtime's `legal` folder) |

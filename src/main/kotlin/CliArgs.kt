@@ -144,6 +144,12 @@ data class CliArgs(
     val reveal:          Boolean         = false,
     val firewallCmd:     FirewallCommand? = null,
     val pairCmd:         PairCommand?    = null,
+    val v3Cmd:           V3Command?      = null,
+    val v3Pin:           Boolean         = false,
+    val v3Guest:         Boolean         = false,
+    val v3NoAsk:         Boolean         = false,
+    val v3Yes:           Boolean         = false,
+    val legacyV2:        Boolean         = false,
     val qr:              Boolean         = false,
     val noQr:            Boolean         = false,
     val qrPlain:         Boolean         = false,
@@ -282,6 +288,12 @@ data class CliArgs(
             var configCmd: ConfigCommand?   = null
             var firewallCmd: FirewallCommand? = null
             var pairCmd: PairCommand?       = null
+            var v3Cmd: V3Command? = null
+            var v3Pin = false
+            var v3Guest = false
+            var v3NoAsk = false
+            var v3Yes = false
+            var legacyV2 = false
             var qr              = false
             var noQr            = false
             var qrPlain         = false
@@ -438,6 +450,55 @@ data class CliArgs(
                         }
                         if (pairCmd is PairCommand.Connect) runMode = RunMode.CLI_CLIENT
                     }
+
+                    "v3", "wfas3" -> {
+                        modeExplicit = true
+                        val sub = args.getOrNull(i + 1)?.takeIf { !it.startsWith("--") }?.lowercase()
+                        v3Cmd = when (sub) {
+                            null, "status", "show", "info", "pairs", "list", "ls" -> {
+                                if (sub != null) i++
+                                V3Command.Status
+                            }
+                            "pair", "join" -> {
+                                i++
+                                val code = args.getOrNull(i + 1)?.takeIf { !it.startsWith("--") }
+                                if (code != null) i++
+                                V3Command.Pair(code)
+                            }
+                            "invite", "window", "show-qr" -> { i++; V3Command.Invite }
+                            "remove", "forget", "rm", "delete" -> {
+                                val t = args.getOrNull(i + 2)?.takeIf { !it.startsWith("--") }
+                                    ?: parseError("'v3 remove' needs the number or the name of a pairing, as 'wfas v3 status' shows them")
+                                i += 2
+                                V3Command.Remove(t)
+                            }
+                            "reset", "erase" -> { i++; V3Command.Reset }
+                            "use", "protocol" -> {
+                                val v = args.getOrNull(i + 2)?.lowercase()
+                                    ?: parseError("'v3 use' needs v3 or v2")
+                                i += 2
+                                when (v) {
+                                    "v3", "3" -> V3Command.Use(Wfas3Settings.PROTOCOL_V3)
+                                    "v2", "2", "legacy" -> V3Command.Use(Wfas3Settings.PROTOCOL_V2)
+                                    else -> parseError("'v3 use' needs v3 or v2, got '$v'")
+                                }
+                            }
+                            "name", "rename" -> {
+                                val n = args.getOrNull(i + 2)?.takeIf { !it.startsWith("--") }
+                                i += if (n != null) 2 else 1
+                                V3Command.Name(n)
+                            }
+                            else -> parseError(
+                                "Unknown v3 subcommand '$sub'. Valid: status, pair [code], invite, " +
+                                        "remove <number|name>, reset, use v3|v2, name [new name]"
+                            )
+                        }
+                    }
+                    "--pin"       -> v3Pin = true
+                    "--guest"     -> v3Guest = true
+                    "--no-ask"    -> v3NoAsk = true
+                    "--yes"       -> v3Yes = true
+                    "--legacy-v2" -> legacyV2 = true
 
                     "devices", "list-devices" -> {
                         modeExplicit = true
@@ -937,6 +998,18 @@ data class CliArgs(
             val watchableSnap = snapCmd is SnapCommand.Discover || snapCmd is SnapCommand.Status ||
                     snapCmd is SnapCommand.Clients || snapCmd is SnapCommand.Groups ||
                     snapCmd is SnapCommand.Streams
+            // The options of 'wfas v3 ...' mean nothing elsewhere: say so rather
+            // than drop them, as for --watch below.
+            if (v3Cmd == null && (v3Pin || v3Guest || v3Yes)) {
+                parseError("--pin, --guest and --yes belong to the 'wfas v3' commands, for example 'wfas v3 pair --pin'.")
+            }
+            if (legacyV2 && (runMode == RunMode.GUI || v3Cmd != null)) {
+                parseError(
+                    "--legacy-v2 applies to a command line server or client, for one run. In the app, " +
+                            "the protocol is chosen in the settings; to change it here, use 'wfas v3 use v2'."
+                )
+            }
+
             if (watch && runMode != RunMode.CLI_DISCOVER && pairCmd !is PairCommand.Invite && !watchableSnap) {
                 parseError(
                     "--watch keeps a live view open, and belongs to discovery, to a pairing " +
@@ -1090,6 +1163,12 @@ data class CliArgs(
                 reveal          = reveal,
                 firewallCmd     = firewallCmd,
                 pairCmd         = pairCmd,
+                v3Cmd           = v3Cmd,
+                v3Pin           = v3Pin,
+                v3Guest         = v3Guest,
+                v3NoAsk         = v3NoAsk,
+                v3Yes           = v3Yes,
+                legacyV2        = legacyV2,
                 qr              = qr,
                 noQr            = noQr,
                 qrPlain         = qrPlain,

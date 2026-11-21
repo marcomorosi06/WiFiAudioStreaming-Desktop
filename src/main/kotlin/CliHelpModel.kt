@@ -44,6 +44,7 @@ object CliHelpModel {
         "wfas --client"        to "play audio from a server",
         "wfas --gui"           to "open the desktop app",
         "wfas --connect <ip>"  to "join a specific server",
+        "wfas v3 pair <code>"  to "pair with a WFAS v3 server",
         "wfas rtp listen <src>" to "play someone else's RTP stream",
         "wfas snapcast listen"  to "join a Snapcast multiroom system",
         "wfas snapcast mixer"   to "play and control a Snapcast system"
@@ -56,6 +57,7 @@ object CliHelpModel {
         "wfas control <command>",
         "wfas config <command>",
         "wfas devices [--json]",
+        "wfas v3 <command>",
         "wfas pair <command>",
         "wfas firewall <command>",
         "wfas --help [<topic> | all]"
@@ -652,7 +654,10 @@ object CliHelpModel {
         title = "Security & pairing",
         tagline = "encryption, keys, QR invites",
         aliases = listOf("auth", "encrypt", "qr", "pair", "crypto"),
-        intro = "Everything in this section applies to the native WFAS protocol only. RTP, HTTP, " +
+        intro = "WFAS v3, the default protocol, needs none of the options below: it pairs devices " +
+                "once and always encrypts (see 'wfas --help v3'). These options configure WFAS v2, the " +
+                "legacy protocol, used with --legacy-v2 or after 'wfas v3 use v2'.\n\n" +
+                "Everything in this section applies to the native WFAS protocol only. RTP, HTTP, " +
                 "DLNA and Snapcast are standard protocols: their clients are never authenticated " +
                 "and their audio always goes out in the clear, so enabling them alongside " +
                 "--encrypt exposes the very audio you are encrypting.",
@@ -916,8 +921,9 @@ object CliHelpModel {
                         syntax = "firewall allow [ports]",
                         brief = "Allow inbound UDP.",
                         tokens = listOf("firewall", "fw", "allow"),
-                        detail = "With no ports, opens the configured streaming, discovery (9091) " +
-                                "and mic ports. Or pass a list, as in " +
+                        detail = "With no ports, opens what the active protocol needs: WFAS v3 " +
+                                "uses UDP 14114 and 14115; WFAS v2 (legacy) the streaming, " +
+                                "discovery (9091) and mic ports. Or pass a list, as in " +
                                 "'wfas firewall allow 9090,9091'."
                     ),
                     HelpEntry(
@@ -1017,7 +1023,9 @@ object CliHelpModel {
                         tokens = listOf("--debug"),
                         detail = "Audio packet table plus, with --mic, the microphone send/receive " +
                                 "table. Also lists the network interfaces by name and display name, " +
-                                "which is what --usb-iface expects."
+                                "which is what --usb-iface expects. When the window opens instead, it " +
+                                "prints the WFAS v3 trace on the terminal (events, sessions, counters; " +
+                                "never keys, codes or audio); the variable WFAS3_TRACE=1 does the same."
                     ),
                     HelpEntry(
                         syntax = "--json",
@@ -1488,8 +1496,127 @@ object CliHelpModel {
         seeAlso = listOf("start")
     )
 
+    private val V3 = HelpTopic(
+        key = "v3",
+        title = "WFAS v3",
+        tagline = "pairing, paired servers, legacy v2",
+        aliases = listOf("wfas3", "pairing", "legacy"),
+        intro = "WFAS v3 is the default protocol. Devices pair once, with a code or a PIN, and from " +
+                "then on only paired devices can connect; the audio is always encrypted. A v3 server " +
+                "does not announce itself on the network, and its port opens only while it is in use. " +
+                "The keys stay on this device, in the system credential store when there is one.\n\n" +
+                "WFAS v3 is still marked experimental in its specification until an independent " +
+                "review is done. WFAS v2, the legacy protocol, stays available for devices that do " +
+                "not have v3 yet; only one of the two is on at a time.",
+        blocks = listOf(
+            HelpBlock(
+                heading = "Pairing  (wfas v3 <command>)",
+                entries = listOf(
+                    HelpEntry(
+                        syntax = "v3 status",
+                        brief = "Show the protocol in use, this device's name and its pairings. Aliases: pairs, list.",
+                        tokens = listOf("v3", "wfas3", "status", "pairs")
+                    ),
+                    HelpEntry(
+                        syntax = "v3 invite [--pin] [--no-ask] [--mic]",
+                        brief = "On a server: open a pairing window for one device, for two minutes.",
+                        tokens = listOf("invite"),
+                        detail = "Prints a pairing code and its QR code, or with --pin an 8-digit PIN. " +
+                                "With a code, this terminal asks before pairing unless --no-ask is given " +
+                                "or the app setting says otherwise; with no terminal the code alone is " +
+                                "enough. With a PIN both devices then show the same 6-digit code, and " +
+                                "you confirm here that they match. --mic allows the new device to send " +
+                                "its microphone. While 'wfas --server' runs, press p (code) or n (PIN) " +
+                                "there instead."
+                    ),
+                    HelpEntry(
+                        syntax = "v3 pair [code] [--pin] [--mic]",
+                        brief = "On a client: pair with the server that shows the code or the PIN.",
+                        tokens = listOf("pair", "join"),
+                        detail = "Without a code it is asked on the terminal, without echo. With --pin " +
+                                "it lists the servers with an open PIN window, asks for the PIN and " +
+                                "then for the comparison of the 6-digit codes. --mic asks the server " +
+                                "to accept this device's microphone."
+                    ),
+                    HelpEntry(
+                        syntax = "v3 remove <number|name>",
+                        brief = "Remove one pairing; the other device is told when it next connects.",
+                        tokens = listOf("remove", "forget", "rm")
+                    ),
+                    HelpEntry(
+                        syntax = "v3 name [new name]",
+                        brief = "Show or set the name other devices see. Empty: the computer name.",
+                        tokens = listOf("name", "rename")
+                    ),
+                    HelpEntry(
+                        syntax = "v3 reset [--yes]",
+                        brief = "Erase every v3 key and pairing of this device.",
+                        tokens = listOf("reset", "erase")
+                    ),
+                    HelpEntry(
+                        syntax = "v3 use v3|v2 [--yes]",
+                        brief = "Choose the protocol of this device, for the app and the command line.",
+                        tokens = listOf("use"),
+                        detail = "Switching to v2 explains the difference and asks first; --yes " +
+                                "confirms without a terminal. v3 pairings stay saved while v2 is on."
+                    )
+                )
+            ),
+            HelpBlock(
+                heading = "Options",
+                entries = listOf(
+                    HelpEntry(
+                        syntax = "--pin",
+                        brief = "Pair with a PIN instead of a code.",
+                        tokens = listOf("--pin")
+                    ),
+                    HelpEntry(
+                        syntax = "--no-ask",
+                        brief = "With a code window: pair without asking on this terminal.",
+                        tokens = listOf("--no-ask")
+                    ),
+                    HelpEntry(
+                        syntax = "--guest",
+                        brief = "Not available on the command line: a guest pairing lives in memory only.",
+                        tokens = listOf("--guest")
+                    ),
+                    HelpEntry(
+                        syntax = "--yes",
+                        brief = "Confirm 'v3 reset' and 'v3 use v2' without a prompt.",
+                        tokens = listOf("--yes")
+                    ),
+                    HelpEntry(
+                        syntax = "--legacy-v2",
+                        brief = "Run this server or client with WFAS v2, without changing the setting.",
+                        tokens = listOf("--legacy-v2"),
+                        detail = "For a device that does not have WFAS v3 yet. The v2 options " +
+                                "(--auth-mode, --auth-key, --encrypt, --qr, --port) apply again."
+                    )
+                ),
+                outro = "Add --json to any v3 command for machine-readable output."
+            ),
+            HelpBlock(
+                heading = "Server and client",
+                intro = "'wfas --server' serves the paired devices, until it is stopped. Its console " +
+                        "adds p (pairing code), n (PIN), c (close the window) and l (connected " +
+                        "devices). 'wfas --client' plays a paired server: the last one used, the only " +
+                        "one, or the one named with --connect <name|number|address>. UDP 14114 is the " +
+                        "v3 port, and 14115 carries multicast."
+            )
+        ),
+        examples = listOf(
+            "wfas v3 invite"                  to "on the server: show a pairing code and its QR",
+            "wfas v3 pair"                    to "on the client: type that code",
+            "wfas v3 invite --pin"            to "pair with a PIN and a code comparison",
+            "wfas v3 status"                  to "list the pairings",
+            "wfas --client --connect Office"  to "play the paired server named Office",
+            "wfas --server --legacy-v2"       to "serve an old device with WFAS v2, for this run"
+        ),
+        seeAlso = listOf("security", "server", "client")
+    )
+
     val topics: List<HelpTopic> = listOf(
-        START, SERVER, CLIENT, PROTOCOLS, RECEIVE, NETWORK, SECURITY, CONFIG, RUNTIME, REFERENCE
+        START, SERVER, CLIENT, PROTOCOLS, RECEIVE, NETWORK, V3, SECURITY, CONFIG, RUNTIME, REFERENCE
     )
 
     fun byKey(raw: String): HelpTopic? {

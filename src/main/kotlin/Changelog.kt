@@ -42,10 +42,12 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Cast
+import androidx.compose.material.icons.outlined.AutoAwesome
 import androidx.compose.material.icons.outlined.Computer
 import androidx.compose.material.icons.outlined.Palette
 import androidx.compose.material.icons.outlined.QrCode2
 import androidx.compose.material.icons.outlined.Router
+import androidx.compose.material.icons.outlined.Visibility
 import androidx.compose.material.icons.outlined.SpeakerGroup
 import androidx.compose.material.icons.outlined.Usb
 import androidx.compose.material.icons.outlined.GraphicEq
@@ -108,6 +110,104 @@ data class ChangelogEntry(
 object Changelog {
 
     val entries: List<ChangelogEntry> = listOf(
+        ChangelogEntry(
+            version = "1.3",
+            date = Bilingual("November 2026", "Novembre 2026"),
+            headline = Bilingual(
+                "WFAS v3: a new protocol built around privacy, with pairing by QR code, code or PIN.",
+                "WFAS v3: un nuovo protocollo pensato per la privacy, con abbinamento tramite QR code, codice o PIN."
+            ),
+            items = listOf(
+                ChangelogItem(
+                    icon = Icons.Outlined.Shield,
+                    title = Bilingual("WFAS v3, the new default", "WFAS v3, il nuovo predefinito"),
+                    body = Bilingual(
+                        "Devices pair once, and from then on only paired devices can connect. The audio is always encrypted, with keys agreed through a hybrid handshake (X25519 and the post-quantum ML-KEM-768). Servers no longer announce themselves on the network, and the v3 port opens only while it is in use. Its specification still marks it experimental until an independent review.",
+                        "I dispositivi si abbinano una volta, e da lì in poi solo i dispositivi abbinati possono connettersi. L'audio è sempre cifrato, con chiavi concordate tramite un handshake ibrido (X25519 e il post-quantistico ML-KEM-768). I server non si annunciano più sulla rete, e la porta di v3 resta aperta solo mentre serve. La sua specifica lo indica ancora come sperimentale, in attesa di una revisione indipendente."
+                    )
+                ),
+                ChangelogItem(
+                    icon = Icons.Outlined.QrCode2,
+                    title = Bilingual("Pair with a QR code, a code or a PIN", "Abbinamento con QR code, codice o PIN"),
+                    body = Bilingual(
+                        "The server opens a pairing window for two minutes and one device. With a PIN, both screens then show the same 6-digit code to compare. You can pair a device as a guest, forgotten when it disconnects, and decide whether it may send its microphone.",
+                        "Il server apre una finestra di abbinamento per due minuti e per un dispositivo. Con il PIN, entrambi gli schermi mostrano poi lo stesso codice di 6 cifre da confrontare. Puoi abbinare un dispositivo come ospite, dimenticato quando si disconnette, e decidere se può inviare il suo microfono."
+                    )
+                ),
+                ChangelogItem(
+                    icon = Icons.Outlined.GraphicEq,
+                    title = Bilingual("Every server control", "Tutti i controlli del server"),
+                    body = Bilingual(
+                        "Uncompressed PCM or Opus at the bitrate you choose, latency, synchronised playback across clients (at the cost of a little more delay), multicast, the clients' microphone and whether new devices are accepted. Most changes apply while streaming.",
+                        "PCM non compresso oppure Opus al bitrate che scegli, latenza, riproduzione sincronizzata tra i client (al costo di un po' di ritardo in più), multicast, microfono dei client e accettazione di nuovi dispositivi. La maggior parte delle modifiche vale anche durante lo streaming."
+                    )
+                ),
+                ChangelogItem(
+                    icon = Icons.Outlined.AutoAwesome,
+                    title = Bilingual("Plug and play, with room to tune", "Pronto all'uso, con spazio per regolare"),
+                    body = Bilingual(
+                        "Paste or scan the server's code and the rest happens by itself: the pairing starts, and once done this PC connects and plays. With a PIN, the only server nearby is chosen for you and the eighth digit starts the pairing. On the server, four presets (Hi-Fi, Balanced, Low latency, All together) set the sound in one click; codec, bitrate, packets, latency, sync and who can connect are one fold away.",
+                        "Incolla o inquadra il codice del server e il resto avviene da solo: l'abbinamento parte e, appena concluso, questo PC si connette e riproduce. Con il PIN, l'unico server vicino viene scelto per te e l'ottava cifra avvia l'abbinamento. Sul server, quattro preset (Hi-Fi, Bilanciato, Bassa latenza, Tutti insieme) impostano il suono con un clic; codec, bitrate, pacchetti, latenza, sincronia e chi può connettersi sono a una piega di distanza."
+                    )
+                ),
+                ChangelogItem(
+                    icon = Icons.Outlined.Palette,
+                    title = Bilingual("A new look and a new icon", "Un aspetto e un'icona nuovi"),
+                    body = Bilingual(
+                        "A rail on the left with Stream, Devices and Settings, as in WiFi Screen Streaming; the paired devices on their own page; settings in two rounded panes; questions drawn inside the window rather than as popups, with the safe answer first. And a new headphones icon.",
+                        "Una barra a sinistra con Stream, Dispositivi e Impostazioni, come in WiFi Screen Streaming; i dispositivi abbinati su una pagina loro; le impostazioni in due pannelli arrotondati; le domande disegnate dentro la finestra invece che come popup, con la risposta sicura per prima. E una nuova icona con le cuffie."
+                    )
+                ),
+                ChangelogItem(
+                    icon = Icons.Outlined.Router,
+                    title = Bilingual("IPv6-only networks too", "Anche sulle reti solo IPv6"),
+                    body = Bilingual(
+                        "Where the network has no IPv4, WFAS v3 now works over IPv6: probes and pairing beacons go to the link's all-nodes address (ff02::1), multicast uses a link-scope group, and nothing ever leaves the local link. The v3 port only listens to devices on that same link, so nothing from the Internet reaches it even with a public IPv6 address. Networks with IPv4 work exactly as before.",
+                        "Dove la rete non ha IPv4, WFAS v3 ora funziona su IPv6: le richieste di ricerca e i segnali di abbinamento vanno all'indirizzo di tutti i nodi del collegamento (ff02::1), il multicast usa un gruppo limitato al collegamento, e nulla esce mai dalla rete locale. La porta di v3 ascolta solo i dispositivi di quello stesso collegamento, quindi da Internet non arriva nulla nemmeno con un indirizzo IPv6 pubblico. Le reti con IPv4 funzionano esattamente come prima."
+                    )
+                ),
+                ChangelogItem(
+                    icon = Icons.Outlined.Visibility,
+                    title = Bilingual("Send and Listen on the rail, a clearer client", "Invia e Ascolta nella barra, un client più chiaro"),
+                    body = Bilingual(
+                        "The role of this computer is chosen on the left rail, Send above Listen, and every card of the main screen has the new look. As a client, your v3 servers come first; the other ways in sit below, folded and labelled: connect by address (v3 first, v2 only if you say so), the USB cable (it works with v3 too: the cable is a network link) and the older WFAS v2 devices. On the server, unicast or multicast and the latency are chosen right next to the presets. With v3 that latency holds for everyone who listens; the one in the settings is for v2 and RTP. Changing it while playing no longer restarts the sound. The window opens in the mode you used last, Send or Listen. Every colour of the window follows the one chosen in the settings; the Material colours switch in Appearance gives each section a colour of its own.",
+                        "Il ruolo di questo computer si sceglie nella barra a sinistra, Invia sopra Ascolta, e ogni scheda della schermata principale ha il nuovo aspetto. Come client, i tuoi server v3 vengono per primi; gli altri modi stanno sotto, ripiegati e con un nome chiaro: collegarsi con l'indirizzo (prima v3, v2 solo se lo dici tu), il cavo USB (funziona anche con v3: il cavo è un collegamento di rete) e i vecchi dispositivi WFAS v2. Sul server, unicast o multicast e la latenza si scelgono subito accanto ai preset. Con la v3 quella latenza vale per tutti quelli che ascoltano; quella nelle impostazioni è per v2 e RTP. Cambiarla mentre suona non fa più ripartire l'audio. La finestra si apre nella modalità usata l'ultima volta, Invia o Ascolta. Ogni colore della finestra segue quello scelto nelle impostazioni; l'interruttore Colori Material in Aspetto dà a ogni sezione un colore suo."
+                    )
+                ),
+                ChangelogItem(
+                    icon = Icons.Outlined.History,
+                    title = Bilingual("WFAS v2 stays, as legacy", "WFAS v2 resta, come legacy"),
+                    body = Bilingual(
+                        "WFAS v2 is off by default and can be turned back on in the settings for devices that do not have v3 yet; only one of the two is on at a time. In the device list v2 servers carry a small badge, and the app tells you before connecting to one. With v3 on, the settings show only what v3 uses: the ones for v2 sit together under Older devices (WFAS v2).",
+                        "WFAS v2 è disattivato di default e si può riattivare nelle impostazioni per i dispositivi che non hanno ancora v3; è attivo uno solo dei due alla volta. Nell'elenco dei dispositivi i server v2 hanno un piccolo segnalino, e l'app te lo dice prima di connetterti a uno di loro. Con v3 attivo, le impostazioni mostrano solo ciò che v3 usa: quelle di v2 stanno insieme in Dispositivi vecchi (WFAS v2)."
+                    )
+                ),
+                ChangelogItem(
+                    icon = Icons.Outlined.Lock,
+                    title = Bilingual("Your keys stay with you", "Le tue chiavi restano tue"),
+                    body = Bilingual(
+                        "The v3 keys and pairings are kept only on this device, encrypted with a key held in the system credential store. They are never sent anywhere else, and you can erase them at any time.",
+                        "Le chiavi e gli abbinamenti di v3 restano solo su questo dispositivo, cifrati con una chiave custodita dall'archivio credenziali del sistema. Non vengono mai inviati altrove, e puoi cancellarli in qualsiasi momento."
+                    )
+                ),
+                ChangelogItem(
+                    icon = Icons.Outlined.SpeakerGroup,
+                    title = Bilingual("New connection sounds", "Nuovi suoni di connessione"),
+                    body = Bilingual(
+                        "New sounds for connecting and disconnecting. They are free, with no restriction on use.",
+                        "Nuovi suoni per la connessione e la disconnessione. Sono liberi, senza alcun vincolo d'uso."
+                    )
+                ),
+                ChangelogItem(
+                    icon = Icons.Outlined.Terminal,
+                    title = Bilingual("Command line", "Riga di comando"),
+                    body = Bilingual(
+                        "'wfas v3' pairs, lists and removes devices. 'wfas --server' and 'wfas --client' use WFAS v3, and '--legacy-v2' runs a single session with the old protocol.",
+                        "'wfas v3' abbina, elenca e rimuove i dispositivi. 'wfas --server' e 'wfas --client' usano WFAS v3, e '--legacy-v2' avvia una singola sessione con il vecchio protocollo."
+                    )
+                )
+            )
+        ),
         ChangelogEntry(
             version = "1.2.1",
             date = Bilingual("November 2026", "Novembre 2026"),

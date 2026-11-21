@@ -1,0 +1,73 @@
+# WFAS v3 third-party manifest. Checked by 'make manifest' before every build.
+# hacl/     https://github.com/cryspen/hacl-packages commit 05c3d8fb321ed65e3db3a6a8b853019e86fb40a2 (2024-09-30)
+#           generated from HACL* ae5d839c2e1fa95055b618cda60aeb1c486c720c, KaRaMeL a7be2a7c43eca637ceb57fe8f3ffd16fc6627ebd
+# libcrux/  https://github.com/openssh/openssh-portable tag V_10_2_P1 (d01efaa1c9ed84fd9011201dbc3c7cb0a82bcee3),
+#           file libcrux_mlkem768_sha3.h, extracted by mlkem768.sh from libcrux 84c5d87b3092c59294345aa269ceefe0eb97cc35
+# fiat/     https://github.com/mit-plv/fiat-crypto commit 3d2880ef2803faa9385589a81a835d5828eb3d38 (2026-11-11),
+#           file fiat-c/src/curve25519_32.c and the licence files of the repository root
+# Files are byte-identical to upstream. Never edit them; update only as a whole block.
+ad74c036a6afaedc418fed65f171c877c2f74a4c70938a03930aa11c98a20508  ./fiat/AUTHORS
+6c935d087a2992d0f092665400a2fa99c98db58d96fbe29368f8f48182bed9aa  ./fiat/COPYRIGHT
+9eacbcb81be660840c714a560a9d65ba07913db98dd4baf969f78dd499fdd60f  ./fiat/LICENSE-APACHE
+0c1240e29b4a2c528bcc3ccc38a98b1dba5e3e6b465da910208935f082e2ced6  ./fiat/LICENSE-BSD-1
+0034712d5e97a4f5b900a160a5c19d582b740d8e0638b4e44fd07e7b492dcd13  ./fiat/LICENSE-MIT
+403a8a4431fc85adc030ee0105b694360621cd20de2ae003accafbce661bade1  ./fiat/curve25519_32.c
+c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4  ./hacl/LICENSE-APACHE
+677b936639501a8ac8988780239f426f81a394254f6528f03938f26f89e06b74  ./hacl/LICENSE-MIT
+8abdf6d0130788df3a07af8a2ac11b580f95654ef5a6385f1b8f77de8e78c946  ./hacl/include/Hacl_AEAD_Chacha20Poly1305.h
+05e28e4afc214055e538bf3617cdf51d512090992153eafddfa4222bf4efa1ca  ./hacl/include/Hacl_Chacha20.h
+735e084772c262b28e4a8e8060bffbb494d091900216993a09cb6cc723ac828c  ./hacl/include/Hacl_Curve25519_51.h
+2fa6f4faf9f602c6d89cb5582470b1e00e6580136b51968275dc7b9b9c18b6ac  ./hacl/include/Hacl_HKDF.h
+18899e59f8c55204a35dd5679725fc53a01ab90202ca68062bca381b5881c090  ./hacl/include/Hacl_HMAC.h
+e2f18500c8e1572efdb2a9651369b220241690c82904089e9a33ae9af65cc874  ./hacl/include/Hacl_HMAC_DRBG.h
+b16479b50de26c0ada001c79597a0500682c83a181446fa8db65c8a50754245b  ./hacl/include/Hacl_Hash_Blake2b.h
+e6645ecd3c286fdc9534bde22c25a1bbdf6bb1135c6d401e28b32fecdf8e31d2  ./hacl/include/Hacl_Hash_Blake2s.h
+f993ee91b245227cca8658e203276e13c35f6dc0a0f88e5d7126e4958ef7dc3d  ./hacl/include/Hacl_Hash_SHA1.h
+0814df8d06e4267c616df96e62ed4fd422dd135026ab712911093d679494e6c8  ./hacl/include/Hacl_Hash_SHA2.h
+1d64a28f33937c1a476505726a192d2d6391ab3a6c81a549715fb67f9bc73574  ./hacl/include/Hacl_Krmllib.h
+83b2361f2faaf884de9e9e199ba39985b7f270c52dd49a55796b9635a6ca961c  ./hacl/include/Hacl_MAC_Poly1305.h
+95be4aef8c48ad9cfcaffe0a95afe122980cb5137187367bd4e048b2d04f0d63  ./hacl/include/Hacl_Streaming_Types.h
+398600ca6edd3f4d26ba4994484f26b9245f6fad9cd79818d89eb361eac25436  ./hacl/include/internal/Hacl_Bignum25519_51.h
+0a6593e95d34524f1729edc0757fa1f8ee8db538a94714782cd99066706d4574  ./hacl/include/internal/Hacl_Chacha20.h
+3c96788822651b819d0d33f7e2fcd3cb7c84a64257b21aa6d510f27ef9644b03  ./hacl/include/internal/Hacl_Curve25519_51.h
+d453aed90691b35d12485cf8aa08f54e23a627585a7319541ae52d296e5a97cc  ./hacl/include/internal/Hacl_HMAC.h
+0938dd6c5689e82d4d9e129335b78b22c4d6baaf8f28965878140d0eea035e7d  ./hacl/include/internal/Hacl_Hash_Blake2b.h
+2c61d4e9447b7dda7909d7f0f0779babe36a7000150a31edc52abb74281f96d2  ./hacl/include/internal/Hacl_Hash_Blake2s.h
+9473d8bc9506fe0053d7d98c225d4873011329863f1c4a8e93e43fc71bd1f314  ./hacl/include/internal/Hacl_Hash_SHA1.h
+c1f4e770ba40a03e20b26fd59813a02bdb7471747d783bf8a59bb911e338e3bb  ./hacl/include/internal/Hacl_Hash_SHA2.h
+d8354a9b75e2470085fa7e538493130e81fa23a804a6a69d34da8fdcc941c038  ./hacl/include/internal/Hacl_Impl_Blake2_Constants.h
+9dfd0a56e85be6e60090b8ee93cfa30ef93771a84ea2db1cb1e7d7e1391e8c0b  ./hacl/include/internal/Hacl_Krmllib.h
+77e4712ea5856ae1f67b8deb0388a52a36841ad6ecba7153be78112f0af87010  ./hacl/include/internal/Hacl_MAC_Poly1305.h
+0f8d744620cf5f6b8450da187484b418d24dec7d8cf72b757b7080e84cb3ae5e  ./hacl/include/lib_memzero0.h
+e31809ea1a2b3c9c7e14fde28b00623d1c1734b32a19fc0bc6dc205d2d2ad473  ./hacl/info.txt
+82776e2f221cb8c0474f003bd0a986e1ab978b8a1a5ad0798815e1f3c9e2b0d7  ./hacl/karamel/include/krml/c_endianness.h
+1e52220bf9a6c51ca6f1915cb92afedefe4b96b95a75ea67590a2aa1a1c60590  ./hacl/karamel/include/krml/fstar_int.h
+7f9afa0a778cef7cebbf5f6d2fa324eaba1392f4d65a0b0d9b95c546be14c661  ./hacl/karamel/include/krml/internal/builtin.h
+b13e9573dd23cd3e21af6ee37475904fd1b9d31c63059980727fb73bad6f9f53  ./hacl/karamel/include/krml/internal/callconv.h
+94f968c2313c36499cdf1712378b465b13f60e2ac6a59bc041a865658b2ced83  ./hacl/karamel/include/krml/internal/compat.h
+bda779c5b7b1281b636852d61a8ea0fa9f54866e6a06fef575b6ce03290672ca  ./hacl/karamel/include/krml/internal/debug.h
+58de767703e6401ba2a97b5a76d9ed950576b3dd09d9cc85873dbbb77e062ea0  ./hacl/karamel/include/krml/internal/target.h
+b21a6cbc542104cce3afa88d8131ebde1071d69c8a0cd7ab85db45f0cfc683b9  ./hacl/karamel/include/krml/internal/types.h
+6e1b236e46ba8f6df8b503a0ec4283b795db56950eb24623c96801a072f78716  ./hacl/karamel/include/krml/internal/wasmsupport.h
+3734c7942bec9a434e16df069fa45bdcb84b130f14417bc5f7bfe8546272d9f5  ./hacl/karamel/include/krml/lowstar_endianness.h
+a1a82183eea7a94275e43e7a80b5e09e8701d23f593241f462f7a100ce77447e  ./hacl/karamel/include/krmllib.h
+5318211cd69a743abe4b5cd1d1c578192a23e8af94bcb0a516a2409c79d75f39  ./hacl/karamel/krmllib/dist/minimal/FStar_UInt128.h
+f3bacc22f5cf8d49201d7bd943f24f23c555e937f94a34b9d7c69388de5efb60  ./hacl/karamel/krmllib/dist/minimal/FStar_UInt128_Verified.h
+a24ab0e9d1c40e19e6091598b9c91e4bcdd9b773ad00cccc09a4133cb5dc61c1  ./hacl/karamel/krmllib/dist/minimal/FStar_UInt_8_16_32_64.h
+9a998e8b4031c289f608c2ded94917fee4d7ae95e902da3e949efce84e18899a  ./hacl/karamel/krmllib/dist/minimal/LowStar_Endianness.h
+5e7bc9c13200f7cfbb2ae19d0ed95c146c9559e20fa8953ed118e5747c359781  ./hacl/karamel/krmllib/dist/minimal/fstar_uint128_gcc64.h
+8ddcb65b344278c9cd38282500dc5ed478a221e2e2d4ae98a0305282092baa3a  ./hacl/karamel/krmllib/dist/minimal/fstar_uint128_msvc.h
+fe57e1bc5ce3224d106e36cb8829b5399c63a68a70b0ccd0c91d82a4565c8869  ./hacl/karamel/krmllib/dist/minimal/fstar_uint128_struct_endianness.h
+e4cc1453264166316d65f0ed3ff8f9ec338e97b9cdce1574a586d904fefeccf1  ./hacl/src/Hacl_AEAD_Chacha20Poly1305.c
+c9ecf4df617745715eb0dce89c9b92c8e24e35368a01fa25225d9b8736b6cd1e  ./hacl/src/Hacl_Chacha20.c
+94054d0070fde9e891e0b55d51fb1722eb79a1e63c0f7a963e6a0fccea60d7fb  ./hacl/src/Hacl_Curve25519_51.c
+fcde5b78de8f51a1d2cc132b3f4d6b59682e1793440e4776917cbd154aa62557  ./hacl/src/Hacl_HKDF.c
+028e991ab4025e20b14da4859150af3f080d48043be4d9489c1500f8a41cf329  ./hacl/src/Hacl_HMAC.c
+845d03f2228fa05fb30bcc62a02be938b3a5f6ab9d32f8965c23e427f3bf8edb  ./hacl/src/Hacl_HMAC_DRBG.c
+83b2be067d7d48c31b32094ce38001bd05431d98ffecfb405c2b5b47d0fd31bf  ./hacl/src/Hacl_Hash_Blake2b.c
+44b21ce13b2d14c7e12a5b0205741f1d351ba0997df3f1b980eada976187c36c  ./hacl/src/Hacl_Hash_Blake2s.c
+5b29bd9951646861e0e19427be5d923a5bab7a4516824ccc068f696469195eec  ./hacl/src/Hacl_Hash_SHA1.c
+e1d16de5cb2986d6bbace62fc07d12d4b31e816b3d423a53c04909bd07d4c92c  ./hacl/src/Hacl_Hash_SHA2.c
+a154a51bc6c70e523741a9650f474c4d4031ee71a437f6b221faac0b3a4d6ac4  ./hacl/src/Hacl_MAC_Poly1305.c
+c4424a4851cd2d4f27633ca19faf5cb1135a680443727a8d1b134737f9a71e62  ./hacl/src/Lib_Memzero0.c
+c567fa102ccf59ddda657b2bb328b73ff98d0071fcea382b3a997ae430ed7bf9  ./libcrux/libcrux_mlkem768_sha3.h

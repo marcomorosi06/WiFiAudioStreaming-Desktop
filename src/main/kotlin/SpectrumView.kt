@@ -27,7 +27,6 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.GraphicEq
-import androidx.compose.material3.ElevatedCard
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Slider
@@ -57,7 +56,7 @@ fun SpectrumPanel(
     groove: Float,
     onGrooveChange: (Float) -> Unit
 ) {
-    ElevatedCard(modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(24.dp)) {
+    KitCard(modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(28.dp)) {
         BoxWithConstraints(modifier = Modifier.fillMaxWidth()) {
             val inlineGroove = maxWidth >= 700.dp
             Column(Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {

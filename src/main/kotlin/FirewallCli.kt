@@ -96,12 +96,15 @@ object FirewallCli {
 
     private fun defaultPorts(): List<Int> {
         val s = SettingsRepository.loadSettings()
+        // WFAS v3 uses only its own port and the group port; v2 its three.
+        val wfas = if (Wfas3Settings.isV3(s.app)) listOf(wfas3.W3.UDP_PORT, wfas3.W3.GROUP_PORT)
+        else listOf(
+            s.streamingPort.toIntOrNull() ?: 9090,
+            9091,
+            s.micPort.toIntOrNull() ?: 9092
+        )
         return (
-            listOf(
-                s.streamingPort.toIntOrNull() ?: 9090,
-                9091,
-                s.micPort.toIntOrNull() ?: 9092
-            ) + if (s.app.snapcastEnabled) listOf(MDNS_PORT) else emptyList()
+            wfas + if (s.app.snapcastEnabled) listOf(MDNS_PORT) else emptyList()
         ).filter { it in 1..65535 }.distinct()
     }
 }

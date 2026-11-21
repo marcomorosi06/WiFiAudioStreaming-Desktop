@@ -1,1 +1,3 @@
 src/main/resources/licenses/** -text
+# WFAS v3 native module: pinned by SHA-256 (MANIFEST.sha256), byte for byte.
+src/main/native/wfas3/** -text

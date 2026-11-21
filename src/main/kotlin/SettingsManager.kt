@@ -30,6 +30,9 @@ data class AppSettings(
     val hideWindowsPrivacyBanner: Boolean = false,
     val hideWindowsRoutingBanner: Boolean = false,
     val customThemeColor: Long? = null,
+    // Off: every colour of the window comes from the theme. On: the sections
+    // get their own Material colours (amber, green, pink, teal) on top of it.
+    val materialHues: Boolean = false,
     val rtpEnabled: Boolean = false,
     val httpEnabled: Boolean = false,
     val httpPort: String = "8080",
@@ -70,6 +73,8 @@ data class AppSettings(
     val muteRender: Boolean = true,
     val serverPersist: Boolean = false,
     val lastMulticastMode: Boolean = false,
+    // The screen the window was on, server or client: it opens there next time.
+    val lastModeServer: Boolean = true,
     val autoConnectClientEnabled: Boolean = false,
     /**
      * Voci di connessione automatica in forma testuale (vedi [AutoConnectTarget]).
@@ -121,7 +126,30 @@ data class AppSettings(
     val linuxTray: String = LinuxTray.MODE_AUTO,
     val wfasMode: String = WfasPolicy.MODE_OFF_ON_USB,
     val vizEnabled: Boolean = true,
-    val vizGroove: Int = 160
+    val vizGroove: Int = 160,
+    /**
+     * WFAS protocol generation: "v3" (the default) or "v2" (legacy). Exactly
+     * one is active; v2 stays off unless the user turns it on after the
+     * warning, and turning it on turns v3 off.
+     */
+    val wfasProtocol: String = Wfas3Settings.PROTOCOL_V3,
+    /** Name this device declares when pairing with v3; empty: the host name. */
+    val v3DeviceName: String = "",
+    /** v3 server: "pcm" (no compression) or "opus" (constant bitrate). */
+    val v3Codec: String = Wfas3Settings.CODEC_PCM,
+    val v3OpusKbps: Int = 256,
+    /** Opus frame in samples at 48 kHz: 120, 240, 480 or 960 (2.5 to 20 ms). */
+    val v3OpusFrameSamples: Int = 480,
+    /** Target latency the v3 server proposes, in milliseconds. */
+    val v3LatencyMs: Int = 60,
+    /** Synchronised playback of every client (bit1): more latency, same timing everywhere. */
+    val v3Sync: Boolean = false,
+    /** Whether the v3 server takes new sessions; off answers "busy". */
+    val v3AcceptNew: Boolean = true,
+    /** Ask the user before every pairing request (recommended). */
+    val v3PairAsk: Boolean = true,
+    /** Last v3 server the client used (pair slot), -1 if none. */
+    val v3LastPair: Int = -1
 )
 
 /** Modalita' di sicurezza applicabili al server avviato automaticamente. */
@@ -279,6 +307,7 @@ object SettingsRepository {
         runCatching { ConfigManager.save(settings) }
         UsbLink.configure(settings.app.usbModeEnabled, settings.app.usbLatencyMs, settings.app.usbInterface)
         WfasPolicy.configure(settings.app.wfasMode)
+        Wfas3Desktop.configure(settings.app)
     }
 
     fun loadSettings(): AllSettings {
@@ -292,6 +321,7 @@ object SettingsRepository {
         val settings = migrateEncryptionDefault(hydrateSecrets(stored))
         UsbLink.configure(settings.app.usbModeEnabled, settings.app.usbLatencyMs, settings.app.usbInterface)
         WfasPolicy.configure(settings.app.wfasMode)
+        Wfas3Desktop.configure(settings.app)
         return settings
     }
 

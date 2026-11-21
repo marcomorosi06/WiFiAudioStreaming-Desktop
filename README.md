@@ -69,14 +69,15 @@ https://private-user-images.githubusercontent.com/229497341/628825916-c36bb746-a
   The app lives in your system tray. Configure it to start minimized and close to tray so it runs silently in the background like AirPlay or Chromecast.
 
 - **Automatic & Manual Discovery**
-  Clients automatically find available servers on the network via multicast beacon, and the device list badges each server as Multicast/Unicast and whether it is encrypted or requires a key. If your router blocks it, you can manually enter the IP address.
+  With WFAS v3 a client finds the servers it is paired with by itself, with probes that only those servers recognise: nothing is announced on the network. WFAS v2 servers are still found via their multicast beacon and appear in the list with a small "v2" badge; the device list also shows each one as Multicast/Unicast and whether it is encrypted or requires a key. If your router blocks discovery, you can enter the IP address manually.
 
 - **Unicast & Multicast Support**
   - **Unicast** → direct streaming to a single device
   - **Multicast** → simultaneous transmission to multiple clients
 
 - **Multiple Streaming Protocols**
-  - **WFAS v2** (native protocol, lowest latency)
+  - **WFAS v3** (native protocol, the default: lowest latency, pairing by QR code, code or PIN, always encrypted)
+  - **WFAS v2** (the previous native protocol, kept as legacy and off by default)
   - **RTP** (compatible with any RTP-capable receiver)
   - **HTTP/AAC** (Safari, iOS)
   - **HTTP/Opus WebM** (Chrome, Firefox, any browser)
@@ -85,8 +86,11 @@ https://private-user-images.githubusercontent.com/229497341/628825916-c36bb746-a
 
   Peers running an incompatible protocol version are rejected immediately during the handshake with a clear error, instead of hanging silently.
 
-- **Security & Encryption**
-  Optionally gate who can connect (**Off**, **Ask** to approve each device, or **Key** for a pre-shared password checked via mutual HMAC-SHA256 challenge-response) and encrypt the audio end-to-end with **ChaCha20-Poly1305** (per-packet AEAD, anti-replay, keys derived via HKDF). Encryption is on by default in Key mode. Works for both unicast and multicast; no PKI required. See [`WFAS_PROTOCOL.md`](WFAS_PROTOCOL.md) §7–8.
+- **WFAS v3: pairing and privacy first**
+  Devices pair once, with a QR code, a code or a PIN (with a 6-digit code to compare), and from then on only paired devices can connect. Every session is encrypted with ChaCha20-Poly1305, with keys from a hybrid X25519 + ML-KEM-768 (post-quantum) handshake, and renewed during the session. Servers do not announce themselves and the v3 port opens only while it is used. Full server controls: uncompressed PCM or Opus at a chosen bitrate, latency, synchronised playback across clients, multicast, the clients' microphone, guests that are forgotten when they leave. The keys stay on the device, encrypted with a key held in the system credential store. The specification still marks WFAS v3 experimental until an independent review.
+
+- **Security & Encryption (WFAS v2, legacy)**
+  WFAS v2 can be turned back on in the settings for devices that do not have v3 yet (only one of the two is on at a time); the app explains the difference first, and tells you before connecting to a v2 server. With v2 you can optionally gate who can connect (**Off**, **Ask** to approve each device, or **Key** for a pre-shared password checked via mutual HMAC-SHA256 challenge-response) and encrypt the audio end-to-end with **ChaCha20-Poly1305** (per-packet AEAD, anti-replay, keys derived via HKDF). Encryption is on by default in Key mode. Works for both unicast and multicast; no PKI required. See [`WFAS_PROTOCOL.md`](WFAS_PROTOCOL.md) §7–8.
   The key, QR pairing and encryption protect **WFAS only**: RTP, HTTP, DLNA and Snapcast carry the same audio without encryption and without a key, to anyone on the network. When a key is set and one of them is enabled, the app asks before starting the server (and the CLI prints a warning).
 
 - **Firewall Assistant**
@@ -96,7 +100,7 @@ https://private-user-images.githubusercontent.com/229497341/628825916-c36bb746-a
   Checks GitHub for new releases on startup (on by default; you can turn it off on the welcome screen, in Settings, or with `wfas --auto-check-update off`), or on demand, with release notes and a direct download link shown right in the app. The check is a single request to `api.github.com` for the latest release tag; see [`PRIVACY_POLICY.md`](PRIVACY_POLICY.md).
 
 - **Command-Line Interface (`wfas`)**
-  A full headless daemon and control tool, installable to your system's PATH during first-run setup: start a server or client, run `wfas control volume 75` or `wfas control mute` against a running instance, manage configuration profiles with `wfas config`, and fix Windows Firewall with `wfas firewall allow`. Add `--json` to almost any command for scripting. Run `wfas --viz` for a real-time ASCII audio visualizer, with theming (`--viz rainbow`) and a `--groove` mode that highlights melody over raw bass. Run `wfas --debug` for a live-updating table of UDP packets and internal state. See `wfas --help` or the man page for the full command reference.
+  A full headless daemon and control tool, installable to your system's PATH during first-run setup: start a server or client, run `wfas control volume 75` or `wfas control mute` against a running instance, manage configuration profiles with `wfas config`, pair and manage WFAS v3 devices with `wfas v3` (`invite`, `pair`, `status`, `remove`), and fix Windows Firewall with `wfas firewall allow`. Add `--json` to almost any command for scripting. Run `wfas --viz` for a real-time ASCII audio visualizer, with theming (`--viz rainbow`) and a `--groove` mode that highlights melody over raw bass. Run `wfas --debug` for a live-updating table of UDP packets and internal state. See `wfas --help` or the man page for the full command reference.
 
 - **Detailed Audio Configuration**
   Customize sample rate, bit depth, channels, and buffer size.
@@ -221,6 +225,8 @@ Turn your smartphone into a **portable audio receiver or transmitter**.
 
 # 🔌 Open Protocol & Embedded Devices
 
+The WFAS v3 specification and its C reference core (no sockets, no threads, no allocation; MIT License) are in [`src/main/native/wfas3/core`](src/main/native/wfas3/core), next to the JNI glue the app uses.
+
 The WFAS v2 wire protocol is documented separately from the apps, with a tiny, dependency-free C99 reference implementation for embedded and firmware projects (ESP32, STM32, RP2040, Raspberry Pi, and more):
 
 👉 [wfas-protocol on GitHub](https://github.com/marcomorosi06/wfas-protocol)
@@ -298,9 +304,9 @@ This project is licensed under the **European Union Public Licence v1.2 (EUPL v1
 
 For the full legal text, see `LICENSE.md` or visit the [official EUPL website](https://joinup.ec.europa.eu/collection/eupl/eupl-text-eupl-12).
 
-The **app** is EUPL, but the **WFAS v2 wire protocol** is not locked up: a C reference implementation is published separately under the permissive **MIT License** ([`wfas-protocol`](https://github.com/marcomorosi06/wfas-protocol), © 2026 Marco Morosi), so anyone — including embedded/firmware projects — can implement WFAS v2 freely. The copyleft protects this application; the protocol stays open.
+The **app** is EUPL, but the protocols are not locked up: the **WFAS v3** reference core in `src/main/native/wfas3/core` is under the **MIT License** (© 2026 Marco Morosi), with its third-party components listed in its `NOTICE`. Likewise, for the **WFAS v2 wire protocol** a C reference implementation is published separately under the permissive **MIT License** ([`wfas-protocol`](https://github.com/marcomorosi06/wfas-protocol), © 2026 Marco Morosi), so anyone — including embedded/firmware projects — can implement WFAS v2 freely. The copyleft protects this application; the protocol stays open.
 
-**Not under the EUPL: the sounds.** `src/main/resources/raw/connection_sound.wav` and `src/main/resources/raw/disconnection_sound.wav` were generated with [ElevenLabs](https://elevenlabs.io) on its free plan, whose terms require the attribution "elevenlabs.io" and do not allow commercial use. If you redistribute this app, or a work based on it, for a commercial purpose, remove or replace them. Sound effects: elevenlabs.io
+**The sounds.** `src/main/resources/raw/connection_sound.wav` and `src/main/resources/raw/disconnection_sound.wav` are free sounds, with no restriction: they can be used, changed and redistributed, also commercially, with no attribution required.
 
 **Other credits.** The image of Tux in the app was generated with ChatGPT; Tux was originally drawn by Larry Ewing (lewing@isc.tamu.edu) with The GIMP.
 

@@ -206,7 +206,7 @@ fun SnapcastConnectCard(
     var expanded by remember { mutableStateOf(false) }
     val valid = host.isNotBlank() && streamPort in 1..65535 && controlPort in 1..65535
 
-    ElevatedCard(modifier = modifier.fillMaxWidth(), shape = RoundedCornerShape(24.dp)) {
+    KitCard(modifier = modifier.fillMaxWidth(), shape = RoundedCornerShape(28.dp)) {
         Column(Modifier.animateContentSize()) {
             Row(
                 modifier = Modifier
@@ -413,8 +413,8 @@ fun SnapcastSessionPanel(
     Column(modifier = modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(16.dp)) {
 
         // ── Intestazione ────────────────────────────────────────────────────
-        ElevatedCard(
-            shape = RoundedCornerShape(24.dp),
+        KitCard(
+            shape = RoundedCornerShape(28.dp),
             colors = CardDefaults.elevatedCardColors(
                 containerColor = MaterialTheme.colorScheme.secondaryContainer
             )
@@ -519,7 +519,7 @@ fun SnapcastSessionPanel(
         }
 
         // ── Mixer dell'impianto ─────────────────────────────────────────────
-        ElevatedCard(shape = RoundedCornerShape(24.dp)) {
+        KitCard(shape = RoundedCornerShape(28.dp)) {
             Column(Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
                 Row(
                     modifier = Modifier.fillMaxWidth(),

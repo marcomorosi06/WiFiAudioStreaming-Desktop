@@ -63,7 +63,9 @@ object UnprotectedProtocols {
         // caller passes the UI value through.
         val keyed = securityMode.equals(SecurityMode.UI_MODE_QR, ignoreCase = true) ||
             SecurityMode.requiresKey(securityMode)
-        return keyed && protocols.isNotEmpty()
+        // With WFAS v3 the native stream is always protected, so the other
+        // protocols are the unprotected part whatever the v2 mode says.
+        return (keyed || Wfas3Desktop.v3Enabled) && protocols.isNotEmpty()
     }
 
     /** One line for the terminal, where a dialog is not available. */
@@ -101,7 +103,10 @@ fun UnprotectedProtocolsDialog(
         },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                Text(stringResource("unprotected_protocols_body", protocols.joinToString(", ")))
+                Text(stringResource(
+                    if (Wfas3Desktop.v3Enabled) "w3_unprotected_body" else "unprotected_protocols_body",
+                    protocols.joinToString(", ")
+                ))
                 if (onWfasOnly == null) {
                     Text(
                         stringResource("unprotected_protocols_nothing_left"),

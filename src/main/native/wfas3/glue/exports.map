@@ -1,0 +1,5 @@
+/* Only the JNI entry point leaves the library. */
+{
+    global: JNI_OnLoad;
+    local: *;
+};

@@ -300,7 +300,7 @@ object IpcServer {
                     "family"   to NetAddr.preferredFamily.name.lowercase(),
                     "wfas"     to WfasPolicy.mode.lowercase(),
                     "auth"     to currentSecurity().first.lowercase(),
-                    "encrypted" to NetworkHandler_v1.sessionEncryptedLive.value
+                    "encrypted" to (NetworkHandler_v1.sessionEncryptedLive.value || Wfas3Desktop.sessionLive)
                 ) + external)
             }
             is ControlCommand.DeepLink -> {

@@ -91,7 +91,7 @@ fun RtpReceiveCard(
     val errors = remember(draft) { RtpSdp.validate(draft) }
     val canListen = outputReady && errors.isEmpty() && !status.active
 
-    ElevatedCard(modifier = modifier.fillMaxWidth(), shape = RoundedCornerShape(24.dp)) {
+    KitCard(modifier = modifier.fillMaxWidth(), shape = RoundedCornerShape(28.dp)) {
         Column(Modifier.animateContentSize()) {
 
             // ── Intestazione sempre visibile ─────────────────────────────────
@@ -583,9 +583,9 @@ fun RtpSessionPanel(
     val src = status.source ?: return
     val playing = status.state == RtpState.PLAYING
 
-    ElevatedCard(
+    KitCard(
         modifier = modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(24.dp),
+        shape = RoundedCornerShape(28.dp),
         colors = CardDefaults.elevatedCardColors(
             containerColor = MaterialTheme.colorScheme.tertiaryContainer
         )

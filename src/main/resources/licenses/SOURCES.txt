@@ -143,6 +143,21 @@ ffmpeg/COPYING.LGPLv3
 ffmpeg/LICENSE.md
     https://github.com/FFmpeg/FFmpeg  n6.1.1  commit e38092ef9395d7049f871ef4d5411eb410e283e0  LICENSE.md
     sha256 cb48bf09a11f5fb576cddb0431c8f5ed0a60157a9ec942adffc13907cbe083f2
+fiat-crypto/AUTHORS
+    https://github.com/mit-plv/fiat-crypto  commit 3d2880ef2803faa9385589a81a835d5828eb3d38  AUTHORS
+    sha256 ad74c036a6afaedc418fed65f171c877c2f74a4c70938a03930aa11c98a20508
+fiat-crypto/COPYRIGHT
+    https://github.com/mit-plv/fiat-crypto  commit 3d2880ef2803faa9385589a81a835d5828eb3d38  COPYRIGHT
+    sha256 6c935d087a2992d0f092665400a2fa99c98db58d96fbe29368f8f48182bed9aa
+fiat-crypto/LICENSE-APACHE
+    https://github.com/mit-plv/fiat-crypto  commit 3d2880ef2803faa9385589a81a835d5828eb3d38  LICENSE-APACHE
+    sha256 9eacbcb81be660840c714a560a9d65ba07913db98dd4baf969f78dd499fdd60f
+fiat-crypto/LICENSE-BSD-1
+    https://github.com/mit-plv/fiat-crypto  commit 3d2880ef2803faa9385589a81a835d5828eb3d38  LICENSE-BSD-1
+    sha256 0c1240e29b4a2c528bcc3ccc38a98b1dba5e3e6b465da910208935f082e2ced6
+fiat-crypto/LICENSE-MIT
+    https://github.com/mit-plv/fiat-crypto  commit 3d2880ef2803faa9385589a81a835d5828eb3d38  LICENSE-MIT
+    sha256 0034712d5e97a4f5b900a160a5c19d582b740d8e0638b4e44fd07e7b492dcd13
 freetype/FTL.TXT
     https://github.com/freetype/freetype  VER-2-13-2  commit 920c5502cc3ddda88f6c7d85ee834ac611bb11cc  docs/FTL.TXT
     identical to: https://github.com/freetype/freetype  commit a46424228f0998a72c715f32e18dca8a7a764c1f  docs/FTL.TXT
@@ -151,6 +166,12 @@ freetype/LICENSE.TXT
     https://github.com/freetype/freetype  VER-2-13-2  commit 920c5502cc3ddda88f6c7d85ee834ac611bb11cc  LICENSE.TXT
     identical to: https://github.com/freetype/freetype  commit a46424228f0998a72c715f32e18dca8a7a764c1f  LICENSE.TXT
     sha256 2e3bbb7d7c5c396368dd0853a790ec29ce5b8647163dde42a0493fb0d6556b2b
+hacl-star/LICENSE-APACHE
+    https://github.com/cryspen/hacl-packages  commit 05c3d8fb321ed65e3db3a6a8b853019e86fb40a2  LICENSE-APACHE
+    sha256 c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4
+hacl-star/LICENSE-MIT
+    https://github.com/cryspen/hacl-packages  commit 05c3d8fb321ed65e3db3a6a8b853019e86fb40a2  LICENSE-MIT
+    sha256 677b936639501a8ac8988780239f426f81a394254f6528f03938f26f89e06b74
 harfbuzz/COPYING
     https://github.com/harfbuzz/harfbuzz  commit b74a7ecc93e283d059df51ee4f46961a782bcdb8  COPYING
     sha256 ba8f810f2455c2f08e2d56bb49b72f37fcf68f1f4fade38977cfd7372050ad64
@@ -279,6 +300,12 @@ openh264/LICENSE
 openssl/LICENSE.txt
     https://github.com/openssl/openssl  openssl-3.2.0  commit cf2877791ce7508684109664f467c9e40987692f  LICENSE.txt
     sha256 7d5450cb2d142651b8afa315b5f238efc805dad827d91ba367d8516bc9d49e7a
+opus-1.5.2/AUTHORS
+    https://github.com/xiph/opus  v1.5.2  commit ddbe48383984d56acd9e1ab6a090c54ca6b735a6  AUTHORS
+    sha256 f9fd849e652219ce98e008303370b352d37663d0ffb27b8dc514ad93c9c7438b
+opus-1.5.2/COPYING
+    https://github.com/xiph/opus  v1.5.2  commit ddbe48383984d56acd9e1ab6a090c54ca6b735a6  COPYING
+    sha256 01e1167d54a096d123cf6dfbbeb19587278845c6481d2d66d545669846079551
 opus/COPYING
     https://github.com/xiph/opus  v1.3.1  commit e85ed7726db5d677c9c0677298ea0cb9c65bdd23  COPYING
     sha256 8338ce8d922bb4416ce3dd1e5680173332435e3f0755007ac7801ccd674fe682
@@ -324,6 +351,12 @@ vo-amrwbenc/NOTICE
 vulkan-headers/LICENSE.md
     https://github.com/KhronosGroup/Vulkan-Headers  v1.3.268  commit 07ff4233bc69e573ae0a6b4b48ad16451ac4e37f  LICENSE.md
     sha256 ac24e5ea920e4318e4d02c4086ae51f53cfb03feed06c18df1019e7ada1ec7bc
+wfas3/LICENSE
+    this repository  src/main/native/wfas3/core/LICENSE  (byte-identical to the WFAS v3 reference core (archive SHA-256 22782132be44ad39a201a19665a1b0218896a606779b4b5416aa6c2a7027911b))
+    sha256 0fd4ff5407c32d1ea3080a36e50c59ddec7dd9bd0d0d658d3964af8453420b35
+wfas3/NOTICE
+    this repository  src/main/native/wfas3/core/NOTICE  (byte-identical to the WFAS v3 reference core (archive SHA-256 22782132be44ad39a201a19665a1b0218896a606779b4b5416aa6c2a7027911b))
+    sha256 5af5045d30a30cb0a5fd1bc8ac1d29a99fa9eb8d20803008142b435f83a1a9b8
 winpthreads/COPYING
     https://github.com/mingw-w64/mingw-w64  master  commit dbbc8e99d9b85408f2c0a5565cb689c44eef0650  mingw-w64-libraries/winpthreads/COPYING
     sha256 63263614cdd29f2f93cba85e992f041b31f9fc7b4033692f31269489a8a1b177

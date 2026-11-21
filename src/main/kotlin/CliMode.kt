@@ -423,6 +423,7 @@ fun runCli(rawArgs: CliArgs) {
         override = args.usb != null || args.usbLatency != null || args.usbIface != null
     )
     WfasPolicy.configure(args.wfasMode ?: settings.app.wfasMode, override = args.wfasMode != null)
+    Wfas3Cli.applyRunOverride(args)
 
     val firstCliRun = !SettingsRepository.hasSeenCliWelcome()
     if (firstCliRun && args.controlCmd == null && !args.json) {
@@ -561,6 +562,7 @@ private fun handleServerConsoleCommand(
 ) {
     val line = raw.trim()
     if (line.isEmpty()) return
+    if (Wfas3Desktop.v3Enabled && Wfas3Cli.serverCommand(line, args)) return
     when {
         line.equals("q", ignoreCase = true) ||
                 line.equals("quit", ignoreCase = true) ||
@@ -584,9 +586,20 @@ private fun handleServerConsoleCommand(
 }
 
 private suspend fun runCliServer(rawArgs: CliArgs, settings: AllSettings) {
-    val args = if (rawArgs.qr) prepareQrKey(rawArgs) else rawArgs
-    assertPortFree(args.port,    "streaming", args)
-    assertPortFree(args.micPort, "mic",       args)
+    // WFAS v3 has its own port and pairing: the v2 key, invite and ports do not apply.
+    val v3 = Wfas3Desktop.v3Enabled
+    val args = if (rawArgs.qr && !v3) prepareQrKey(rawArgs) else rawArgs
+    if (v3) {
+        // The UDP port itself is checked when it opens; the engine says why if it cannot.
+        if (Wfas3Desktop.ensure(settings.app) == null) {
+            if (args.json) jsonLine("event" to "error", "message" to Wfas3Desktop.failureText())
+            else err(red("!") + " " + Wfas3Desktop.failureText())
+            kotlin.system.exitProcess(ExitCode.RESOURCE_ERROR)
+        }
+    } else {
+        assertPortFree(args.port,    "streaming", args)
+        assertPortFree(args.micPort, "mic",       args)
+    }
     if (args.rtp)  assertPortFree(args.rtpPort,  "RTP",  args)
     if (args.http) assertPortFree(args.httpPort,  "HTTP", args)
     if (args.snapcast) {
@@ -621,7 +634,8 @@ private suspend fun runCliServer(rawArgs: CliArgs, settings: AllSettings) {
             "event"     to "server_starting",
             "pid"       to ProcessHandle.current().pid(),
             "ip"        to serverIp,
-            "port"      to args.port,
+            "protocol"  to if (v3) "v3" else "v2",
+            "port"      to if (v3) wfas3.W3.UDP_PORT else args.port,
             "multicast" to args.multicast,
             "rtp"       to args.rtp,
             "http"      to args.http,
@@ -632,11 +646,15 @@ private suspend fun runCliServer(rawArgs: CliArgs, settings: AllSettings) {
             "mute_render"   to muteRender,
             "persist"       to persist,
         )
-    } else if (!args.viz) {
-        out("", args)
-        out(bold("  WiFi Audio Streaming") + "  - server mode", args)
-        out("  ${dim("IP")}      ${cyan(NetAddr.hostPort(serverIp, args.port))}", args)
-        out("  ${dim("Multicast")} ${if (args.multicast) green("enabled") else dim("disabled")}", args)
+    }
+    if (v3) Wfas3Cli.serverHeader(args, settings.app)
+    if (!args.json && !args.viz) {
+        if (!v3) {
+            out("", args)
+            out(bold("  WiFi Audio Streaming") + "  - server mode", args)
+            out("  ${dim("IP")}      ${cyan(NetAddr.hostPort(serverIp, args.port))}", args)
+            out("  ${dim("Multicast")} ${if (args.multicast) green("enabled") else dim("disabled")}", args)
+        }
         if (args.rtp)  out("  ${dim("RTP")}     port ${args.rtpPort}", args)
         if (args.http) out("  ${dim("HTTP")}    http://$serverIp:${args.httpPort}", args)
         if (args.snapcast) {
@@ -644,7 +662,8 @@ private suspend fun runCliServer(rawArgs: CliArgs, settings: AllSettings) {
         }
         if (args.mic)  out("  ${dim("Mic")}     ${args.micRouting.name.lowercase().replace('_', '-')}", args)
         if (!muteRender) out("  ${dim("Speakers")} ${green("kept on")} ${dim("(local playback is not muted)")}", args)
-        if (persist) out(
+        // A v3 server serves every paired device until it is stopped.
+        if (persist && !v3) out(
             "  ${dim("Persist")} " + if (args.multicast)
                 dim("implicit in multicast: there is no per-client session to end")
             else
@@ -655,14 +674,15 @@ private suspend fun runCliServer(rawArgs: CliArgs, settings: AllSettings) {
         out("", args)
         out(
             dim(
-                "  Commands: q=stop, v <0-100>=volume" +
+                if (v3) Wfas3Cli.serverCommandsHint(args) + (if (args.snapcast) ", s=snapcast clients" else "")
+                else "  Commands: q=stop, v <0-100>=volume" +
                         (if (args.snapcast) ", s=snapcast clients" else "") +
                         (if (args.qr) ", p=new invite, r=new key" else "")
             ),
             args
         )
         out("", args)
-    } else {
+    } else if (!args.json) {
         reportLink(args)
     }
 
@@ -696,8 +716,10 @@ private suspend fun runCliServer(rawArgs: CliArgs, settings: AllSettings) {
     // processo, perche' e' qui che vive la chiave. Solo con --qr: su un server
     // partito con una chiave scelta dall'utente, emettere un invito vorrebbe
     // dire sostituirgliela sotto i piedi.
-    if (args.qr) PairRuntime.issuer = PairRuntime.cliIssuer(args)
-    if (args.authMode == "ASK") {
+    if (args.qr && !v3) PairRuntime.issuer = PairRuntime.cliIssuer(args)
+    // WFAS v3: pairing requests are answered on this terminal (p and n open a window).
+    if (v3) Wfas3Cli.attachServer(args)
+    if (args.authMode == "ASK" && !v3) {
         if (!ConsoleInput.hasTty && viz == null && !args.json) {
             err(yellow("!") + " Security mode is ASK but this session has no terminal:")
             err(dim("    every client will be refused. Use --auth-mode key for unattended servers."))
@@ -771,10 +793,10 @@ private suspend fun runCliServer(rawArgs: CliArgs, settings: AllSettings) {
         }
     }
 
-    if (args.qr && viz != null && !args.json) {
+    if (args.qr && viz != null && !args.json && !v3) {
         err(yellow("!") + " --qr and --viz share the terminal: run 'wfas pair invite' elsewhere for the code.")
     }
-    if (args.qr && viz == null) {
+    if (args.qr && viz == null && !v3) {
         if (args.multicast) {
             var waited = 0
             while (NetworkHandler_v1.mcastSession.value == null && waited < 4000) {
@@ -834,6 +856,23 @@ private suspend fun runCliClient(args: CliArgs, settings: AllSettings) {
         err(dim("    Run 'wfas devices' to see what Java Sound reports on this system."))
         kotlin.system.exitProcess(ExitCode.RESOURCE_ERROR)
     }
+
+    // WFAS v3: the client plays one of its paired servers. A v2 invite link
+    // names a v2 server, so it keeps the v2 path below, said plainly.
+    if (Wfas3Desktop.v3Enabled && args.pairCmd !is PairCommand.Connect) {
+        val micIn = if (args.sendMic) resolveInputDevice(args.micInput) else null
+        if (args.volume != null) NetworkHandler_v1.setClientVolume(args.volume)
+        if (args.mute)           NetworkHandler_v1.isMicMuted.value = true
+        val v3viz = if (args.viz && !args.json)
+            AudioVisualizer(channels = settings.audio.channels, label = "client  WFAS v3", sampleRate = settings.audio.sampleRate.toInt(), theme = args.vizTheme, groove = args.groove)
+        else null
+        v3viz?.start()
+        val code = Wfas3Cli.runClient(args, settings, outputDevice, micIn, v3viz)
+        v3viz?.stop()
+        if (code != ExitCode.OK) kotlin.system.exitProcess(code)
+        return
+    }
+    if (Wfas3Desktop.v3Enabled) Wfas3Cli.legacyServerNote(args)
 
     val serverInfo = if (args.serverIp != null) {
         connectDirect(args, settings)
@@ -1123,12 +1162,16 @@ private fun emitDiscover(args: CliArgs, host: String, info: ServerInfo) {
             "auth"      to (info.capabilities?.securityMode ?: "OFF"),
             "encrypted" to (info.capabilities?.encrypted ?: false),
             "transport" to (if (info.viaUsb) "usb" else "wifi"),
-            "family"    to (if (NetAddr.isV6Literal(info.ip)) "ipv6" else "ipv4")
+            "family"    to (if (NetAddr.isV6Literal(info.ip)) "ipv6" else "ipv4"),
+            "protocol"  to "v2"
         )
     } else {
         val addr = NetAddr.hostPort(info.ip, info.port)
+        // Discovery finds the servers that announce themselves, which only WFAS v2
+        // does: with v3 active they are marked as legacy, as in the app.
+        val tag = if (Wfas3Desktop.v3Enabled) "  " + dim("[v2 legacy]") else ""
         out("  " + cyan(host.padEnd(18)) + " " + addr.padEnd(28) + " " +
-                mode.padEnd(6) + " " + discoverLink(info).padEnd(8) + " " + security, args)
+                mode.padEnd(6) + " " + discoverLink(info).padEnd(8) + " " + security + tag, args)
     }
 }
 
@@ -1136,6 +1179,9 @@ private suspend fun runCliDiscover(args: CliArgs) {
     if (!args.json && !args.quiet) {
         out(bold("  WiFi Audio Streaming") + "  - discover mode", args)
         out("  ${dim(if (args.watch) "Scanning... (Ctrl+C to stop)" else "Scanning network (5s)...")}", args)
+        if (Wfas3Desktop.v3Enabled) {
+            out("  ${dim("WFAS v3 servers do not announce themselves: 'wfas v3 status' lists the paired ones.")}", args)
+        }
         out("", args)
     }
 

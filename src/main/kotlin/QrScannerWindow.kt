@@ -67,7 +67,10 @@ private const val REJECT_COOLDOWN_MS = 2800L
 fun QrScannerWindow(
     onScanned: (String) -> Unit,
     onNoCamera: () -> Unit,
-    onClose: () -> Unit
+    onClose: () -> Unit,
+    // Which decoded texts end the scan. The default keeps the v2 pairing URI;
+    // WFAS v3 passes its own check of "WFAS3:" codes.
+    accept: (String) -> Boolean = { WfasPairingUri.parse(it) != null }
 ) {
     val running = remember { AtomicBoolean(true) }
     val latestFrame = remember { AtomicReference<BufferedImage?>(null) }
@@ -106,9 +109,8 @@ fun QrScannerWindow(
             latestFrame.getAndSet(null)?.let { preview = it.toComposeImageBitmap() }
 
             decoded.getAndSet(null)?.let { raw ->
-                val payload = WfasPairingUri.parse(raw)
                 when {
-                    payload != null -> {
+                    accept(raw) -> {
                         running.set(false)
                         onScanned(raw)
                         return@LaunchedEffect

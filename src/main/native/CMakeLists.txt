@@ -128,3 +128,14 @@ set_target_properties(audio_engine PROPERTIES
 )
 
 message(STATUS "audio_engine target configured for ${CMAKE_SYSTEM_NAME}")
+
+# -- WFAS v3 -------------------------------------------------------------------
+# libwfas3: the v3 reference core, its primitives and libopus, with the JNI
+# glue. Its pinned sources are checked against their manifests before they are
+# compiled (wfas3/CMakeLists.txt). The library lands next to audio_engine and
+# is copied into the resources by Gradle in the same step.
+set(WFAS3_JNI_CLASS "wfas3/Wfas3Native")
+set(WFAS3_OPUS_CLASS "wfas3/Wfas3Opus")
+set(WFAS3_JNI_INCLUDE ${JNI_INCLUDE_DIRS})
+set(WFAS3_OUTPUT_DIR "${CMAKE_BINARY_DIR}/output")
+add_subdirectory(wfas3)

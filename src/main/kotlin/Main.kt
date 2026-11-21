@@ -1230,6 +1230,9 @@ object NetworkHandler_v1 {
     fun stopAnnouncingPresence() {
         val job = broadcastingJob
         broadcastingJob = null
+        // A WFAS v3 server never announced itself: no v2 BYE either, which
+        // would put its name on the network.
+        if (job == null && Wfas3Desktop.v3Enabled) return
         scope.launch {
             job?.cancelAndJoin()
             // Invia un ultimo pacchetto di discovery con flag BYE
@@ -1253,7 +1256,10 @@ object NetworkHandler_v1 {
         micOutputMixerInfo: Mixer.Info?,
         micPort: Int,
         micMixInputInfo: Mixer.Info? = null,
-        onStatusUpdate: ((key: String, args: Array<out Any>) -> Unit)? = null
+        onStatusUpdate: ((key: String, args: Array<out Any>) -> Unit)? = null,
+        // WFAS v3: the microphone of the clients arrives decoded from their
+        // sessions, already in the server's format; no v2 socket is opened.
+        v3Feed: kotlinx.coroutines.channels.ReceiveChannel<ShortArray>? = null
     ) = launch {
         if (routingMode == MicRoutingMode.OFF) return@launch
 
@@ -1377,6 +1383,38 @@ object NetworkHandler_v1 {
                     }
                 }
                 MicRoutingMode.OFF -> return@launch
+            }
+
+            if (v3Feed != null) {
+                MicStats.begin(MicStats.Dir.RECEIVING, "WFAS v3 ($routingMode)")
+                val lineOut = ByteArray(65536)
+                for (pcm in v3Feed) {
+                    if (!isActive) break
+                    val n = pcm.size
+                    if (n <= 0) continue
+                    if (isMicMuted.value) java.util.Arrays.fill(pcm, 0.toShort())
+                    MicStats.addAudio(n * 2)
+                    when (routingMode) {
+                        MicRoutingMode.VIRTUAL_MIC -> when {
+                            nativeVirtualSinkActive -> activeVirtualSinkEngine?.writeToVirtualSink(pcm, n)
+                            wasapiSinkEngine != null -> wasapiSinkEngine!!.micSinkWrite(pcm, n)
+                            line != null -> {
+                                val bytes = minOf(n * 2, lineOut.size)
+                                java.nio.ByteBuffer.wrap(lineOut, 0, bytes)
+                                    .order(java.nio.ByteOrder.LITTLE_ENDIAN)
+                                    .asShortBuffer().put(pcm, 0, bytes / 2)
+                                line!!.write(lineOut, 0, bytes)
+                            }
+                            else -> { }
+                        }
+                        MicRoutingMode.MIX_INTO_STREAM -> {
+                            serverEngine?.pushMicPcm(pcm, n)
+                            softwareMicMixer.pushPcm(pcm, n)
+                        }
+                        MicRoutingMode.OFF -> break
+                    }
+                }
+                return@launch
             }
 
             var socket: DatagramSocket? = null
@@ -2690,6 +2728,92 @@ object NetworkHandler_v1 {
         }
     }
 
+    // -- WFAS v3 server ----------------------------------------------------------
+    // Capture as for v2, then the v3 engine frames, encrypts and sends to every
+    // paired client that asked for the stream. The sidecars (HTTP, RTP, DLNA,
+    // Snapcast) keep receiving the same PCM.
+    private fun startV3StreamLocked(
+        audioSettings: AudioSettings_V1,
+        isMulticast: Boolean,
+        micRoutingMode: MicRoutingMode,
+        useNativeEngine: Boolean,
+        muteRender: Boolean,
+        micFeed: kotlinx.coroutines.channels.Channel<ShortArray>?,
+        onAudioFrame: ((ShortArray) -> Unit)?,
+        onStatusUpdate: (key: String, args: Array<out Any>) -> Unit
+    ) {
+        val rate = audioSettings.sampleRate.toInt()
+        val ch = audioSettings.channels.coerceIn(1, 2)
+        var v3Settings: wfas3.Wfas3ServerSettings? = null
+        if (WfasPolicy.enabledAnywhere()) {
+            val app = Wfas3Desktop.appSettings
+            val st = Wfas3Settings.server(app, audioSettings, isMulticast, micFeed != null)
+            val started = Wfas3Desktop.startServer(app, st, rate, ch,
+                micFeed?.let { feed -> { pcm: ShortArray, n: Int -> feed.trySend(pcm.copyOf(n)); Unit } })
+            if (started != null) {
+                v3Settings = st
+                onStatusUpdate(Strings.get("w3_status_serving"), emptyArray())
+            } else {
+                onStatusUpdate(Wfas3Desktop.failureText(), emptyArray())
+            }
+        }
+        val sidecars = aacPcmQueue != null || opusPcmQueue != null || rtpPcmQueue != null ||
+                dlnaManager != null || snapcastManager != null
+        if (v3Settings == null && !sidecars) return
+
+        streamingJob = scope.launch(Dispatchers.IO) {
+            try {
+                if (useNativeEngine) {
+                    serverEngine = buildAndStartEngine(audioSettings, muteRender)
+                    if (serverEngine == null) { onStatusUpdate("error_virtual_driver_missing", emptyArray()); return@launch }
+                } else {
+                    serverGrabber = buildAndStartGrabber(audioSettings)
+                    if (serverGrabber == null) { onStatusUpdate("error_virtual_driver_missing", emptyArray()); return@launch }
+                }
+                val target = v3Settings?.captureRate ?: rate
+                val resampler = if (target != rate) wfas3.Wfas3Resampler(rate, target, ch, ch) else null
+                while (isActive) {
+                    val samples: ShortArray = if (useNativeEngine) {
+                        val engine = serverEngine ?: break
+                        engine.readFrame() ?: break
+                    } else {
+                        val grabber = serverGrabber ?: break
+                        val frame = try { grabber.grabSamples() } catch (e: org.bytedeco.javacv.FFmpegFrameGrabber.Exception) { break }
+                        val buf = frame?.samples?.getOrNull(0) as? java.nio.ShortBuffer
+                        if (buf == null) ShortArray(0) else {
+                            buf.position(0)
+                            ShortArray(buf.remaining()).also { buf.get(it) }.also { softwareMicMixer.mixInto(it, it.size) }
+                        }
+                    }
+                    if (samples.isEmpty()) { Wfas3Desktop.pace(); continue }
+                    val vol = currentServerVolume
+                    if (vol != 1.0f) {
+                        for (i in samples.indices) {
+                            samples[i] = (samples[i] * vol).toInt().coerceIn(Short.MIN_VALUE.toInt(), Short.MAX_VALUE.toInt()).toShort()
+                        }
+                    }
+                    onAudioFrame?.invoke(samples)
+                    val frames = samples.size / ch
+                    if (v3Settings != null && frames > 0) {
+                        if (resampler != null) {
+                            val (out, n) = resampler.process(samples, 0, frames)
+                            Wfas3Desktop.feed(out, n, ch)
+                        } else {
+                            Wfas3Desktop.feed(samples, frames, ch)
+                        }
+                    }
+                    if (sidecars) {
+                        val bytes = ByteArray(samples.size * 2)
+                        java.nio.ByteBuffer.wrap(bytes).order(java.nio.ByteOrder.LITTLE_ENDIAN).asShortBuffer().put(samples)
+                        distributeToSidecars(bytes)
+                    }
+                }
+            } catch (e: Exception) {
+                if (e !is CancellationException) AppDebug.log("[WFAS3] capture loop ended: ${e.javaClass.simpleName}")
+            }
+        }
+    }
+
     // ── Server ─────────────────────────────────────────────────────────────────
     fun launchServerInstance(
         audioSettings: AudioSettings_V1,
@@ -2766,9 +2890,14 @@ object NetworkHandler_v1 {
             return
         }
         startDonationTimer()
-        if (micRoutingMode != MicRoutingMode.OFF) {
+        val v3 = Wfas3Desktop.v3Enabled
+        val v3MicFeed = if (v3 && micRoutingMode != MicRoutingMode.OFF && !isMulticast) {
+            kotlinx.coroutines.channels.Channel<ShortArray>(64, kotlinx.coroutines.channels.BufferOverflow.DROP_OLDEST)
+        } else null
+        if (micRoutingMode != MicRoutingMode.OFF && (!v3 || v3MicFeed != null)) {
             micReceiverJob = scope.launchMicReceiver(
-                audioSettings, isMulticast, micRoutingMode, micOutputMixerInfo, micPort, micMixInputInfo, onStatusUpdate
+                audioSettings, isMulticast, micRoutingMode, micOutputMixerInfo, micPort, micMixInputInfo, onStatusUpdate,
+                v3Feed = v3MicFeed
             )
         }
 
@@ -2830,6 +2959,14 @@ object NetworkHandler_v1 {
             )
             snapcastManager = manager
             manager.start()
+        }
+
+        if (v3) {
+            // WFAS v3: no v2 announcement and no v2 port. The v3 engine answers
+            // only its paired devices, on its own port.
+            startV3StreamLocked(audioSettings, isMulticast, micRoutingMode, useNativeEngine, muteRender,
+                v3MicFeed, onAudioFrame, onStatusUpdate)
+            return
         }
 
         startAnnouncingPresence(isMulticast, port, annCaps, audioSettings)
@@ -4599,6 +4736,8 @@ object NetworkHandler_v1 {
         CaptureMonitor.clear()
         stopAnnouncingPresence()
         cancelDonationTimer()
+        runCatching { Wfas3Desktop.stopServer() }
+        runCatching { Wfas3Desktop.disconnect() }
 
         unicastPeerConnected.value = false
         sessionEncryptedLive.value = false
@@ -4651,6 +4790,7 @@ object NetworkHandler_v1 {
     }
 
     fun terminateAllServices() {
+        runCatching { Wfas3Desktop.shutdown() }
         scope.cancel()
         runCatching { selectorManager.close() }
     }
@@ -4918,6 +5058,10 @@ fun main(args: Array<String>) {
         kotlin.system.exitProcess(DevicesCli.run(cliArgs.json))
     }
 
+    cliArgs.v3Cmd?.let { c ->
+        kotlin.system.exitProcess(Wfas3Cli.run(c, cliArgs))
+    }
+
     if (cliArgs.printBareHint) { CliArgs.printBareHint(); return }
     if (cliArgs.printHelp)     { CliArgs.printHelp(cliArgs.helpTopic, cliArgs.json); return }
     if (cliArgs.printVersion)  { CliArgs.printVersion();  return }
@@ -5007,6 +5151,9 @@ fun main(args: Array<String>) {
     if (cliArgs.runMode != RunMode.GUI || isHeadless) {
         runCli(cliArgs)
     } else {
+        // The window has no debug output of its own: --debug (or WFAS3_TRACE=1)
+        // prints the WFAS v3 trace on the terminal that started it.
+        Wfas3Desktop.traceToConsole = cliArgs.debug || System.getenv("WFAS3_TRACE") == "1"
         startGuiApplication(cliArgs)
     }
 }
@@ -5018,6 +5165,9 @@ fun startGuiApplication(cliArgs: CliArgs) = application {
     var appSettings    by remember { mutableStateOf(QrPairingState.seedSessionKey(loadedSettings.app)) }
     // Protocols of a server start waiting for confirmation (see UnprotectedProtocolsDialog).
     var pendingUnprotected by remember { mutableStateOf<List<String>?>(null) }
+    // WFAS v3: a connection to a v2 server waits for the user's answer to the warning.
+    var pendingV2Name by remember { mutableStateOf<String?>(null) }
+    var pendingV2Action by remember { mutableStateOf<(() -> Unit)?>(null) }
     var audioSettings  by remember { mutableStateOf(loadedSettings.audio) }
     var streamingPort  by remember { mutableStateOf(loadedSettings.streamingPort) }
     var micPort        by remember { mutableStateOf(loadedSettings.micPort) }
@@ -5089,7 +5239,13 @@ fun startGuiApplication(cliArgs: CliArgs) = application {
         SpectrumAnalyzer.configure(audioSettings.sampleRate.toInt())
     }
     var showSettings       by remember { mutableStateOf(false) }
-    var isServer           by remember { mutableStateOf(true) }
+    var showDevices        by remember { mutableStateOf(false) }
+    // The window opens on the screen of last time; an auto-started server
+    // needs the server screen, so it wins.
+    var isServer           by remember { mutableStateOf(appSettings.autoStartServer || appSettings.lastModeServer) }
+    LaunchedEffect(isServer) {
+        if (appSettings.lastModeServer != isServer) appSettings = appSettings.copy(lastModeServer = isServer)
+    }
     val discoveredDevices  = remember { mutableStateMapOf<String, ServerInfo>() }
     var connectionStatus   by remember { mutableStateOf(Strings.get("status_inactive")) }
     var isStreaming         by remember { mutableStateOf(false) }
@@ -5566,6 +5722,25 @@ fun startGuiApplication(cliArgs: CliArgs) = application {
         appSettings.autoConnectRetryDelaySec
     ) {
         if (isServer || !appSettings.autoConnectClientEnabled || selectedOutputDevice == null) return@LaunchedEffect
+        if (Wfas3Settings.isV3(appSettings)) {
+            // WFAS v3: no silent connection to a v2 server. The last v3 server
+            // used is reached instead; the client keeps looking for it by itself.
+            val last = appSettings.v3LastPair
+            if (last < 0 || isStreaming) return@LaunchedEffect
+            val pair = withContext(Dispatchers.IO) {
+                Wfas3Desktop.ensure(appSettings)
+                Wfas3Desktop.pairs.value.firstOrNull { it.slot == last && !it.suspect }
+            } ?: return@LaunchedEffect
+            isStreaming = true
+            connectionStatus = Strings.get("w3_state_searching", pair.name)
+            NetworkHandler_v1.endDeviceDiscovery()
+            val ok = withContext(Dispatchers.IO) {
+                Wfas3Desktop.connect(appSettings, pair.slot, selectedOutputDevice, null, selectedClientMic,
+                    sendMicrophone, audioSettings.latencyMs, onPcm = vizSink)
+            }
+            if (!ok) { isStreaming = false; connectionStatus = Wfas3Desktop.failureText() }
+            return@LaunchedEffect
+        }
         val targets = appSettings.activeAutoConnectTargets()
         if (targets.isEmpty()) return@LaunchedEffect
 
@@ -5700,6 +5875,7 @@ fun startGuiApplication(cliArgs: CliArgs) = application {
         }
 
         MaterialTheme(colorScheme = currentColorScheme) {
+          CompositionLocalProvider(LocalMaterialHues provides appSettings.materialHues) {
             Surface(modifier = Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
                 authRequestPeer?.let { peer ->
                     AlertDialog(
@@ -6087,6 +6263,54 @@ fun startGuiApplication(cliArgs: CliArgs) = application {
                     }
                 }
 
+                // Switching protocol generation while streaming stops the stream:
+                // a session of one generation never continues on the other.
+                var lastProtocol by remember { mutableStateOf(appSettings.wfasProtocol) }
+                LaunchedEffect(appSettings.wfasProtocol) {
+                    if (appSettings.wfasProtocol != lastProtocol) {
+                        lastProtocol = appSettings.wfasProtocol
+                        if (isStreaming) {
+                            NetworkHandler_v1.stopCurrentStream()
+                            isStreaming = false
+                            connectionStatus = Strings.get("status_inactive")
+                        }
+                        discoveredDevices.clear(); NetworkHandler_v1.forgetDiscoveredAddresses()
+                    }
+                }
+
+                // WFAS v3 client: the state of the session drives the status line,
+                // and a session that ends brings the device list back.
+                LaunchedEffect(Unit) {
+                    Wfas3Desktop.lastPairChanged = { slot -> appSettings = appSettings.copy(v3LastPair = slot) }
+                    Wfas3Desktop.clientState.collect { st ->
+                        if (isServer || !Wfas3Settings.isV3(appSettings)) return@collect
+                        if (st !is wfas3.Wfas3ClientState.Idle) {
+                            connectionStatus = wfas3ClientStateText(st, Wfas3Desktop.pairs.value)
+                        }
+                        if (st is wfas3.Wfas3ClientState.Stopped && isStreaming) {
+                            NetworkHandler_v1.stopCurrentStream()
+                            isStreaming = false
+                        }
+                    }
+                }
+
+                fun connectV3(pair: wfas3.Wfas3PairInfo, at: wfas3.Wfas3Addr?) {
+                    val out = selectedOutputDevice ?: return
+                    isStreaming = true
+                    connectionStatus = Strings.get("w3_state_searching", pair.name)
+                    NetworkHandler_v1.endDeviceDiscovery()
+                    scope.launch(Dispatchers.IO) {
+                        val ok = Wfas3Desktop.connect(
+                            appSettings, pair.slot, out, at, selectedClientMic, sendMicrophone, audioSettings.latencyMs,
+                            onPcm = vizSink
+                        )
+                        if (!ok) {
+                            connectionStatus = Wfas3Desktop.failureText()
+                            isStreaming = false
+                        }
+                    }
+                }
+
                 pendingUnprotected?.let { protocols ->
                     UnprotectedProtocolsDialog(
                         protocols = protocols,
@@ -6117,8 +6341,98 @@ fun startGuiApplication(cliArgs: CliArgs) = application {
                     )
                 }
 
+                // In v3 mode a v2 server is reached only after the warning.
+                val v2Guard: (String, () -> Unit) -> Unit = { name, action ->
+                    if (Wfas3Settings.isV3(appSettings)) {
+                        pendingV2Name = name
+                        pendingV2Action = action
+                    } else {
+                        action()
+                    }
+                }
+
+                // The v2 way to a typed address: always through the v2 notice when v3 is on.
+                val manualV2: (String) -> Unit = { rawIp ->
+                    v2Guard(NetAddr.display(NetAddr.normalize(rawIp))) {
+                        val ip = NetAddr.normalize(rawIp)
+                        isStreaming = true
+                        connectionStatus = "Detecting mode for ${NetAddr.display(ip)}..."
+                        val port = streamingPort.toIntOrNull() ?: 9090
+                        val mic  = micPort.toIntOrNull() ?: 9092
+
+                        scope.launch {
+                            // 1. Controllo furbo: l'IP è già stato scoperto in background?
+                            val knownServer = discoveredDevices.values.find { it.ip == ip }
+
+                            // 2. Auto-rilevamento: se è sconosciuto, eseguiamo il ping silente
+                            val isMulti = knownServer?.isMulticast ?: NetworkHandler_v1.probeIsMulticast(ip, port)
+
+                            val manualServerInfo = ServerInfo(ip, isMulti, port, knownServer?.capabilities, serverAudioSettings = knownServer?.serverAudioSettings)
+                            allowKeyPrompt()
+                            NetworkHandler_v1.endDeviceDiscovery()
+                            NetworkHandler_v1.launchClientInstance(
+                                audioSettings, manualServerInfo, selectedOutputDevice!!,
+                                sendMicrophone, selectedClientMic, mic,
+                                appSettings.connectionSoundEnabled,
+                                appSettings.disconnectionSoundEnabled,
+                                onAudioFrame = vizSink,
+                                onStatusUpdate = clientStatusHandler
+                            )
+                        }
+                    }
+                }
+
+
                 Column(Modifier.fillMaxSize()) {
-                    Box(Modifier.fillMaxSize()) {
+                    Box(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
+                      val v3Ui = Wfas3Settings.isV3(appSettings)
+                      // The rail of WiFi Screen Streaming: Stream, Devices (v3), Settings.
+                      // The role of this computer: chosen on the rail, Send above Listen.
+                      val switchMode: (Boolean) -> Unit = { isSrv ->
+                        isServer = isSrv
+                        isStreaming = false
+                        connectionStatus = Strings.get("status_inactive")
+                        discoveredDevices.clear(); NetworkHandler_v1.forgetDiscoveredAddresses() // Svuota SEMPRE al cambio modalità
+
+                        if (!isSrv) {
+                            NetworkHandler_v1.requestStopCurrentStream()
+                            NetworkHandler_v1.beginDeviceDiscovery { hostname, serverInfo ->
+                                if (serverInfo.lastSeen == 0L) {
+                                    discoveredDevices.remove(hostname)
+                                } else {
+                                    discoveredDevices[hostname] = serverInfo
+                                }
+                            }
+                        } else {
+                            NetworkHandler_v1.endDeviceDiscovery()
+                        }
+                      }
+                      // A role does not change under a stream: stop it first.
+                      val modeLocked = isStreaming || rtpStatus.active || snapStream.active
+                      Row(Modifier.fillMaxSize()) {
+                        AppRail(
+                            place = when {
+                                showSettings -> AppPlace.Settings
+                                showDevices && v3Ui -> AppPlace.Devices
+                                isServer -> AppPlace.Send
+                                else -> AppPlace.Listen
+                            },
+                            isServer = isServer,
+                            live = isStreaming || rtpStatus.active || snapStream.active,
+                            modeLocked = modeLocked,
+                            v3 = v3Ui,
+                            onPlace = { place ->
+                                showSettings = place == AppPlace.Settings
+                                showDevices = place == AppPlace.Devices
+                                val wantServer = when (place) {
+                                    AppPlace.Send -> true
+                                    AppPlace.Listen -> false
+                                    else -> null
+                                }
+                                if (wantServer != null && wantServer != isServer && !modeLocked) switchMode(wantServer)
+                            }
+                        )
+                       Box(Modifier.weight(1f).fillMaxHeight()) {
                         AppContent(
                             appSettings               = appSettings,
                             audioSettings             = audioSettings,
@@ -6147,52 +6461,27 @@ fun startGuiApplication(cliArgs: CliArgs) = application {
                             onDismissRoutingBanner    = { dontShowAgain ->
                                 if (dontShowAgain) appSettings = appSettings.copy(hideWindowsRoutingBanner = true)
                             },
-                            onConnectManual = { rawIp ->
+                            onConnectManualV3 = { rawIp ->
+                                // A typed address with v3 on: a paired server there plays
+                                // with v3. Otherwise the v2 path runs, which asks first.
                                 val ip = NetAddr.normalize(rawIp)
-                                isStreaming = true
-                                connectionStatus = "Detecting mode for ${NetAddr.display(ip)}..."
-                                val port = streamingPort.toIntOrNull() ?: 9090
-                                val mic  = micPort.toIntOrNull() ?: 9092
-
-                                scope.launch {
-                                    // 1. Controllo furbo: l'IP è già stato scoperto in background?
-                                    val knownServer = discoveredDevices.values.find { it.ip == ip }
-
-                                    // 2. Auto-rilevamento: se è sconosciuto, eseguiamo il ping silente
-                                    val isMulti = knownServer?.isMulticast ?: NetworkHandler_v1.probeIsMulticast(ip, port)
-
-                                    val manualServerInfo = ServerInfo(ip, isMulti, port, knownServer?.capabilities, serverAudioSettings = knownServer?.serverAudioSettings)
-                                    allowKeyPrompt()
-                                    NetworkHandler_v1.endDeviceDiscovery()
-                                    NetworkHandler_v1.launchClientInstance(
-                                        audioSettings, manualServerInfo, selectedOutputDevice!!,
-                                        sendMicrophone, selectedClientMic, mic,
-                                        appSettings.connectionSoundEnabled,
-                                        appSettings.disconnectionSoundEnabled,
-                                        onAudioFrame = vizSink,
-                                        onStatusUpdate = clientStatusHandler
-                                    )
-                                }
-                            },
-                            onModeChange = { isSrv ->
-                                isServer = isSrv
-                                isStreaming = false
-                                connectionStatus = Strings.get("status_inactive")
-                                discoveredDevices.clear(); NetworkHandler_v1.forgetDiscoveredAddresses() // Svuota SEMPRE al cambio modalità
-
-                                if (!isSrv) {
-                                    NetworkHandler_v1.requestStopCurrentStream()
-                                    NetworkHandler_v1.beginDeviceDiscovery { hostname, serverInfo ->
-                                        if (serverInfo.lastSeen == 0L) {
-                                            discoveredDevices.remove(hostname)
-                                        } else {
-                                            discoveredDevices[hostname] = serverInfo
-                                        }
+                                if (ip.isNotBlank()) scope.launch(Dispatchers.IO) {
+                                    connectionStatus = Strings.get("w3_manual_looking", NetAddr.display(ip))
+                                    val addr = runCatching { java.net.InetAddress.getByName(ip) }.getOrNull()
+                                    val found = if (addr != null) Wfas3Desktop.locate(appSettings, 2500L, addr) else emptyMap()
+                                    val hit = found.entries.firstOrNull { it.value.sameHost(addr) }
+                                    val pair = hit?.let { h -> Wfas3Desktop.pairs.value.firstOrNull { it.slot == h.key } }
+                                    if (hit != null && pair != null) {
+                                        connectV3(pair, hit.value)
+                                    } else {
+                                        connectionStatus = Strings.get("status_inactive")
+                                        // Back on the window thread, like a click.
+                                        scope.launch { manualV2(rawIp) }
                                     }
-                                } else {
-                                    NetworkHandler_v1.endDeviceDiscovery()
                                 }
                             },
+                            onConnectManual = manualV2,
+                            onModeChange = switchMode,
                             onStartStreaming = {
                                 // A key or QR pairing protects WFAS only: with other
                                 // protocols on, the start waits for the dialog above.
@@ -6209,18 +6498,20 @@ fun startGuiApplication(cliArgs: CliArgs) = application {
                                 NetworkHandler_v1.requestStopCurrentStream()
                             },
                             onConnectToServer = { serverInfo ->
-                                isStreaming = true
-                                val mic = micPort.toIntOrNull() ?: 9092
-                                allowKeyPrompt()
-                                NetworkHandler_v1.endDeviceDiscovery()
-                                NetworkHandler_v1.launchClientInstance(
-                                    audioSettings, serverInfo, selectedOutputDevice!!,
-                                    sendMicrophone, selectedClientMic, mic,
-                                    appSettings.connectionSoundEnabled,
-                                    appSettings.disconnectionSoundEnabled,
-                                    onAudioFrame = vizSink,
-                                    onStatusUpdate = clientStatusHandler
-                                )
+                                v2Guard(discoveredDevices.entries.firstOrNull { it.value.ip == serverInfo.ip }?.key ?: NetAddr.display(serverInfo.ip)) {
+                                    isStreaming = true
+                                    val mic = micPort.toIntOrNull() ?: 9092
+                                    allowKeyPrompt()
+                                    NetworkHandler_v1.endDeviceDiscovery()
+                                    NetworkHandler_v1.launchClientInstance(
+                                        audioSettings, serverInfo, selectedOutputDevice!!,
+                                        sendMicrophone, selectedClientMic, mic,
+                                        appSettings.connectionSoundEnabled,
+                                        appSettings.disconnectionSoundEnabled,
+                                        onAudioFrame = vizSink,
+                                        onStatusUpdate = clientStatusHandler
+                                    )
+                                }
                             },
                             onRefreshDevices = {
                                 discoveredDevices.clear(); NetworkHandler_v1.forgetDiscoveredAddresses()
@@ -6233,7 +6524,10 @@ fun startGuiApplication(cliArgs: CliArgs) = application {
                                 isMulticastMode = it
                                 appSettings = appSettings.copy(lastMulticastMode = it)
                             },
-                            onSendMicrophoneChange     = { send -> sendMicrophone = send },
+                            onSendMicrophoneChange     = { send ->
+                                sendMicrophone = send
+                                if (Wfas3Settings.isV3(appSettings)) Wfas3Desktop.setMicrophone(send, selectedClientMic)
+                            },
                             onSelectedOutputDeviceChange      = { selectedOutputDevice = it },
                             onSelectedInputDeviceChange       = { selectedInputDevice  = it },
                             onSelectedClientMicChange         = { selectedClientMic    = it },
@@ -6418,8 +6712,17 @@ fun startGuiApplication(cliArgs: CliArgs) = application {
                                 }
                             },
                             snapSplitSupported                = snapSplitSupported,
-                            onSnapRefresh                     = { snapCtrl.value?.refresh() }
+                            onSnapRefresh                     = { snapCtrl.value?.refresh() },
+                            onConnectV3                       = { pair -> connectV3(pair, null) },
+                            onDisconnectV3                    = {
+                                isStreaming = false
+                                connectionStatus = Strings.get("status_inactive")
+                                Wfas3Desktop.disconnect()
+                                NetworkHandler_v1.requestStopCurrentStream()
+                            }
                         )
+
+                        Wfas3DevicesPage(appSettings, visible = showDevices && v3Ui && !showSettings)
 
                         SettingsScreen(
                             visible                = showSettings,
@@ -6446,6 +6749,19 @@ fun startGuiApplication(cliArgs: CliArgs) = application {
                                 }
                             }
                         )
+                       }
+                      }
+
+                        // WFAS v3 questions (pairing requests, pairing from this PC,
+                        // notices) and the v2 warning, drawn over every page.
+                        if (v3Ui) Wfas3Host(appSettings)
+                        pendingV2Action?.let { action ->
+                            V2ConnectWarningDialog(
+                                serverName = pendingV2Name ?: "",
+                                onCancel = { pendingV2Action = null; pendingV2Name = null },
+                                onConnect = { pendingV2Action = null; pendingV2Name = null; action() }
+                            )
+                        }
 
                         WelcomeScreen(
                             visible   = showWelcome,
@@ -6596,5 +6912,6 @@ fun startGuiApplication(cliArgs: CliArgs) = application {
                 }
             }
         }
+          }
     }
 }
