@@ -352,10 +352,10 @@ vulkan-headers/LICENSE.md
     https://github.com/KhronosGroup/Vulkan-Headers  v1.3.268  commit 07ff4233bc69e573ae0a6b4b48ad16451ac4e37f  LICENSE.md
     sha256 ac24e5ea920e4318e4d02c4086ae51f53cfb03feed06c18df1019e7ada1ec7bc
 wfas3/LICENSE
-    this repository  src/main/native/wfas3/core/LICENSE  (byte-identical to the WFAS v3 reference core (archive SHA-256 22782132be44ad39a201a19665a1b0218896a606779b4b5416aa6c2a7027911b))
+    this repository  src/main/native/wfas3/core/LICENSE  (byte-identical to the WFAS v3 reference core (archive SHA-256 c9a0f7ff53ca78d4a0b24d20008bd8839abc28cd13c6f75af15885ef18de1213))
     sha256 0fd4ff5407c32d1ea3080a36e50c59ddec7dd9bd0d0d658d3964af8453420b35
 wfas3/NOTICE
-    this repository  src/main/native/wfas3/core/NOTICE  (byte-identical to the WFAS v3 reference core (archive SHA-256 22782132be44ad39a201a19665a1b0218896a606779b4b5416aa6c2a7027911b))
+    this repository  src/main/native/wfas3/core/NOTICE  (byte-identical to the WFAS v3 reference core (archive SHA-256 c9a0f7ff53ca78d4a0b24d20008bd8839abc28cd13c6f75af15885ef18de1213))
     sha256 5af5045d30a30cb0a5fd1bc8ac1d29a99fa9eb8d20803008142b435f83a1a9b8
 winpthreads/COPYING
     https://github.com/mingw-w64/mingw-w64  master  commit dbbc8e99d9b85408f2c0a5565cb689c44eef0650  mingw-w64-libraries/winpthreads/COPYING

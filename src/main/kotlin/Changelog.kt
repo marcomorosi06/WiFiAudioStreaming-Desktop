@@ -111,32 +111,6 @@ object Changelog {
 
     val entries: List<ChangelogEntry> = listOf(
         ChangelogEntry(
-            version = "1.3.1",
-            date = Bilingual("November 2026", "Novembre 2026"),
-            headline = Bilingual(
-                "WFAS v3 security fixes (specification draft 7).",
-                "Correzioni di sicurezza di WFAS v3 (specifica draft 7)."
-            ),
-            items = listOf(
-                ChangelogItem(
-                    icon = Icons.Outlined.Shield,
-                    title = Bilingual("Safer pairing", "Abbinamento pi\u00f9 sicuro"),
-                    body = Bilingual(
-                        "Old pairing signals of a label played again no longer stop a pairing or raise a false alarm; floods of fake requests from addresses that do not answer no longer keep a PIN window busy; a reply with the wrong key no longer stops the real one; the request shows the address it comes from; names that look empty are cleaned. To pair with this computer as a server the other device needs the updated app; existing pairings keep working.",
-                        "I vecchi segnali di abbinamento di un'etichetta ritrasmessi non fermano pi\u00f9 un abbinamento n\u00e9 danno falsi allarmi; le raffiche di richieste false da indirizzi che non rispondono non bloccano pi\u00f9 una finestra PIN; una risposta con la chiave sbagliata non ferma pi\u00f9 quella vera; la richiesta mostra l'indirizzo da cui arriva; i nomi che sembrano vuoti vengono ripuliti. Per abbinarsi a questo computer come server l'altro dispositivo deve avere l'app aggiornata; gli abbinamenti esistenti continuano a funzionare."
-                    )
-                ),
-                ChangelogItem(
-                    icon = Icons.Outlined.Lock,
-                    title = Bilingual("Keys and records", "Chiavi e dati salvati"),
-                    body = Bilingual(
-                        "The v3 records now live in the local, non-roaming folder of this computer (moved there once) and are left out of Time Machine; on Windows only your account can open them. If the key or the device record is missing while pairings exist, nothing is overwritten and the app says so. A pairing made to listen no longer lets the server receive this computer's audio. Over IPv4 pairing is accepted only from the local network, and the multicast port takes only multicast audio. The code is no longer suggested on the command line, where it would stay in the shell history.",
-                        "I dati di v3 ora stanno nella cartella locale, non sincronizzata, di questo computer (spostati l\u00ec una volta) e sono esclusi da Time Machine; su Windows solo il tuo account pu\u00f2 aprirli. Se mancano la chiave o il record del dispositivo mentre esistono abbinamenti, non viene sovrascritto nulla e l'app lo dice. Un abbinamento fatto per ascoltare non permette pi\u00f9 al server di ricevere l'audio di questo computer. Su IPv4 l'abbinamento \u00e8 accettato solo dalla rete locale, e la porta multicast accetta solo audio multicast. Il codice non viene pi\u00f9 suggerito sulla riga di comando, dove resterebbe nella cronologia della shell."
-                    )
-                )
-            )
-        ),
-        ChangelogEntry(
             version = "1.3",
             date = Bilingual("November 2026", "Novembre 2026"),
             headline = Bilingual(
@@ -158,6 +132,14 @@ object Changelog {
                     body = Bilingual(
                         "The server opens a pairing window for two minutes and one device. With a PIN, both screens then show the same 6-digit code to compare. You can pair a device as a guest, forgotten when it disconnects, and decide whether it may send its microphone.",
                         "Il server apre una finestra di abbinamento per due minuti e per un dispositivo. Con il PIN, entrambi gli schermi mostrano poi lo stesso codice di 6 cifre da confrontare. Puoi abbinare un dispositivo come ospite, dimenticato quando si disconnette, e decidere se può inviare il suo microfono."
+                    )
+                ),
+                ChangelogItem(
+                    icon = Icons.Outlined.Shield,
+                    title = Bilingual("Pairing that holds up", "Un abbinamento che regge"),
+                    body = Bilingual(
+                        "Pairing follows draft 7 of the WFAS v3 specification. Recorded pairing signals of a label, played again, cannot stop a pairing or raise a false alarm; floods of fake requests from addresses that do not answer cannot keep a PIN window busy; a reply with the wrong key does not stop the real one. The request shows the address it comes from, servers with a PIN window show theirs, and names that would look empty are cleaned. Over IPv4 pairing is accepted only from the local network, and the multicast port takes only multicast audio. A pairing made to listen does not let the server receive this computer's audio. Both devices need WFAS v3 draft 7, as in the 1.3 apps; pairings already made keep working.",
+                        "L'abbinamento segue la draft 7 della specifica WFAS v3. I segnali di abbinamento di un'etichetta registrati e ritrasmessi non possono fermare un abbinamento n\u00e9 dare falsi allarmi; le raffiche di richieste false da indirizzi che non rispondono non possono bloccare una finestra PIN; una risposta con la chiave sbagliata non ferma quella vera. La richiesta mostra l'indirizzo da cui arriva, i server con una finestra PIN mostrano il loro, e i nomi che sembrerebbero vuoti vengono ripuliti. Su IPv4 l'abbinamento \u00e8 accettato solo dalla rete locale, e la porta multicast accetta solo audio multicast. Un abbinamento fatto per ascoltare non permette al server di ricevere l'audio di questo computer. Servono WFAS v3 draft 7 su entrambi i dispositivi, come nelle app 1.3; gli abbinamenti gi\u00e0 fatti continuano a funzionare."
                     )
                 ),
                 ChangelogItem(
@@ -212,8 +194,8 @@ object Changelog {
                     icon = Icons.Outlined.Lock,
                     title = Bilingual("Your keys stay with you", "Le tue chiavi restano tue"),
                     body = Bilingual(
-                        "The v3 keys and pairings are kept only on this device, encrypted with a key held in the system credential store. They are never sent anywhere else, and you can erase them at any time.",
-                        "Le chiavi e gli abbinamenti di v3 restano solo su questo dispositivo, cifrati con una chiave custodita dall'archivio credenziali del sistema. Non vengono mai inviati altrove, e puoi cancellarli in qualsiasi momento."
+                        "The v3 keys and pairings are kept only on this device, encrypted with a key held in the system credential store. They are never sent anywhere else, and you can erase them at any time. They live in the local, non-roaming folder of this computer (records of an earlier 1.3 build are moved there once) and are left out of Time Machine; on Windows only your account can open them. If the key or the device record is missing while pairings exist, nothing is overwritten and the app says so.",
+                        "Le chiavi e gli abbinamenti di v3 restano solo su questo dispositivo, cifrati con una chiave custodita dall'archivio credenziali del sistema. Non vengono mai inviati altrove, e puoi cancellarli in qualsiasi momento. Stanno nella cartella locale, non sincronizzata, di questo computer (i dati di una build 1.3 precedente vi vengono spostati una volta) e sono esclusi da Time Machine; su Windows solo il tuo account pu\u00f2 aprirli. Se mancano la chiave o il record del dispositivo mentre esistono abbinamenti, non viene sovrascritto nulla e l'app lo dice."
                     )
                 ),
                 ChangelogItem(
@@ -228,8 +210,8 @@ object Changelog {
                     icon = Icons.Outlined.Terminal,
                     title = Bilingual("Command line", "Riga di comando"),
                     body = Bilingual(
-                        "'wfas v3' pairs, lists and removes devices. 'wfas --server' and 'wfas --client' use WFAS v3, and '--legacy-v2' runs a single session with the old protocol.",
-                        "'wfas v3' abbina, elenca e rimuove i dispositivi. 'wfas --server' e 'wfas --client' usano WFAS v3, e '--legacy-v2' avvia una singola sessione con il vecchio protocollo."
+                        "'wfas v3' pairs, lists and removes devices; 'wfas v3 pair' asks for the code on the terminal, so that it stays out of the shell history. 'wfas --server' and 'wfas --client' use WFAS v3, and '--legacy-v2' runs a single session with the old protocol.",
+                        "'wfas v3' abbina, elenca e rimuove i dispositivi; 'wfas v3 pair' chiede il codice nel terminale, cos\u00ec resta fuori dalla cronologia della shell. 'wfas --server' e 'wfas --client' usano WFAS v3, e '--legacy-v2' avvia una singola sessione con il vecchio protocollo."
                     )
                 )
             )

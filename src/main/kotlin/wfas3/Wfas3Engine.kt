@@ -225,6 +225,17 @@ class Wfas3Engine(
     /** On-link IPv4 subnets of the interfaces that are up, for pairing datagrams. */
     @Volatile private var prefixes4: List<Pair<ByteArray, Int>> = emptyList()
     @Volatile private var prefixes4AtMs = 0L
+    /** The [notLocal4] that [prefixes4] was computed without (I/O thread only). */
+    @Volatile private var prefixes4Without: Set<String> = emptySet()
+
+    /**
+     * Names of the interfaces whose IPv4 subnets are not the local network
+     * for pairing datagrams (see fromLink4). The platform sets them: on
+     * Android the mobile data interfaces, whose subnet can span the carrier
+     * network. Empty (the default): every interface that is up counts. A new
+     * set takes effect at the next pairing datagram.
+     */
+    @Volatile var notLocal4: Set<String> = emptySet()
 
     /** Whether the port is open on an IPv6-only link (multicast groups are then IPv6 too). */
     val ipv6Link: Boolean get() = v6Link
@@ -663,16 +674,20 @@ class Wfas3Engine(
     /**
      * Whether an IPv4 source is on one of this computer's links: loopback,
      * link-local, or in the subnet of an address of an interface that is up
-     * (prefixes /8 to /32). Used for pairing datagrams only.
+     * and not in [notLocal4] (prefixes /8 to /32). Used for pairing datagrams
+     * only.
      */
     private fun fromLink4(a: InetAddress): Boolean {
         if (a !is Inet4Address) return false
         if (a.isLoopbackAddress || a.isLinkLocalAddress) return true
-        if (inPrefixes4(a.address, prefixes4)) return true
+        val without = notLocal4
+        val same = without == prefixes4Without
+        if (same && inPrefixes4(a.address, prefixes4)) return true
         val now = System.currentTimeMillis()
-        if (now - prefixes4AtMs < 5_000L) return false
+        if (same && now - prefixes4AtMs < 5_000L) return false
         prefixes4AtMs = now
-        prefixes4 = onLinkPrefixes4()
+        prefixes4 = onLinkPrefixes4(without)
+        prefixes4Without = without
         return inPrefixes4(a.address, prefixes4)
     }
 
@@ -1049,10 +1064,10 @@ class Wfas3Engine(
         private const val T_PAIR: Byte = 0x13
         private const val T_MULTICAST: Byte = 0x30
 
-        /** The IPv4 subnets of every interface that is up, loopback excluded. */
-        private fun onLinkPrefixes4(): List<Pair<ByteArray, Int>> = try {
+        /** The IPv4 subnets of every interface that is up, loopback and [excluded] left out. */
+        private fun onLinkPrefixes4(excluded: Set<String>): List<Pair<ByteArray, Int>> = try {
             NetworkInterface.getNetworkInterfaces().toList()
-                .filter { runCatching { it.isUp && !it.isLoopback }.getOrDefault(false) }
+                .filter { runCatching { it.isUp && !it.isLoopback && it.name !in excluded }.getOrDefault(false) }
                 .flatMap { n -> n.interfaceAddresses.map { it.address to it.networkPrefixLength.toInt() } }
                 .let { prefixesOf4(it) }
         } catch (_: Exception) { emptyList() }
